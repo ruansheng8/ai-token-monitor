@@ -133,6 +133,48 @@ export default function App() {
     }
   };
 
+  const [scanStatus, setScanStatus] = useState<{
+    is_scanning: boolean;
+    total_files: number;
+    scanned_files: number;
+    error: string | null;
+  } | null>(null);
+
+  // 轮询扫描状态
+  const pollScanStatus = async () => {
+    try {
+      const response = await fetch(`/api/scan/status?t=${Date.now()}`);
+      if (response.ok) {
+        const status = await response.json();
+        setScanStatus(status);
+        if (status.is_scanning) {
+          setTimeout(pollScanStatus, 1000);
+        } else {
+          // 扫描完成，重新拉取最新数据
+          fetchData();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to poll scan status:', error);
+    }
+  };
+
+  // 开始扫描并触发轮询
+  const startScan = async () => {
+    try {
+      const response = await fetch(`/api/scan/start?t=${Date.now()}`);
+      if (response.ok) {
+        const status = await response.json();
+        setScanStatus(status);
+        if (status.is_scanning) {
+          pollScanStatus();
+        }
+      }
+    } catch (error) {
+      console.error('Failed to start scan:', error);
+    }
+  };
+
   // 获取数据逻辑
   const fetchData = async () => {
     setLoading(true);
@@ -146,15 +188,24 @@ export default function App() {
       setLastUpdate(now.toTimeString().split(' ')[0]);
     } catch (error) {
       console.error('Fetch data failed:', error);
-      alert('数据拉取失败，请确认后台服务已正常启动。');
     } finally {
       setLoading(false);
       setRefreshSpin(false);
     }
   };
 
+  // 手动点击刷新同步按钮
+  const handleSyncClick = async () => {
+    if (scanStatus?.is_scanning) return;
+    setRefreshSpin(true);
+    await startScan();
+  };
+
   useEffect(() => {
+    // 1. 先快速读取缓存展示（秒开）
     fetchData();
+    // 2. 自动启动后台扫描
+    startScan();
   }, []);
 
   // 排序字段切换
@@ -309,15 +360,54 @@ export default function App() {
             </button>
 
             <button
-              onClick={fetchData}
-              disabled={loading}
-              className="flex items-center gap-2 text-sm font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:scale-105 active:scale-100 hover:shadow-neon-cyan/35 text-white px-5 py-2.5 rounded-xl cursor-pointer shadow-md transition-all duration-300"
+              onClick={handleSyncClick}
+              disabled={loading || scanStatus?.is_scanning}
+              className={`flex items-center gap-2 text-sm font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:scale-105 active:scale-100 hover:shadow-neon-cyan/35 text-white px-5 py-2.5 rounded-xl transition-all duration-300 ${
+                loading || scanStatus?.is_scanning ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
+              }`}
             >
-              <RefreshCw className={`w-4 h-4 ${refreshSpin ? 'animate-spin' : ''}`} />
-              <span>同步刷新</span>
+              <RefreshCw className={`w-4 h-4 ${refreshSpin || scanStatus?.is_scanning ? 'animate-spin' : ''}`} />
+              <span>{scanStatus?.is_scanning ? '正在同步...' : '同步刷新'}</span>
             </button>
           </div>
         </header>
+
+        {/* 扫描进度条展示 */}
+        {scanStatus && scanStatus.is_scanning && (
+          <div className="glass-card rounded-[24px] p-5 flex flex-col gap-3 border border-neon-cyan/20 bg-neon-cyan/5 shadow-[0_8px_32px_rgba(6,182,212,0.08)]">
+            <div className="flex justify-between items-center text-sm">
+              <div className="flex items-center gap-2">
+                <RefreshCw className="w-4 h-4 text-neon-cyan animate-spin" />
+                <span className="font-semibold text-text-primary">正在增量同步历史会话数据...</span>
+              </div>
+              <span className="font-mono text-xs text-text-secondary font-semibold">
+                {scanStatus.scanned_files} / {scanStatus.total_files} ({scanStatus.total_files > 0 ? Math.round((scanStatus.scanned_files / scanStatus.total_files) * 100) : 0}%)
+              </span>
+            </div>
+            <div className="h-2 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
+              <div
+                className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all duration-300"
+                style={{ width: `${scanStatus.total_files > 0 ? (scanStatus.scanned_files / scanStatus.total_files) * 100 : 0}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
+
+        {/* 扫描错误提示 */}
+        {scanStatus && scanStatus.error && (
+          <div className="glass-card rounded-[24px] p-4 border border-red-500/20 bg-red-500/5 text-red-400 flex items-center justify-between text-sm">
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+              <span>同步会话数据失败: {scanStatus.error}</span>
+            </div>
+            <button
+              onClick={handleSyncClick}
+              className="text-xs font-semibold text-neon-cyan hover:underline cursor-pointer bg-transparent border-none outline-none"
+            >
+              重新尝试同步
+            </button>
+          </div>
+        )}
 
         {/* KPI 看板 */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">

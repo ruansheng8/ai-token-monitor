@@ -4,8 +4,8 @@ mod proto;
 mod db;
 mod server;
 
-use axum::{routing::get, Router};
-use server::{handle_metrics, serve_static_file_fallback};
+use axum::{routing::{get, post}, Router};
+use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback};
 
 fn main() {
     let mut port = 19362;
@@ -26,6 +26,8 @@ fn main() {
         rt.block_on(async {
             let app = Router::new()
                 .route("/api/metrics", get(handle_metrics))
+                .route("/api/scan/start", get(handle_scan_start).post(handle_scan_start))
+                .route("/api/scan/status", get(handle_scan_status))
                 .fallback(serve_static_file_fallback);
 
             // 本地桌面版绑定本地回环地址 127.0.0.1

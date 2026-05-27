@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
@@ -114,6 +115,10 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
     }
     let conn = rusqlite::Connection::open(&db_path)?;
 
+    // 启用 WAL 模式和 synchronous=NORMAL，极大地加速并优化并发读写
+    let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
+    let _ = conn.execute("PRAGMA synchronous=NORMAL;", []);
+
     conn.execute(
         "CREATE TABLE IF NOT EXISTS sessions (
             uuid TEXT PRIMARY KEY,
@@ -158,10 +163,71 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
 
 // 4. 增量扫描逻辑与数据同步
 
-pub fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> {
+#[derive(Clone, Serialize)]
+pub struct ScanStatus {
+    pub is_scanning: bool,
+    pub total_files: usize,
+    pub scanned_files: usize,
+    pub error: Option<String>,
+}
+
+pub static DB_LOCK: Mutex<()> = Mutex::new(());
+
+pub fn get_scan_status() -> &'static Mutex<ScanStatus> {
+    static STATUS: OnceLock<Mutex<ScanStatus>> = OnceLock::new();
+    STATUS.get_or_init(|| {
+        Mutex::new(ScanStatus {
+            is_scanning: false,
+            total_files: 0,
+            scanned_files: 0,
+            error: None,
+        })
+    })
+}
+
+pub fn start_background_scan() {
+    let status_lock = get_scan_status();
+    {
+        let mut status = status_lock.lock().unwrap();
+        if status.is_scanning {
+            return; // Already scanning
+        }
+        status.is_scanning = true;
+        status.total_files = 0;
+        status.scanned_files = 0;
+        status.error = None;
+    }
+
+    std::thread::spawn(move || {
+        let result = sync_cache_db_with_progress(|scanned, total| {
+            let status_lock = get_scan_status();
+            if let Ok(mut status) = status_lock.lock() {
+                status.scanned_files = scanned;
+                status.total_files = total;
+            }
+        });
+
+        let status_lock = get_scan_status();
+        if let Ok(mut status) = status_lock.lock() {
+            status.is_scanning = false;
+            if let Err(e) = result {
+                status.error = Some(e.to_string());
+            }
+        }
+    });
+}
+
+pub fn sync_cache_db_with_progress<F>(progress_cb: F) -> Result<(), rusqlite::Error>
+where
+    F: Fn(usize, usize) + Send + 'static,
+{
+    // 获取全局数据库锁，避免多线程写入冲突
+    let _lock = DB_LOCK.lock().unwrap();
+
     let db_dir = get_conversations_dir();
     if !db_dir.exists() {
-        return get_aggregated_metrics_from_cache();
+        progress_cb(0, 0);
+        return Ok(());
     }
 
     let mut active_uuids = std::collections::HashSet::new();
@@ -181,6 +247,10 @@ pub fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> 
 
     let cache_path = get_db_cache_path();
     let mut conn_cache = rusqlite::Connection::open(&cache_path)?;
+
+    // 启用 WAL 模式和 synchronous=NORMAL，极大地加速并优化并发读写
+    let _ = conn_cache.execute("PRAGMA journal_mode=WAL;", []);
+    let _ = conn_cache.execute("PRAGMA synchronous=NORMAL;", []);
 
     // A. 自动同步逻辑：如果本地数据库已被物理删除，清理本地缓存
     let cached_uuids: std::collections::HashSet<String> = {
@@ -206,8 +276,28 @@ pub fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> 
         println!("Removed deleted sessions from cache: {:?}", deleted_uuids);
     }
 
+    let total_files = db_files.len();
+    progress_cb(0, total_files);
+
+    // 预先查询缓存中的所有会话信息，避免在循环中对每个文件进行一次 SQL 查询
+    let mut session_cache = HashMap::new();
+    if let Ok(mut stmt) = conn_cache.prepare("SELECT uuid, last_parsed_idx, last_mtime, title FROM sessions") {
+        if let Ok(mut rows) = stmt.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                if let (Ok(uuid), Ok(idx), Ok(mtime), Ok(title)) = (
+                    row.get::<_, String>(0),
+                    row.get::<_, i64>(1),
+                    row.get::<_, f64>(2),
+                    row.get::<_, String>(3),
+                ) {
+                    session_cache.insert(uuid, (idx, mtime, title));
+                }
+            }
+        }
+    }
+
     // B. 增量解析，每个会话只拉取新交互数据
-    for db_path in db_files {
+    for (i, db_path) in db_files.into_iter().enumerate() {
         let uuid = db_path.file_stem().unwrap().to_str().unwrap().to_string();
         let mtime = match std::fs::metadata(&db_path).and_then(|m| m.modified()) {
             Ok(t) => t
@@ -217,26 +307,21 @@ pub fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> 
             Err(_) => 0.0,
         };
 
-        let session_row: Result<(i64, f64, String), _> = conn_cache.query_row(
-            "SELECT last_parsed_idx, last_mtime, title FROM sessions WHERE uuid = ?",
-            [&uuid],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        );
-
         let mut last_parsed_idx = -1i64;
         let mut last_mtime = 0.0f64;
         let mut existing_title = String::new();
         let mut is_new_session = true;
 
-        if let Ok((parsed_idx, m, title)) = session_row {
-            last_parsed_idx = parsed_idx;
-            last_mtime = m;
-            existing_title = title;
+        if let Some((parsed_idx, m, title)) = session_cache.get(&uuid) {
+            last_parsed_idx = *parsed_idx;
+            last_mtime = *m;
+            existing_title = title.clone();
             is_new_session = false;
         }
 
         // 超级优化：如果文件修改时间无任何变动，且不是新会话，则直接跳过数据库连接和打开操作
         if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
+            progress_cb(i + 1, total_files);
             continue;
         }
 
@@ -323,8 +408,14 @@ pub fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> 
             }
         }
         tx.commit()?;
+        progress_cb(i + 1, total_files);
     }
 
+    Ok(())
+}
+
+pub fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> {
+    sync_cache_db_with_progress(|_, _| {})?;
     get_aggregated_metrics_from_cache()
 }
 

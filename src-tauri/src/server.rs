@@ -1,21 +1,18 @@
 use std::path::PathBuf;
-use std::sync::Mutex;
 use axum::{
     body::Body,
     http::{header, Response, StatusCode, Uri},
     response::IntoResponse,
 };
 
-use crate::db::{init_cache_db, sync_and_collect_metrics};
-
-// 全局数据库操作锁，防止多线程 SQLite 写入冲突
-pub static DB_LOCK: Mutex<()> = Mutex::new(());
+use crate::db::{
+    init_cache_db, get_aggregated_metrics_from_cache, start_background_scan, get_scan_status,
+};
 
 pub async fn handle_metrics() -> Response<Body> {
     match tokio::task::spawn_blocking(|| {
-        let _lock = DB_LOCK.lock().unwrap();
         let _ = init_cache_db();
-        sync_and_collect_metrics()
+        get_aggregated_metrics_from_cache()
     })
     .await
     {
@@ -47,6 +44,47 @@ pub async fn handle_metrics() -> Response<Body> {
             .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
             .body(Body::from(format!("Server Thread Error: {}", e)))
+            .unwrap(),
+    }
+}
+
+pub async fn handle_scan_start() -> Response<Body> {
+    match tokio::task::spawn_blocking(|| {
+        let _ = init_cache_db();
+        start_background_scan();
+        
+        let status = get_scan_status().lock().unwrap().clone();
+        serde_json::to_vec(&status)
+    })
+    .await
+    {
+        Ok(Ok(bytes)) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from(bytes))
+            .unwrap(),
+        _ => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Internal Server Error"))
+            .unwrap(),
+    }
+}
+
+pub async fn handle_scan_status() -> Response<Body> {
+    let status = get_scan_status().lock().unwrap().clone();
+    match serde_json::to_vec(&status) {
+        Ok(bytes) => Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from(bytes))
+            .unwrap(),
+        _ => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from("Internal Server Error"))
             .unwrap(),
     }
 }
