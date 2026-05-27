@@ -1,6 +1,10 @@
 /target
+/src-tauri/target/
+/src-tauri/gen/
+/dist/
 ai-token-monitor
 ai-token-monitor.exe
 *.db
 *.log
 .DS_Store
+node_modules/

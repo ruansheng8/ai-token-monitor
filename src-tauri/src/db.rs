@@ -2,267 +2,42 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
-use axum::{
-    body::Body,
-    http::{header, Response, StatusCode, Uri},
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
 
-// 全局数据库操作锁，防止多线程 SQLite 写入冲突
-static DB_LOCK: Mutex<()> = Mutex::new(());
+use crate::proto::{parse_protobuf_orig, try_parse_sub_messages, extract_metrics_from_proto};
 
 // 1. 动态路径获取逻辑（适配不同 Windows 用户目录）
 
-fn get_user_profile_dir() -> String {
+pub fn get_user_profile_dir() -> String {
     std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\cearn".to_string())
 }
 
-fn get_db_cache_path() -> PathBuf {
+pub fn get_db_cache_path() -> PathBuf {
     Path::new(&get_user_profile_dir())
         .join(".gemini")
         .join("antigravity")
         .join("token_stats.db")
 }
 
-fn get_conversations_dir() -> PathBuf {
+pub fn get_conversations_dir() -> PathBuf {
     Path::new(&get_user_profile_dir())
         .join(".gemini")
         .join("antigravity")
         .join("conversations")
 }
 
-fn get_brain_dir() -> PathBuf {
+pub fn get_brain_dir() -> PathBuf {
     Path::new(&get_user_profile_dir())
         .join(".gemini")
         .join("antigravity")
         .join("brain")
 }
 
-// 2. Protobuf 动态解码与 Token 字段提取逻辑
+// 2. 会话元数据与日志读取逻辑
 
-#[derive(Debug, Clone, Serialize)]
-#[serde(untagged)]
-enum ProtoValue {
-    Varint(u64),
-    Fixed64(Vec<u8>), // 8 bytes
-    Bytes(Vec<u8>),
-    SubMessage(HashMap<u32, Vec<ProtoValue>>),
-    String(String),
-    Fixed32(Vec<u8>), // 4 bytes
-}
-
-fn read_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
-    let mut result = 0u64;
-    let mut shift = 0;
-    loop {
-        if *pos >= data.len() {
-            return Err("Unexpected EOF while reading varint".to_string());
-        }
-        let b = data[*pos];
-        *pos += 1;
-        result |= ((b & 0x7f) as u64) << shift;
-        if (b & 0x80) == 0 {
-            break;
-        }
-        shift += 7;
-        if shift >= 64 {
-            return Err("Varint too long".to_string());
-        }
-    }
-    Ok(result)
-}
-
-fn parse_protobuf_orig(data: &[u8], pos: &mut usize, end: usize) -> Result<HashMap<u32, Vec<ProtoValue>>, String> {
-    let mut result: HashMap<u32, Vec<ProtoValue>> = HashMap::new();
-    while *pos < end {
-        let key = match read_varint(data, pos) {
-            Ok(k) => k,
-            Err(_) => break,
-        };
-        let wire_type = (key & 0x07) as u32;
-        let field_num = (key >> 3) as u32;
-
-        if field_num == 0 || field_num > (1 << 29) - 1 {
-            return Err("Invalid field number".to_string());
-        }
-
-        match wire_type {
-            0 => {
-                match read_varint(data, pos) {
-                    Ok(val) => {
-                        result.entry(field_num).or_default().push(ProtoValue::Varint(val));
-                    }
-                    Err(_) => break,
-                }
-            }
-            1 => {
-                if *pos + 8 > end {
-                    break;
-                }
-                let val = data[*pos..*pos + 8].to_vec();
-                *pos += 8;
-                result.entry(field_num).or_default().push(ProtoValue::Fixed64(val));
-            }
-            2 => {
-                let length = match read_varint(data, pos) {
-                    Ok(l) => l as usize,
-                    Err(_) => break,
-                };
-                if *pos + length > end {
-                    break;
-                }
-                let val = data[*pos..*pos + length].to_vec();
-                *pos += length;
-                result.entry(field_num).or_default().push(ProtoValue::Bytes(val));
-            }
-            5 => {
-                if *pos + 4 > end {
-                    break;
-                }
-                let val = data[*pos..*pos + 4].to_vec();
-                *pos += 4;
-                result.entry(field_num).or_default().push(ProtoValue::Fixed32(val));
-            }
-            _ => {
-                return Err(format!("Unsupported wire type {}", wire_type));
-            }
-        }
-    }
-    Ok(result)
-}
-
-fn is_printable_string(s: &str) -> bool {
-    s.chars().all(|c| {
-        (!c.is_control() && c != '\u{2028}' && c != '\u{2029}') || c == '\n' || c == '\r' || c == '\t'
-    })
-}
-
-fn try_parse_sub_messages(mut parsed_dict: HashMap<u32, Vec<ProtoValue>>) -> HashMap<u32, Vec<ProtoValue>> {
-    for (_field, values) in parsed_dict.iter_mut() {
-        let mut new_values = Vec::new();
-        for v in values.drain(..) {
-            match v {
-                ProtoValue::Bytes(bytes) => {
-                    let len = bytes.len();
-                    let mut pos = 0;
-                    if len > 0 {
-                        if let Ok(sub_msg) = parse_protobuf_orig(&bytes, &mut pos, len) {
-                            if pos == len && !sub_msg.is_empty() {
-                                let sub_msg = try_parse_sub_messages(sub_msg);
-                                new_values.push(ProtoValue::SubMessage(sub_msg));
-                                continue;
-                            }
-                        }
-                    }
-
-                    if let Ok(s) = String::from_utf8(bytes.clone()) {
-                        if is_printable_string(&s) {
-                            new_values.push(ProtoValue::String(s));
-                            continue;
-                        }
-                    }
-
-                    new_values.push(ProtoValue::Bytes(bytes));
-                }
-                ProtoValue::SubMessage(sub_msg) => {
-                    new_values.push(ProtoValue::SubMessage(try_parse_sub_messages(sub_msg)));
-                }
-                other => {
-                    new_values.push(other);
-                }
-            }
-        }
-        *values = new_values;
-    }
-    parsed_dict
-}
-
-struct Metric {
-    model: String,
-    uncached_input: i64,
-    cached_input: i64,
-    output: i64,
-    thinking: i64,
-}
-
-fn get_varint_val(val: &ProtoValue) -> i64 {
-    match val {
-        ProtoValue::Varint(v) => *v as i64,
-        _ => 0,
-    }
-}
-
-fn extract_metrics_from_proto(proto_dict: &HashMap<u32, Vec<ProtoValue>>) -> Vec<Metric> {
-    let mut metrics = Vec::new();
-    if let Some(items) = proto_dict.get(&1) {
-        for item in items {
-            if let ProtoValue::SubMessage(item_dict) = item {
-                let mut model_name = "unknown".to_string();
-                if let Some(field_19) = item_dict.get(&19) {
-                    if let Some(val) = field_19.first() {
-                        let raw_model = match val {
-                            ProtoValue::String(s) => Some(s.clone()),
-                            ProtoValue::Bytes(b) => String::from_utf8(b.clone()).ok(),
-                            _ => None,
-                        };
-                        if let Some(rm) = raw_model {
-                            model_name = if rm == "gemini-3-flash-a" {
-                                "gemini-3.5-flash".to_string()
-                            } else {
-                                rm
-                            };
-                        }
-                    }
-                }
-                if let Some(token_blocks) = item_dict.get(&4) {
-                    for token_block in token_blocks {
-                        if let ProtoValue::SubMessage(block_dict) = token_block {
-                            let uncached = block_dict
-                                .get(&2)
-                                .and_then(|v| v.first())
-                                .map(get_varint_val)
-                                .unwrap_or(0);
-                            let candidates = block_dict
-                                .get(&3)
-                                .and_then(|v| v.first())
-                                .map(get_varint_val)
-                                .unwrap_or(0);
-                            let cached = block_dict
-                                .get(&5)
-                                .and_then(|v| v.first())
-                                .map(get_varint_val)
-                                .unwrap_or(0);
-                            let thinking = block_dict
-                                .get(&10)
-                                .and_then(|v| v.first())
-                                .map(get_varint_val)
-                                .unwrap_or(0);
-
-                            metrics.push(Metric {
-                                model: model_name.clone(),
-                                uncached_input: uncached,
-                                cached_input: cached,
-                                output: candidates,
-                                thinking,
-                            });
-                        }
-                    }
-                }
-            }
-        }
-    }
-    metrics
-}
-
-// 3. 会话元数据与日志读取逻辑
-
-fn extract_convo_info(uuid: &str, db_path: &Path) -> (String, String) {
+pub fn extract_convo_info(uuid: &str, db_path: &Path) -> (String, String) {
     let brain_dir = get_brain_dir();
     let transcript_path = brain_dir
         .join(uuid)
@@ -331,9 +106,9 @@ fn extract_convo_info(uuid: &str, db_path: &Path) -> (String, String) {
     (title, created_at)
 }
 
-// 4. 增量本地缓存数据库结构初始化
+// 3. 增量本地缓存数据库结构初始化
 
-fn init_cache_db() -> Result<(), rusqlite::Error> {
+pub fn init_cache_db() -> Result<(), rusqlite::Error> {
     let db_path = get_db_cache_path();
     if let Some(parent) = db_path.parent() {
         let _ = std::fs::create_dir_all(parent);
@@ -382,9 +157,9 @@ fn init_cache_db() -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
-// 5. 增量扫描逻辑与数据同步
+// 4. 增量扫描逻辑与数据同步
 
-fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> {
+pub fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> {
     let db_dir = get_conversations_dir();
     if !db_dir.exists() {
         return get_aggregated_metrics_from_cache();
@@ -554,72 +329,72 @@ fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> {
     get_aggregated_metrics_from_cache()
 }
 
-// 6. 从缓存数据库获取大盘聚合统计数据
+// 5. 从缓存数据库获取大盘聚合统计数据
 
 #[derive(Serialize)]
-struct Totals {
-    total_input: i64,
-    total_output: i64,
-    total_tokens: i64,
-    total_cached: i64,
-    total_thinking: i64,
-    cache_hit_rate: f64,
-    thinking_ratio: f64,
-    total_sessions: i64,
+pub struct Totals {
+    pub total_input: i64,
+    pub total_output: i64,
+    pub total_tokens: i64,
+    pub total_cached: i64,
+    pub total_thinking: i64,
+    pub cache_hit_rate: f64,
+    pub thinking_ratio: f64,
+    pub total_sessions: i64,
 }
 
 #[derive(Serialize)]
-struct DailyTrend {
-    date: String,
-    input: i64,
-    output: i64,
-    cached: i64,
-    thinking: i64,
-    sessions: i64,
+pub struct DailyTrend {
+    pub date: String,
+    pub input: i64,
+    pub output: i64,
+    pub cached: i64,
+    pub thinking: i64,
+    pub sessions: i64,
 }
 
 #[derive(Serialize)]
-struct MonthlySummary {
-    month: String,
-    input: i64,
-    output: i64,
-    cached: i64,
-    thinking: i64,
-    sessions: i64,
+pub struct MonthlySummary {
+    pub month: String,
+    pub input: i64,
+    pub output: i64,
+    pub cached: i64,
+    pub thinking: i64,
+    pub sessions: i64,
 }
 
 #[derive(Serialize)]
-struct ModelDistribution {
-    model: String,
-    input: i64,
-    output: i64,
-    cached: i64,
-    thinking: i64,
-    total_tokens: i64,
+pub struct ModelDistribution {
+    pub model: String,
+    pub input: i64,
+    pub output: i64,
+    pub cached: i64,
+    pub thinking: i64,
+    pub total_tokens: i64,
 }
 
 #[derive(Serialize)]
-struct SessionItem {
-    uuid: String,
-    title: String,
-    created_at: String,
-    input: i64,
-    output: i64,
-    cached: i64,
-    thinking: i64,
-    models: Vec<String>,
+pub struct SessionItem {
+    pub uuid: String,
+    pub title: String,
+    pub created_at: String,
+    pub input: i64,
+    pub output: i64,
+    pub cached: i64,
+    pub thinking: i64,
+    pub models: Vec<String>,
 }
 
 #[derive(Serialize)]
-struct AggregatedMetrics {
-    totals: Totals,
-    daily_trends: Vec<DailyTrend>,
-    monthly_summary: Vec<MonthlySummary>,
-    model_distribution: Vec<ModelDistribution>,
-    sessions: Vec<SessionItem>,
+pub struct AggregatedMetrics {
+    pub totals: Totals,
+    pub daily_trends: Vec<DailyTrend>,
+    pub monthly_summary: Vec<MonthlySummary>,
+    pub model_distribution: Vec<ModelDistribution>,
+    pub sessions: Vec<SessionItem>,
 }
 
-fn get_aggregated_metrics_from_cache() -> Result<AggregatedMetrics, rusqlite::Error> {
+pub fn get_aggregated_metrics_from_cache() -> Result<AggregatedMetrics, rusqlite::Error> {
     let db_path = get_db_cache_path();
     let conn = rusqlite::Connection::open(&db_path)?;
 
@@ -848,171 +623,4 @@ fn get_aggregated_metrics_from_cache() -> Result<AggregatedMetrics, rusqlite::Er
         model_distribution,
         sessions,
     })
-}
-
-// 7. 后端路由与服务搭建
-
-async fn handle_metrics() -> Response<Body> {
-    match tokio::task::spawn_blocking(|| {
-        let _lock = DB_LOCK.lock().unwrap();
-        let _ = init_cache_db();
-        sync_and_collect_metrics()
-    })
-    .await
-    {
-        Ok(Ok(data)) => {
-            let body = match serde_json::to_vec(&data) {
-                Ok(bytes) => Body::from(bytes),
-                Err(e) => return Response::builder()
-                    .status(StatusCode::INTERNAL_SERVER_ERROR)
-                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                    .body(Body::from(format!("JSON Serialization Error: {}", e)))
-                    .unwrap(),
-            };
-            Response::builder()
-                .status(StatusCode::OK)
-                .header(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")
-                .header(header::PRAGMA, "no-cache")
-                .header(header::EXPIRES, "0")
-                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
-                .body(body)
-                .unwrap()
-        }
-        Ok(Err(e)) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from(format!("Database Error: {}", e)))
-            .unwrap(),
-        Err(e) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from(format!("Server Thread Error: {}", e)))
-            .unwrap(),
-    }
-}
-
-async fn serve_static_file_fallback(uri: Uri) -> impl IntoResponse {
-    let path_str = uri.path();
-    let clean_path = percent_encoding::percent_decode_str(path_str)
-        .decode_utf8_lossy()
-        .into_owned();
-    let clean_path = clean_path.trim_start_matches('/');
-
-    let file_name = if clean_path.is_empty() {
-        "index.html"
-    } else {
-        clean_path
-    };
-
-    // 优先返回内置的前端静态资源
-    let (embedded_content, content_type) = match file_name {
-        "index.html" => (Some(include_str!("../index.html")), "text/html; charset=utf-8"),
-        "style.css" => (Some(include_str!("../style.css")), "text/css; charset=utf-8"),
-        "app.js" => (Some(include_str!("../app.js")), "application/javascript; charset=utf-8"),
-        _ => (None, ""),
-    };
-
-    if let Some(content) = embedded_content {
-        return Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, content_type)
-            .body(Body::from(content))
-            .unwrap();
-    }
-
-    // 回退逻辑：如果内置文件未匹配到，则尝试从磁盘读取（为了支持本地其他图片/文件等静态资源）
-    let mut file_path = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|parent| parent.join(file_name)))
-        .unwrap_or_else(|| PathBuf::from(file_name));
-
-    if !file_path.exists() {
-        file_path = PathBuf::from(file_name);
-    }
-
-    if !file_path.exists() || !file_path.is_file() {
-        return Response::builder()
-            .status(StatusCode::NOT_FOUND)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("File Not Found"))
-            .unwrap();
-    }
-
-    let content_type = if file_name.ends_with(".html") {
-        "text/html; charset=utf-8"
-    } else if file_name.ends_with(".css") {
-        "text/css; charset=utf-8"
-    } else if file_name.ends_with(".js") {
-        "application/javascript; charset=utf-8"
-    } else if file_name.ends_with(".png") {
-        "image/png"
-    } else if file_name.ends_with(".jpg") || file_name.ends_with(".jpeg") {
-        "image/jpeg"
-    } else {
-        "text/plain; charset=utf-8"
-    };
-
-    match std::fs::read(&file_path) {
-        Ok(content) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, content_type)
-            .body(Body::from(content))
-            .unwrap(),
-        Err(_) => Response::builder()
-            .status(StatusCode::INTERNAL_SERVER_ERROR)
-            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-            .body(Body::from("Error reading static file"))
-            .unwrap(),
-    }
-}
-
-#[tokio::main]
-async fn main() {
-    let mut port = 19362;
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() > 1 {
-        if let Ok(p) = args[1].parse::<u16>() {
-            port = p;
-        }
-    }
-
-    let app = Router::new()
-        .route("/api/metrics", get(handle_metrics))
-        .fallback(serve_static_file_fallback);
-
-    let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
-    println!("\n==================================================");
-    println!(" Antigravity 极速增量缓存用量统计服务已成功启动！");
-    println!(" 服务地址: http://localhost:{}", port);
-    println!(" 正在自动为您打开浏览器，如果没有打开，请手动访问上述地址。");
-    println!(" 请保持此命令行窗口开启。");
-    println!(" 按 Ctrl+C 可以退出本服务。");
-    println!("==================================================\n");
-
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            eprintln!("Error binding to port {}: {}", port, e);
-            return;
-        }
-    };
-
-    // 自动打开浏览器
-    let url = format!("http://localhost:{}", port);
-    #[cfg(target_os = "windows")]
-    let _ = std::process::Command::new("cmd")
-        .args(["/C", "start", &url])
-        .spawn();
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open")
-        .arg(&url)
-        .spawn();
-    #[cfg(target_os = "linux")]
-    let _ = std::process::Command::new("xdg-open")
-        .arg(&url)
-        .spawn();
-
-    if let Err(e) = axum::serve(listener, app).await {
-        eprintln!("Server error: {}", e);
-    }
 }

@@ -1,0 +1,696 @@
+import { useState, useEffect, useMemo } from 'react';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  Tooltip,
+  Legend,
+  BarController,
+  LineController
+} from 'chart.js';
+import type { ChartOptions } from 'chart.js';
+import { Chart } from 'react-chartjs-2';
+import {
+  Cpu,
+  ArrowDown,
+  ArrowUp,
+  Database,
+  Brain,
+  Hash,
+  RefreshCw,
+  Search,
+  MessageSquare,
+  ChevronsUpDown,
+  Compass
+} from 'lucide-react';
+
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  BarElement,
+  LineElement,
+  PointElement,
+  Tooltip,
+  Legend,
+  BarController,
+  LineController
+);
+
+// 类型定义
+interface Totals {
+  total_input: number;
+  total_output: number;
+  total_tokens: number;
+  total_cached: number;
+  total_thinking: number;
+  cache_hit_rate: number;
+  thinking_ratio: number;
+  total_sessions: number;
+}
+
+interface DailyTrend {
+  date: string;
+  input: number;
+  output: number;
+  cached: number;
+  thinking: number;
+  sessions: number;
+}
+
+interface MonthlySummary {
+  month: string;
+  input: number;
+  output: number;
+  cached: number;
+  thinking: number;
+  sessions: number;
+}
+
+interface ModelDistribution {
+  model: string;
+  input: number;
+  output: number;
+  cached: number;
+  thinking: number;
+  total_tokens: number;
+}
+
+interface SessionItem {
+  uuid: string;
+  title: string;
+  created_at: string;
+  input: number;
+  output: number;
+  cached: number;
+  thinking: number;
+  models: string[];
+}
+
+interface AggregatedMetrics {
+  totals: Totals;
+  daily_trends: DailyTrend[];
+  monthly_summary: MonthlySummary[];
+  model_distribution: ModelDistribution[];
+  sessions: SessionItem[];
+}
+
+export default function App() {
+  const [data, setData] = useState<AggregatedMetrics | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [refreshSpin, setRefreshSpin] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState('--:--:--');
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [hideZero, setHideZero] = useState(true);
+  const [sortField, setSortField] = useState<keyof SessionItem | 'total'>('created_at');
+  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // 数字格式化
+  const formatNum = (num: number) => new Intl.NumberFormat('zh-CN').format(num || 0);
+
+  // 百分比格式化
+  const formatPercent = (val: number) => (val * 100).toFixed(1) + '%';
+
+  // 日期格式化
+  const formatDate = (isoStr: string) => {
+    if (!isoStr) return '--';
+    try {
+      const date = new Date(isoStr);
+      if (isNaN(date.getTime())) return isoStr;
+      const y = date.getFullYear();
+      const m = String(date.getMonth() + 1).padStart(2, '0');
+      const d = String(date.getDate()).padStart(2, '0');
+      const hh = String(date.getHours()).padStart(2, '0');
+      const mm = String(date.getMinutes()).padStart(2, '0');
+      return `${y}-${m}-${d} ${hh}:${mm}`;
+    } catch (e) {
+      return isoStr;
+    }
+  };
+
+  // 获取数据逻辑
+  const fetchData = async () => {
+    setLoading(true);
+    setRefreshSpin(true);
+    try {
+      const response = await fetch(`/api/metrics?t=${Date.now()}`);
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+      const result: AggregatedMetrics = await response.json();
+      setData(result);
+      const now = new Date();
+      setLastUpdate(now.toTimeString().split(' ')[0]);
+    } catch (error) {
+      console.error('Fetch data failed:', error);
+      alert('数据拉取失败，请确认后台服务已正常启动。');
+    } finally {
+      setLoading(false);
+      setRefreshSpin(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
+
+  // 排序字段切换
+  const handleSort = (field: keyof SessionItem | 'total') => {
+    if (sortField === field) {
+      setSortOrder(sortOrder === 'desc' ? 'asc' : 'desc');
+    } else {
+      setSortField(field);
+      setSortOrder('desc');
+    }
+  };
+
+  // 会话列表过滤与排序
+  const filteredAndSortedSessions = useMemo(() => {
+    if (!data?.sessions) return [];
+    
+    const kw = searchKeyword.toLowerCase().trim();
+    
+    // 过滤
+    let result = data.sessions.filter(s => {
+      if (hideZero && (s.input + s.output) === 0) {
+        return false;
+      }
+      return (
+        s.title.toLowerCase().includes(kw) ||
+        s.uuid.toLowerCase().includes(kw) ||
+        s.models.some(m => m.toLowerCase().includes(kw))
+      );
+    });
+
+    // 排序
+    result.sort((a, b) => {
+      let valA: any, valB: any;
+      if (sortField === 'total') {
+        valA = a.input + a.output;
+        valB = b.input + b.output;
+      } else if (sortField === 'models') {
+        valA = a.models.join(',');
+        valB = b.models.join(',');
+      } else if (sortField === 'created_at') {
+        valA = new Date(a.created_at).getTime();
+        valB = new Date(b.created_at).getTime();
+      } else {
+        valA = a[sortField];
+        valB = b[sortField];
+      }
+
+      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
+      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    return result;
+  }, [data?.sessions, searchKeyword, hideZero, sortField, sortOrder]);
+
+  // 模型占用比例计算
+  const maxModelTokens = useMemo(() => {
+    if (!data?.model_distribution || data.model_distribution.length === 0) return 0;
+    return Math.max(...data.model_distribution.map(m => m.total_tokens));
+  }, [data?.model_distribution]);
+
+  // Chart.js 堆叠图表配置与数据
+  const chartData = useMemo(() => {
+    const trends = data?.daily_trends || [];
+    const dates = trends.map(t => t.date);
+    const cachedData = trends.map(t => t.cached);
+    const uncachedData = trends.map(t => Math.max(0, t.input - t.cached));
+    const outputData = trends.map(t => t.output);
+    const thinkingData = trends.map(t => t.thinking);
+
+    return {
+      labels: dates,
+      datasets: [
+        {
+          label: '缓存输入 Token',
+          data: cachedData,
+          backgroundColor: 'rgba(20, 184, 166, 0.4)',
+          borderColor: 'rgba(20, 184, 166, 0.8)',
+          borderWidth: 1,
+          stack: 'stack0',
+          order: 2,
+        },
+        {
+          label: '未缓存输入 Token',
+          data: uncachedData,
+          backgroundColor: 'rgba(6, 182, 212, 0.65)',
+          borderColor: 'rgba(6, 182, 212, 0.95)',
+          borderWidth: 1,
+          stack: 'stack0',
+          order: 2,
+        },
+        {
+          label: '输出 Token',
+          data: outputData,
+          backgroundColor: 'rgba(236, 72, 153, 0.65)',
+          borderColor: 'rgba(236, 72, 153, 0.95)',
+          borderWidth: 1,
+          stack: 'stack0',
+          order: 2,
+        },
+        {
+          label: '推理 Token',
+          data: thinkingData,
+          type: 'line' as const,
+          borderColor: '#a855f7',
+          borderWidth: 2,
+          pointBackgroundColor: '#a855f7',
+          pointBorderColor: '#ffffff',
+          pointHoverRadius: 6,
+          tension: 0.35,
+          fill: false,
+          order: 1,
+        }
+      ]
+    };
+  }, [data?.daily_trends]);
+
+  const chartOptions: ChartOptions<'bar'> = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: {
+        display: false
+      },
+      tooltip: {
+        mode: 'index',
+        intersect: false,
+        backgroundColor: 'rgba(15, 23, 42, 0.85)',
+        titleColor: '#fff',
+        bodyColor: '#e2e8f0',
+        borderColor: 'rgba(255,255,255,0.1)',
+        borderWidth: 1,
+        padding: 12,
+        callbacks: {
+          label: function(context) {
+            let label = context.dataset.label || '';
+            if (label) {
+              label += ': ';
+            }
+            if (context.parsed.y !== null) {
+              label += formatNum(context.parsed.y);
+            }
+            return label;
+          },
+          footer: function(tooltipItems) {
+            let sum = 0;
+            tooltipItems.forEach(function(tooltipItem) {
+              // 0: 缓存输入, 1: 未缓存输入, 2: 输出
+              if (tooltipItem.datasetIndex >= 0 && tooltipItem.datasetIndex <= 2 && tooltipItem.parsed.y !== null) {
+                sum += tooltipItem.parsed.y;
+              }
+            });
+            return '总消耗 TOKEN: ' + formatNum(sum);
+          }
+        },
+        footerColor: '#06b6d4',
+        footerFont: { family: 'Outfit', weight: 'bold', size: 13 },
+      }
+    },
+    scales: {
+      x: {
+        stacked: true,
+        grid: {
+          color: 'rgba(255, 255, 255, 0.03)',
+        },
+        ticks: {
+          color: '#9ca3af',
+          font: { family: 'Outfit' }
+        }
+      },
+      y: {
+        stacked: true,
+        grid: {
+          color: 'rgba(255, 255, 255, 0.05)',
+        },
+        ticks: {
+          color: '#9ca3af',
+          font: { family: 'JetBrains Mono' },
+          callback: function(value) {
+            const numVal = Number(value);
+            if (numVal >= 1000000) return (numVal / 1000000).toFixed(1) + 'M';
+            if (numVal >= 1000) return (numVal / 1000).toFixed(0) + 'K';
+            return numVal;
+          }
+        }
+      }
+    }
+  };
+
+  const totals = data?.totals;
+
+  return (
+    <div className="relative min-height-screen">
+      {/* 背景光效 */}
+      <div className="background-decor-1 bg-decor-cyan animate-pulse-glow fixed -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
+      <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse fixed -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
+
+      <div className="max-w-[1400px] mx-auto p-6 flex flex-col gap-6">
+        {/* 头部导航栏 */}
+        <header className="glass-card flex flex-col md:flex-row justify-between items-center px-7 py-4 rounded-2xl gap-4">
+          <div className="flex items-center gap-4">
+            <svg className="w-9 h-9" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2 17L12 22L22 17" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <path d="M2 12L12 17L22 12" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+              <defs>
+                <linearGradient id="logo-grad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                  <stop stopColor="#06b6d4" />
+                  <stop offset="1" stopColor="#a855f7" />
+                </linearGradient>
+              </defs>
+            </svg>
+            <div className="flex flex-col items-start">
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">Antigravity</h1>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">Token Monitor 2.0</span>
+            </div>
+          </div>
+          <div className="flex items-center gap-5">
+            <div className="text-xs text-dark-text-secondary flex items-center gap-2">
+              <span className="w-1.5 h-1.5 bg-neon-green rounded-full shadow-[0_0_8px_var(--color-neon-green)]"></span>
+              数据同步于: <span className="font-mono text-neon-cyan font-semibold">{lastUpdate}</span>
+            </div>
+            <button
+              onClick={fetchData}
+              disabled={loading}
+              className="flex items-center gap-2 text-sm font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:scale-105 active:scale-100 hover:shadow-neon-cyan/35 text-white px-5 py-2.5 rounded-xl cursor-pointer shadow-md transition-all duration-300"
+            >
+              <RefreshCw className={`w-4 h-4 ${refreshSpin ? 'animate-spin' : ''}`} />
+              <span>同步刷新</span>
+            </button>
+          </div>
+        </header>
+
+        {/* KPI 看板 */}
+        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+          {/* 总消耗 */}
+          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-dark-text-secondary font-medium mb-1">总消耗 Token</span>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-white mb-0.5">{totals ? formatNum(totals.total_tokens) : 0}</h2>
+              <span className="text-[9px] font-semibold text-dark-text-muted tracking-wider uppercase">Total Tokens</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
+              <Compass className="w-6 h-6" />
+            </div>
+          </div>
+
+          {/* 输入 */}
+          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-dark-text-secondary font-medium mb-1">输入 Token</span>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-white mb-0.5">{totals ? formatNum(totals.total_input) : 0}</h2>
+              <span className="text-[9px] font-semibold text-dark-text-muted tracking-wider uppercase">Total Prompt</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/30 group-hover:scale-110 transition-transform duration-300">
+              <ArrowDown className="w-6 h-6" />
+            </div>
+          </div>
+
+          {/* 输出 */}
+          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-dark-text-secondary font-medium mb-1">输出 Token</span>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-white mb-0.5">{totals ? formatNum(totals.total_output) : 0}</h2>
+              <span className="text-[9px] font-semibold text-dark-text-muted tracking-wider uppercase">Total Candidates</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-pink/15 text-neon-pink border border-neon-pink/30 group-hover:scale-110 transition-transform duration-300">
+              <ArrowUp className="w-6 h-6" />
+            </div>
+          </div>
+
+          {/* 缓存命中率 */}
+          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-dark-text-secondary font-medium mb-1">缓存命中率</span>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-white mb-0.5">{totals ? formatPercent(totals.cache_hit_rate) : '0.0%'}</h2>
+              <span className="text-[9px] font-semibold text-dark-text-muted tracking-wider uppercase">Cache Hit Rate</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-blue/15 text-neon-blue border border-neon-blue/30 group-hover:scale-110 transition-transform duration-300">
+              <Database className="w-6 h-6" />
+            </div>
+          </div>
+
+          {/* 推理 Token 占比 */}
+          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-dark-text-secondary font-medium mb-1">推理 Token 占比</span>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-white mb-0.5">{totals ? formatPercent(totals.thinking_ratio) : '0.0%'}</h2>
+              <span className="text-[9px] font-semibold text-dark-text-muted tracking-wider uppercase">Thinking Ratio</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-orange/15 text-neon-orange border border-neon-orange/30 group-hover:scale-110 transition-transform duration-300">
+              <Brain className="w-6 h-6" />
+            </div>
+          </div>
+
+          {/* 缓存 Token 数 */}
+          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-dark-text-secondary font-medium mb-1">缓存命中数</span>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-white mb-0.5">{totals ? formatNum(totals.total_cached) : 0}</h2>
+              <span className="text-[9px] font-semibold text-dark-text-muted tracking-wider uppercase">Cached Tokens</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-green/15 text-neon-green border border-neon-green/30 group-hover:scale-110 transition-transform duration-300">
+              <Cpu className="w-6 h-6" />
+            </div>
+          </div>
+
+          {/* 推理 Token 数 */}
+          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-dark-text-secondary font-medium mb-1">推理消耗数</span>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-white mb-0.5">{totals ? formatNum(totals.total_thinking) : 0}</h2>
+              <span className="text-[9px] font-semibold text-dark-text-muted tracking-wider uppercase">Thinking Tokens</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-gold/15 text-neon-gold border border-neon-gold/30 group-hover:scale-110 transition-transform duration-300">
+              <Hash className="w-6 h-6" />
+            </div>
+          </div>
+
+          {/* 总会话数 */}
+          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-dark-text-secondary font-medium mb-1">总会话数</span>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-white mb-0.5">{totals ? formatNum(totals.total_sessions) : 0}</h2>
+              <span className="text-[9px] font-semibold text-dark-text-muted tracking-wider uppercase">Total Sessions</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-teal/15 text-neon-teal border border-neon-teal/30 group-hover:scale-110 transition-transform duration-300">
+              <MessageSquare className="w-6 h-6" />
+            </div>
+          </div>
+        </section>
+
+        {/* 每日趋势图 */}
+        <section className="chart-section glass-card rounded-2xl p-6">
+          <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-3 mb-5 border-b border-white/5 gap-3">
+            <h2 className="text-base font-semibold text-white">每日用量走势 (Token 堆叠柱状图)</h2>
+            <div className="flex items-center gap-4 text-xs text-dark-text-secondary">
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 bg-neon-cyan/70 rounded-sm"></span>输入 Token</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-3 bg-neon-pink/70 rounded-sm"></span>输出 Token</span>
+              <span className="flex items-center gap-1.5"><span className="w-3 h-1 bg-neon-purple rounded-full"></span>推理 Token</span>
+            </div>
+          </div>
+          <div className="h-[380px] w-full">
+            {data?.daily_trends && data.daily_trends.length > 0 ? (
+              <Chart type="bar" data={chartData as any} options={chartOptions as any} />
+            ) : (
+              <div className="h-full flex items-center justify-center text-dark-text-muted italic">暂无趋势图表数据</div>
+            )}
+          </div>
+        </section>
+
+        {/* 分布与汇总 */}
+        <section className="grid grid-cols-1 lg:grid-cols-[1fr_1.5fr] gap-6">
+          {/* 底层模型排行 */}
+          <div className="glass-card rounded-2xl p-5 flex flex-col gap-4">
+            <div className="pb-3 border-b border-white/5">
+              <h2 className="text-sm font-semibold text-white">底层模型消耗占比</h2>
+            </div>
+            <div className="flex flex-col gap-4 max-h-[350px] overflow-y-auto pr-1">
+              {data?.model_distribution && data.model_distribution.length > 0 ? (
+                data.model_distribution.map((m) => {
+                  const pct = maxModelTokens > 0 ? (m.total_tokens / maxModelTokens) * 100 : 0;
+                  return (
+                    <div key={m.model} className="flex flex-col gap-1.5">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-semibold text-white">{m.model}</span>
+                        <span className="font-mono text-dark-text-secondary">{formatNum(m.total_tokens)} Tokens</span>
+                      </div>
+                      <div className="h-2 w-full bg-white/5 rounded-full overflow-hidden border border-white/5 relative">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_8px_var(--color-neon-cyan)] transition-all duration-1000"
+                          style={{ width: `${pct}%` }}
+                        ></div>
+                      </div>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-center py-6 text-dark-text-muted italic">暂无模型用量占比数据</div>
+              )}
+            </div>
+          </div>
+
+          {/* 按月汇总表 */}
+          <div className="glass-card rounded-2xl p-5 flex flex-col gap-4">
+            <div className="pb-3 border-b border-white/5">
+              <h2 className="text-sm font-semibold text-white">按月用量汇总</h2>
+            </div>
+            <div className="table-responsive max-h-[350px] overflow-y-auto">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th className="text-left py-2.5">月份</th>
+                    <th className="text-right py-2.5">会话数</th>
+                    <th className="text-right py-2.5">输入 Token</th>
+                    <th className="text-right py-2.5">输出 Token</th>
+                    <th className="text-right py-2.5">缓存 Token</th>
+                    <th className="text-right py-2.5">推理 Token</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data?.monthly_summary && data.monthly_summary.length > 0 ? (
+                    data.monthly_summary.map((row) => (
+                      <tr key={row.month} className="hover:bg-white/2 transition-colors duration-150">
+                        <td className="font-mono text-white py-2.5">{row.month}</td>
+                        <td className="font-mono text-right py-2.5">{formatNum(row.sessions)}</td>
+                        <td className="font-mono text-right py-2.5">{formatNum(row.input)}</td>
+                        <td className="font-mono text-right py-2.5">{formatNum(row.output)}</td>
+                        <td className="font-mono text-right py-2.5">{formatNum(row.cached)}</td>
+                        <td className="font-mono text-right py-2.5">{formatNum(row.thinking)}</td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td colSpan={6} className="text-center py-6 text-dark-text-muted italic">暂无月度统计数据</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        {/* 会话明细 */}
+        <section className="glass-card rounded-2xl p-6">
+          <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 mb-5 border-b border-white/5">
+            <h2 className="text-base font-semibold text-white">会话用量明细</h2>
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
+              {/* 开关 */}
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <span className="text-xs text-dark-text-secondary font-medium">隐藏 0 消耗会话</span>
+                <div className="relative">
+                  <input
+                    type="checkbox"
+                    checked={hideZero}
+                    onChange={(e) => setHideZero(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-10 h-5 bg-white/5 border border-white/10 rounded-full peer peer-focus:ring-0 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[3px] after:left-[3px] after:bg-gray-400 peer-checked:after:bg-neon-cyan after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-neon-cyan/15 peer-checked:border-neon-cyan shadow-sm"></div>
+                </div>
+              </label>
+              {/* 搜索框 */}
+              <div className="relative w-full sm:w-[280px]">
+                <Search className="w-4 h-4 text-dark-text-muted absolute left-3 top-2.5" />
+                <input
+                  type="text"
+                  placeholder="输入关键字搜索会话..."
+                  value={searchKeyword}
+                  onChange={(e) => setSearchKeyword(e.target.value)}
+                  className="w-full bg-white/3 border border-white/8 rounded-lg pl-9 pr-4 py-2 text-xs text-white placeholder-dark-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] focus:bg-white/5 transition-all duration-300"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="table-responsive">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th onClick={() => handleSort('title')} className="sortable text-left py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center gap-1">会话标题 <ChevronsUpDown className="w-3 h-3 text-dark-text-muted" /></span>
+                  </th>
+                  <th onClick={() => handleSort('created_at')} className="sortable text-left py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center gap-1">创建时间 <ChevronsUpDown className="w-3 h-3 text-dark-text-muted" /></span>
+                  </th>
+                  <th onClick={() => handleSort('models')} className="sortable text-left py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center gap-1">使用模型 <ChevronsUpDown className="w-3 h-3 text-dark-text-muted" /></span>
+                  </th>
+                  <th onClick={() => handleSort('input')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center justify-end gap-1">输入 Token <ChevronsUpDown className="w-3 h-3 text-dark-text-muted" /></span>
+                  </th>
+                  <th onClick={() => handleSort('output')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center justify-end gap-1">输出 Token <ChevronsUpDown className="w-3 h-3 text-dark-text-muted" /></span>
+                  </th>
+                  <th onClick={() => handleSort('cached')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center justify-end gap-1">缓存 Token <ChevronsUpDown className="w-3 h-3 text-dark-text-muted" /></span>
+                  </th>
+                  <th onClick={() => handleSort('thinking')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center justify-end gap-1">推理 Token <ChevronsUpDown className="w-3 h-3 text-dark-text-muted" /></span>
+                  </th>
+                  <th onClick={() => handleSort('total')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center justify-end gap-1">总计 Token <ChevronsUpDown className="w-3 h-3 text-dark-text-muted" /></span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredAndSortedSessions.length > 0 ? (
+                  filteredAndSortedSessions.map((s) => {
+                    const totalTokens = s.input + s.output;
+                    return (
+                      <tr key={s.uuid} className="hover:bg-white/2 transition-colors duration-150 border-b border-white/3">
+                        <td className="py-3 pr-4 max-w-[280px]">
+                          <div className="font-semibold text-white truncate">{s.title}</div>
+                          <span className="font-mono text-[9px] text-dark-text-muted block mt-0.5">{s.uuid}</span>
+                        </td>
+                        <td className="text-xs text-dark-text-secondary py-3">{formatDate(s.created_at)}</td>
+                        <td className="py-3">
+                          <div className="flex flex-wrap gap-1.5">
+                             {s.models && s.models.length > 0 ? (
+                              s.models.map((m) => (
+                                <span key={m} className="text-[10px] px-2 py-0.5 bg-white/5 border border-white/8 text-dark-text-secondary rounded">
+                                  {m}
+                                </span>
+                              ))
+                            ) : (
+                              <span className="text-[10px] px-2 py-0.5 bg-white/5 border border-white/8 text-dark-text-secondary rounded">
+                                unknown
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="font-mono text-right py-3">{formatNum(s.input)}</td>
+                        <td className="font-mono text-right py-3">{formatNum(s.output)}</td>
+                        <td className="font-mono text-right py-3">{formatNum(s.cached)}</td>
+                        <td className="font-mono text-right py-3">{formatNum(s.thinking)}</td>
+                        <td className="font-mono text-right font-bold text-neon-cyan py-3">{formatNum(totalTokens)}</td>
+                      </tr>
+                    );
+                  })
+                ) : (
+                  <tr>
+                    <td colSpan={8} className="text-center py-10 text-dark-text-muted italic">
+                      没有符合条件的会话记录
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </div>
+
+      {/* 全局加载遮罩 */}
+      {loading && (
+        <div className="fixed inset-0 bg-dark-bg/85 backdrop-blur-md z-[9999] flex flex-col items-center justify-center gap-5">
+          <div className="w-[50px] h-[50px] border-4 border-neon-cyan/10 rounded-full border-t-neon-cyan border-b-neon-purple animate-spin"></div>
+          <p className="text-sm font-semibold text-dark-text-secondary tracking-wide">正在抓取并解码 Token 消耗数据...</p>
+        </div>
+      )}
+    </div>
+  );
+}

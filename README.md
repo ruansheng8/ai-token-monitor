@@ -16,29 +16,30 @@
 
 ## 📂 项目结构
 
-*   `src/main.rs`：后端核心。使用 Rust 实现 Protobuf 线格式解码、增量同步逻辑、SQL 数据聚合和静态文件托管。
+*   `static/`：前端静态资源目录，包含 HTML、CSS 和 JS 文件。
+    *   `index.html`：前端仪表盘结构框架。
+    *   `style.css`：符合现代审美标准的 Premium 玻璃拟态暗黑样式文件。
+    *   `app.js`：前端数据交互、表格搜索/排序以及 Chart.js 渲染逻辑。
+*   `src/`：后端核心代码。
+    *   `main.rs`：主程序入口，配置端口并启动服务器。
+    *   `proto.rs`：Protobuf 字节流反序列化与信息解析。
+    *   `db.rs`：本地 SQLite 缓存管理，增量会话同步算法和数据聚合查询。
+    *   `server.rs`：Axum Web 路由设置、API 请求处理器和静态资源嵌入式服务。
 *   `Cargo.toml`：Rust 项目配置文件与依赖管理。
-*   `index.html`：前端仪表盘结构框架。
-*   `style.css`：符合现代审美标准的 Premium 玻璃拟态暗黑样式文件。
-*   `app.js`：前端数据交互、表格搜索/排序以及 Chart.js 渲染逻辑。
 
 ---
 
 ## 🚀 如何运行使用
 
 ### 步骤 1：运行服务
-您可以通过以下任一方式启动服务：
-
-- **双击运行**：直接双击运行项目根目录下的 [ai-token-monitor.exe](file:///d:/VibeCoding/ai-token-monitor/ai-token-monitor.exe) 文件。
-- **命令行运行**：进入当前项目文件夹目录，执行以下命令：
-  ```bash
-  cargo run --release
-  ```
+进入当前项目文件夹目录，执行以下命令启动服务：
+```bash
+cargo run --release
+```
 
 *注：服务默认在 `19362` 端口启动。如果您需要自定义端口（如 8080），只需在启动命令后追加端口号：*
 ```bash
-# 使用已编译的二进制启动并指定 8080 端口
-ai-token-monitor.exe 8080
+cargo run --release -- 8080
 ```
 
 ### 步骤 2：在浏览器中访问
@@ -50,7 +51,7 @@ ai-token-monitor.exe 8080
 
 ## 📦 如何分发给其他 Windows 用户
 
-如果您想将这个工具分享给其他使用 Antigravity 的 Windows 用户，只需进行以下简单的打包工作：
+由于前端静态资源在编译时已自动嵌入至二进制程序中，所以整个应用已打包为完全自包含的单文件，分发极其简单：
 
 1. **本地编译可执行文件**：
    在项目根目录下，运行以下命令编译 Release 版本：
@@ -59,16 +60,9 @@ ai-token-monitor.exe 8080
    ```
    编译成功后，在 `target/release/` 目录下会生成一个名为 `ai-token-monitor.exe` 的可执行文件（体积仅约 4.5MB 左右）。
 
-2. **整理分发文件夹**：
-   新建一个文件夹，将以下 **4个文件** 拷贝到该文件夹中：
-   *   `ai-token-monitor.exe` (从 `target/release/` 拷贝出来)
-   *   `index.html`
-   *   `style.css`
-   *   `app.js`
-
-3. **打包发送**：
-   将该新建的文件夹压缩为 `.zip` 格式发送给其他 Windows 用户。
-   目标用户解压后，**直接双击运行 `ai-token-monitor.exe`** 即可立即开始使用！他们本机的系统环境无需做出任何修改。
+2. **直接分发**：
+   您只需将这单个 `ai-token-monitor.exe` 文件发送给其他 Windows 用户。
+   目标用户直接双击运行即可立即使用，不需要携带或解压任何其他 `.html`、`.css` 或 `.js` 文件。
 
 ---
 
