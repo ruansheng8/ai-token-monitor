@@ -208,6 +208,8 @@ const exportToCSV = (sessions: SessionItem[]) => {
 
 export default function App() {
   const [data, setData] = useState<AggregatedMetrics | null>(null);
+  const [sessionsData, setSessionsData] = useState<{ items: SessionItem[]; total: number } | null>(null);
+  const [sessionsLoading, setSessionsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshSpin, setRefreshSpin] = useState(false);
 
@@ -514,6 +516,44 @@ export default function App() {
     setRefreshSpin(false);
   };
 
+  // 异步拉取真实会话分页与关键字检索数据 (方案一核心)
+  const fetchSessions = async (
+    page = currentPage,
+    size = pageSize,
+    search = searchKeyword,
+    src = source,
+    sortBy = sortField,
+    order = sortOrder,
+    start = startDate,
+    end = endDate,
+    hideZeroVal = hideZero
+  ) => {
+    setSessionsLoading(true);
+    try {
+      const query = new URLSearchParams({
+        page: String(page),
+        page_size: String(size),
+        search: search.trim(),
+        source: src,
+        sort_by: String(sortBy),
+        sort_order: order,
+        start_date: start,
+        end_date: end,
+        hide_zero: hideZeroVal ? 'true' : 'false',
+        t: String(Date.now())
+      });
+      const res = await fetch(`/api/sessions?${query.toString()}`);
+      if (res.ok) {
+        const result = await res.json();
+        setSessionsData(result);
+      }
+    } catch (e) {
+      console.error("加载会话分页数据失败", e);
+    } finally {
+      setSessionsLoading(false);
+    }
+  };
+
   // 手动点击刷新同步按钮
   const handleSyncClick = async () => {
     if (scanStatus?.is_scanning) return;
@@ -526,15 +566,25 @@ export default function App() {
     startScan();
   }, []);
 
+  // 1. 仅当分页列表相关参数发生变化时，增量拉取会话明细，不触发大盘加载
   useEffect(() => {
+    fetchSessions(currentPage, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
+  }, [currentPage, pageSize, searchKeyword, sortField, sortOrder, hideZero]);
+
+  // 2. 当时间起止和来源变动时，大盘和列表需要同时同步更新，且重置页码
+  useEffect(() => {
+    setCurrentPage(1);
     fetchData(source, startDate, endDate);
+    fetchSessions(1, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
   }, [source, startDate, endDate]);
 
+  // 3. 热更新侦听
   useEffect(() => {
     let unlisten: () => void;
     listen('db-updated', () => {
-      console.log('[热同步] 收到后端数据更新通知，正在重载大盘数据...');
+      console.log('[热同步] 收到后端数据更新通知，正在重载大盘与分页数据...');
       fetchData(source, startDate, endDate);
+      fetchSessions(currentPage, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
     }).then((u) => {
       unlisten = u;
     });
@@ -543,7 +593,7 @@ export default function App() {
         unlisten();
       }
     };
-  }, [source, startDate, endDate]);
+  }, [source, startDate, endDate, currentPage, pageSize, searchKeyword, sortField, sortOrder, hideZero]);
 
   // 排序字段切换
   const handleSort = (field: keyof SessionItem | 'total') => {
@@ -555,57 +605,13 @@ export default function App() {
     }
   };
 
-  // 会话列表过滤与排序
-  const filteredAndSortedSessions = useMemo(() => {
-    if (!data?.sessions) return [];
-    
-    const kw = searchKeyword.toLowerCase().trim();
-    
-    // 过滤
-    let result = data.sessions.filter(s => {
-      if (hideZero && (s.input + s.output) === 0) {
-        return false;
-      }
-      return (
-        s.title.toLowerCase().includes(kw) ||
-        s.uuid.toLowerCase().includes(kw) ||
-        s.models.some(m => m.toLowerCase().includes(kw))
-      );
-    });
-
-    // 排序
-    result.sort((a, b) => {
-      let valA: any, valB: any;
-      if (sortField === 'total') {
-        valA = a.input + a.output;
-        valB = b.input + b.output;
-      } else if (sortField === 'models') {
-        valA = a.models.join(',');
-        valB = b.models.join(',');
-      } else if (sortField === 'created_at') {
-        valA = new Date(a.created_at).getTime();
-        valB = new Date(b.created_at).getTime();
-      } else {
-        valA = a[sortField];
-        valB = b[sortField];
-      }
-
-      if (valA < valB) return sortOrder === 'asc' ? -1 : 1;
-      if (valA > valB) return sortOrder === 'asc' ? 1 : -1;
-      return 0;
-    });
-
-    return result;
-  }, [data?.sessions, searchKeyword, hideZero, sortField, sortOrder]);
-
-  // 分页数据切片
+  // 会话列表过滤与排序 (方案一：平滑对接后端分页结果)
   const paginatedSessions = useMemo(() => {
-    const startIndex = (currentPage - 1) * pageSize;
-    return filteredAndSortedSessions.slice(startIndex, startIndex + pageSize);
-  }, [filteredAndSortedSessions, currentPage, pageSize]);
+    return sessionsData?.items || [];
+  }, [sessionsData]);
 
   // 分页计算与辅助函数
-  const totalItems = filteredAndSortedSessions.length;
+  const totalItems = sessionsData?.total || 0;
   const totalPages = Math.ceil(totalItems / pageSize) || 1;
 
   const getPageNumbers = () => {
@@ -1184,7 +1190,7 @@ export default function App() {
               {/* 报表导出操作按钮 */}
               <div className="flex items-center gap-2">
                 <button
-                  onClick={() => exportToCSV(filteredAndSortedSessions)}
+                  onClick={() => exportToCSV(paginatedSessions)}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-200/60 hover:bg-slate-300/60 dark:bg-white/5 dark:hover:bg-white/10 text-text-primary border border-card-border cursor-pointer transition-all duration-200 flex items-center gap-1 shadow-sm"
                   title="导出当前筛选出的账单为高兼容 CSV (Excel/WPS 无缝支持)"
                 >
@@ -1261,7 +1267,7 @@ export default function App() {
                 </tr>
               </thead>
               <tbody>
-                {filteredAndSortedSessions.length > 0 ? (
+                {paginatedSessions.length > 0 ? (
                   paginatedSessions.map((s) => {
                      const totalTokens = s.input + s.output;
                      return (
@@ -1332,7 +1338,7 @@ export default function App() {
           </div>
 
           {/* 分页控制栏 */}
-          {filteredAndSortedSessions.length > 0 && (
+          {paginatedSessions.length > 0 && (
             <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-6 pt-5 border-t border-card-border select-none">
               {/* 左侧：记录数信息 */}
               <div className="text-xs text-text-secondary font-medium order-2 sm:order-1 text-center sm:text-left">

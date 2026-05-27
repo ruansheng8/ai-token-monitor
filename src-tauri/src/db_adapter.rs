@@ -240,9 +240,19 @@ pub fn init_tables(conn: &DbConn) -> Result<(), String> {
         }
         DbConn::Postgres(client_lock) => {
             let mut client = client_lock.lock().unwrap();
-            let report = postgres_migrations::migrations::runner()
-                .run(&mut *client)
-                .map_err(|e| format!("Refinery Postgres migration failed: {:?} (底层详情: {})", e, e))?;
+            
+            // 获取 Postgres 会话级排他咨询锁，保证多线程或多进程并发迁移时串行执行，避免 refinery 迁移主键冲突
+            let _ = client.execute("SELECT pg_advisory_lock(763529)", &[])
+                .map_err(|e| format!("获取 Postgres 数据库迁移排他锁失败: {}", e))?;
+            
+            // 运行数据库迁移
+            let report_res = postgres_migrations::migrations::runner()
+                .run(&mut *client);
+            
+            // 释放排他咨询锁
+            let _ = client.execute("SELECT pg_advisory_unlock(763529)", &[]);
+            
+            let report = report_res.map_err(|e| format!("Refinery Postgres migration failed: {:?} (底层详情: {})", e, e))?;
             for migration in report.applied_migrations() {
                 println!("[数据库迁移] 应用 Postgres 表结构变更: {} (版本 {})", migration.name(), migration.version());
             }

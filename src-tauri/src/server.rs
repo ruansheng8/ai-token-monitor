@@ -7,7 +7,84 @@ use axum::{
 
 use crate::db::{
     get_aggregated_metrics_from_cache, start_background_scan, get_scan_status,
+    get_sessions_paginated, get_pg_sessions_paginated,
 };
+
+pub async fn handle_sessions_paginated(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response<Body> {
+    let page = params.get("page").and_then(|s| s.parse::<usize>().ok()).unwrap_or(1);
+    let page_size = params.get("page_size").and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+    let search = params.get("search").filter(|s| !s.is_empty()).cloned();
+    let source = params.get("source").filter(|s| !s.is_empty()).cloned();
+    let sort_by = params.get("sort_by").filter(|s| !s.is_empty()).cloned();
+    let sort_order = params.get("sort_order").filter(|s| !s.is_empty()).cloned();
+    let start_date = params.get("start_date").filter(|s| !s.is_empty()).cloned();
+    let end_date = params.get("end_date").filter(|s| !s.is_empty()).cloned();
+    let hide_zero = params.get("hide_zero").map(|s| s == "true" || s == "1").unwrap_or(true);
+
+    match tokio::task::spawn_blocking(move || {
+        let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
+        if db_type.to_lowercase() == "postgres" {
+            get_pg_sessions_paginated(
+                page, 
+                page_size, 
+                search.as_deref(), 
+                source.as_deref(), 
+                sort_by.as_deref(), 
+                sort_order.as_deref(), 
+                start_date.as_deref(), 
+                end_date.as_deref(), 
+                hide_zero
+            )
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))
+        } else {
+            get_sessions_paginated(
+                page, 
+                page_size, 
+                search.as_deref(), 
+                source.as_deref(), 
+                sort_by.as_deref(), 
+                sort_order.as_deref(), 
+                start_date.as_deref(), 
+                end_date.as_deref(), 
+                hide_zero
+            )
+        }
+    })
+    .await
+    {
+        Ok(Ok(data)) => {
+            let body = match serde_json::to_vec(&data) {
+                Ok(bytes) => Body::from(bytes),
+                Err(e) => return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .body(Body::from(format!("JSON Serialization Error: {}", e)))
+                    .unwrap(),
+            };
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CACHE_CONTROL, "no-cache, no-store, must-revalidate")
+                .header(header::PRAGMA, "no-cache")
+                .header(header::EXPIRES, "0")
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(body)
+                .unwrap()
+        }
+        Ok(Err(e)) => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from(format!("Database Error: {}", e)))
+            .unwrap(),
+        Err(e) => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .body(Body::from(format!("Server Thread Error: {}", e)))
+            .unwrap(),
+    }
+}
 
 pub async fn handle_metrics(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
