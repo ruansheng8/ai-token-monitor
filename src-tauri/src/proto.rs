@@ -170,7 +170,7 @@ pub fn extract_metrics_from_proto(proto_dict: &HashMap<u32, Vec<ProtoValue>>) ->
                             _ => None,
                         };
                         if let Some(rm) = raw_model {
-                            model_name = if rm == "gemini-3-flash-a" {
+                            model_name = if rm == "gemini-3-flash-a" || rm == "gemini-3-flash-b" {
                                 "gemini-3.5-flash".to_string()
                             } else {
                                 rm

@@ -119,178 +119,44 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
     let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
     let _ = conn.execute("PRAGMA synchronous=NORMAL;", []);
 
-    // ===== 数据库一键清洗迁移，防止 claude_code / codex 历史会话 input_tokens 偏小 (v1) =====
-    let meta_exists: Result<i32, _> = conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='db_meta'",
+    // 直接创建基于联合主键的最新 sessions 和 turns 表结构
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS sessions (
+            source TEXT NOT NULL,
+            uuid TEXT NOT NULL,
+            title TEXT,
+            created_at TEXT,
+            last_parsed_idx INTEGER DEFAULT -1,
+            last_mtime REAL DEFAULT 0.0,
+            project_path TEXT,
+            PRIMARY KEY (source, uuid)
+        )",
         [],
-        |_| Ok(1),
-    );
-    if meta_exists.is_err() {
-        let tables_exist: Result<i32, _> = conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'",
-            [],
-            |_| Ok(1),
-        );
-        if tables_exist.is_ok() {
-            println!("检测到老数据库版本，执行一键数据清洗，强制 claude_code/codex 重新增量计算总 Token...");
-            let _ = conn.execute("DELETE FROM turns WHERE source IN ('claude_code', 'codex')", []);
-            let _ = conn.execute("DELETE FROM sessions WHERE source IN ('claude_code', 'codex')", []);
-        }
-        let _ = conn.execute(
-            "CREATE TABLE db_meta (
-                key TEXT PRIMARY KEY,
-                value TEXT
-            )",
-            [],
-        );
-        let _ = conn.execute("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('version', '1')", []);
-    }
-
-    // 首先检查是否存在 sessions 表
-    let sessions_exists: Result<i32, _> = conn.query_row(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'",
-        [],
-        |r| r.get(0),
-    );
-
-    let mut should_migrate = false;
-    if sessions_exists.is_ok() {
-        // 如果 sessions 表存在，检查表结构是否已升级为包含 source 列的新版表结构
-        let has_source: Result<i32, _> = conn.query_row(
-            "SELECT 1 FROM pragma_table_info('sessions') WHERE name='source'",
-            [],
-            |_| Ok(1),
-        );
-        if has_source.is_err() {
-            should_migrate = true;
-        }
-    }
-
-    if should_migrate {
-        println!("检测到旧版数据库表结构，正在执行平滑迁移...");
-        // 开启数据库迁移事务
-        let _ = conn.execute("BEGIN TRANSACTION;", []);
-
-        // 1. 将 old 表重命名
-        let rename_sessions = conn.execute("ALTER TABLE sessions RENAME TO sessions_old;", []);
-        let rename_turns = conn.execute("ALTER TABLE turns RENAME TO turns_old;", []);
-
-        if rename_sessions.is_ok() && rename_turns.is_ok() {
-            // 2. 创建基于联合主键的新表结构
-            conn.execute(
-                "CREATE TABLE sessions (
-                    source TEXT NOT NULL,
-                    uuid TEXT NOT NULL,
-                    title TEXT,
-                    created_at TEXT,
-                    last_parsed_idx INTEGER DEFAULT -1,
-                    last_mtime REAL DEFAULT 0.0,
-                    project_path TEXT,
-                    PRIMARY KEY (source, uuid)
-                )",
-                [],
-            )?;
-
-            conn.execute(
-                "CREATE TABLE turns (
-                    source TEXT NOT NULL,
-                    uuid TEXT NOT NULL,
-                    idx INTEGER NOT NULL,
-                    model TEXT,
-                    input_tokens INTEGER DEFAULT 0,
-                    cached_input_tokens INTEGER DEFAULT 0,
-                    output_tokens INTEGER DEFAULT 0,
-                    thinking_tokens INTEGER DEFAULT 0,
-                    cost_usd REAL DEFAULT 0.0,
-                    message_id TEXT,
-                    request_id TEXT,
-                    timestamp TEXT,
-                    PRIMARY KEY (source, uuid, idx),
-                    FOREIGN KEY(source, uuid) REFERENCES sessions(source, uuid) ON DELETE CASCADE
-                )",
-                [],
-            )?;
-
-            // 3. 将旧 sessions 表数据迁移至新表（source = 'antigravity'）
-            conn.execute(
-                "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime)
-                 SELECT 'antigravity', uuid, title, created_at, last_parsed_idx, last_mtime
-                 FROM sessions_old",
-                [],
-            )?;
-
-            // 4. 将旧 turns 表数据迁移至新表（source = 'antigravity'，合并 input_tokens，估算 cost_usd）
-            conn.execute(
-                "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id)
-                 SELECT 'antigravity', uuid, idx, model, (uncached_input + cached_input), cached_input, output, thinking, 0.0, '', 'unknown'
-                 FROM turns_old",
-                [],
-            )?;
-
-            // 5. 对历史的 antigravity 轮次数据根据模型进行费用估算
-            conn.execute(
-                "UPDATE turns SET cost_usd = (
-                    CASE 
-                        WHEN model LIKE '%pro%' THEN (input_tokens * 1.25 / 1000000.0 + output_tokens * 5.0 / 1000000.0)
-                        ELSE (input_tokens * 0.075 / 1000000.0 + output_tokens * 0.3 / 1000000.0)
-                    END
-                ) WHERE source = 'antigravity'",
-                [],
-            )?;
-
-            // 6. 清理旧临时表
-            let _ = conn.execute("DROP TABLE sessions_old;", []);
-            let _ = conn.execute("DROP TABLE turns_old;", []);
-            let _ = conn.execute("COMMIT;", []);
-            println!("旧版数据平滑迁移完成！已升级为多源统计表结构。");
-        } else {
-            let _ = conn.execute("ROLLBACK;", []);
-            eprintln!("重命名旧表失败，取消迁移。");
-        }
-    } else {
-        // 如果已是新结构，则直接执行 CREATE TABLE IF NOT EXISTS 以做安全保障
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS sessions (
-                source TEXT NOT NULL,
-                uuid TEXT NOT NULL,
-                title TEXT,
-                created_at TEXT,
-                last_parsed_idx INTEGER DEFAULT -1,
-                last_mtime REAL DEFAULT 0.0,
-                project_path TEXT,
-                PRIMARY KEY (source, uuid)
-            )",
-            [],
-        )?;
-
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS turns (
-                source TEXT NOT NULL,
-                uuid TEXT NOT NULL,
-                idx INTEGER NOT NULL,
-                model TEXT,
-                input_tokens INTEGER DEFAULT 0,
-                cached_input_tokens INTEGER DEFAULT 0,
-                output_tokens INTEGER DEFAULT 0,
-                thinking_tokens INTEGER DEFAULT 0,
-                cost_usd REAL DEFAULT 0.0,
-                message_id TEXT,
-                request_id TEXT,
-                timestamp TEXT,
-                PRIMARY KEY (source, uuid, idx),
-                FOREIGN KEY(source, uuid) REFERENCES sessions(source, uuid) ON DELETE CASCADE
-            )",
-            [],
-        )?;
-    }
+    )?;
 
     conn.execute(
-        "UPDATE turns SET model = 'gemini-3.5-flash' WHERE model = 'gemini-3-flash-a'",
+        "CREATE TABLE IF NOT EXISTS turns (
+            source TEXT NOT NULL,
+            uuid TEXT NOT NULL,
+            idx INTEGER NOT NULL,
+            model TEXT,
+            input_tokens INTEGER DEFAULT 0,
+            cached_input_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            thinking_tokens INTEGER DEFAULT 0,
+            cost_usd REAL DEFAULT 0.0,
+            message_id TEXT,
+            request_id TEXT,
+            timestamp TEXT,
+            PRIMARY KEY (source, uuid, idx),
+            FOREIGN KEY(source, uuid) REFERENCES sessions(source, uuid) ON DELETE CASCADE
+        )",
         [],
     )?;
 
     Ok(())
 }
+
 
 // 4. 增量扫描逻辑与数据同步
 
@@ -989,6 +855,7 @@ where
 
         let mut new_turns = Vec::new();
         let mut max_idx_in_db = last_parsed_idx;
+        let mut read_success = false;
 
         if let Ok(conn_session) = rusqlite::Connection::open(&db_path) {
             let has_gen_metadata: Result<i32, _> = conn_session.query_row(
@@ -1002,6 +869,7 @@ where
                     "SELECT idx, data FROM gen_metadata WHERE size > 0 AND idx > ? ORDER BY idx ASC",
                 ) {
                     if let Ok(mut rows) = stmt.query([last_parsed_idx]) {
+                        read_success = true;
                         while let Ok(Some(row)) = rows.next() {
                             let idx: i64 = row.get(0).unwrap_or(0);
                             if idx > max_idx_in_db {
@@ -1046,51 +914,55 @@ where
             }
         }
 
-        if !new_turns.is_empty() {
-            log_progress(&format!("发现 Antigravity 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
-        }
-
-        // 写入增量数据并更新修改时间
-        let tx = conn_cache.transaction()?;
-        {
-            if is_new_session || existing_title.starts_with("Unknown Session") {
-                let (title, created_at) = extract_convo_info(&uuid, &db_path);
-                tx.execute(
-                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime) VALUES ('antigravity', ?, ?, ?, ?, ?)
-                     ON CONFLICT(source, uuid) DO UPDATE SET
-                        title = excluded.title,
-                        created_at = excluded.created_at,
-                        last_parsed_idx = excluded.last_parsed_idx,
-                        last_mtime = excluded.last_mtime",
-                    rusqlite::params![uuid, title, created_at, max_idx_in_db, mtime],
-                )?;
-            } else {
-                tx.execute(
-                    "UPDATE sessions SET last_parsed_idx = ?, last_mtime = ? WHERE source = 'antigravity' AND uuid = ?",
-                    rusqlite::params![max_idx_in_db, mtime, uuid],
-                )?;
+        if read_success {
+            if !new_turns.is_empty() {
+                log_progress(&format!("发现 Antigravity 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
             }
 
-            for turn in &new_turns {
-                let cost = estimate_cost(&turn.2, turn.3 + turn.4, turn.4, turn.5);
-                tx.execute(
-                    "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
-                     VALUES ('antigravity', ?, ?, ?, ?, ?, ?, ?, ?, '', 'unknown', ?)",
-                    rusqlite::params![
-                        uuid,
-                        turn.1,
-                        turn.2,
-                        turn.3 + turn.4,
-                        turn.4,
-                        turn.5,
-                        turn.6,
-                        cost,
-                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-                    ],
-                )?;
+            // 写入增量数据并更新修改时间
+            let tx = conn_cache.transaction()?;
+            {
+                if is_new_session || existing_title.starts_with("Unknown Session") {
+                    let (title, created_at) = extract_convo_info(&uuid, &db_path);
+                    tx.execute(
+                        "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime) VALUES ('antigravity', ?, ?, ?, ?, ?)
+                         ON CONFLICT(source, uuid) DO UPDATE SET
+                            title = excluded.title,
+                            created_at = excluded.created_at,
+                            last_parsed_idx = excluded.last_parsed_idx,
+                            last_mtime = excluded.last_mtime",
+                        rusqlite::params![uuid, title, created_at, max_idx_in_db, mtime],
+                    )?;
+                } else {
+                    tx.execute(
+                        "UPDATE sessions SET last_parsed_idx = ?, last_mtime = ? WHERE source = 'antigravity' AND uuid = ?",
+                        rusqlite::params![max_idx_in_db, mtime, uuid],
+                    )?;
+                }
+
+                for turn in &new_turns {
+                    let cost = estimate_cost(&turn.2, turn.3 + turn.4, turn.4, turn.5);
+                    tx.execute(
+                        "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
+                         VALUES ('antigravity', ?, ?, ?, ?, ?, ?, ?, ?, '', 'unknown', ?)",
+                        rusqlite::params![
+                            uuid,
+                            turn.1,
+                            turn.2,
+                            turn.3 + turn.4,
+                            turn.4,
+                            turn.5,
+                            turn.6,
+                            cost,
+                            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                        ],
+                    )?;
+                }
             }
+            tx.commit()?;
+        } else {
+            log_progress(&format!("跳过会话 [{}] 的更新：物理数据库目前无法访问或格式不兼容，下次将重新尝试", uuid));
         }
-        tx.commit()?;
         progress_cb(i + 1, total_files);
     }
 
@@ -1103,6 +975,10 @@ where
     // F. 如果配置了 PostgreSQL 模式，自动将本地 SQLite 增量好的最新数据一键同步至 PostgreSQL
     if let Err(e) = sync_local_to_postgres() {
         log_progress(&format!("同步到 PostgreSQL 失败: {}", e));
+        return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("同步至 PostgreSQL 失败: {}", e),
+        ))));
     }
 
     Ok(())
@@ -1363,7 +1239,7 @@ pub fn get_aggregated_metrics_from_cache(
     // D. 底层模型分布
     let sql_model_dist = format!(
         "SELECT 
-            CASE WHEN t.model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE t.model END as model_mapped,
+            t.model as model_mapped,
             SUM(t.input_tokens) as input,
             SUM(t.output_tokens) as output,
             SUM(t.cached_input_tokens) as cached,
@@ -1448,7 +1324,7 @@ pub fn get_aggregated_metrics_from_cache(
 
     // 额外提取每个会话使用到的引擎去重列表
     let sql_models = format!(
-        "SELECT t.source, t.uuid, CASE WHEN t.model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE t.model END as model_mapped
+        "SELECT t.source, t.uuid, t.model as model_mapped
         FROM turns t
         INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
         {} {}
@@ -1753,9 +1629,25 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
     if let Ok(row) = pg_meta_exists {
         let exists: bool = row.get(0);
         if !exists {
-            println!("检测到远程 PostgreSQL 老数据库版本，执行一键数据清洗并记录 db_meta 表...");
-            let _ = pg_client.execute("DELETE FROM turns WHERE source IN ('claude_code', 'codex')", &[]);
-            let _ = pg_client.execute("DELETE FROM sessions WHERE source IN ('claude_code', 'codex')", &[]);
+            // 只有当 turns 表存在，且其中包含 claude_code 或 codex 的老旧数据时，才进行清洗和日志打印
+            let has_old_data = pg_client.query_one(
+                "SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables WHERE table_name = 'turns'
+                )",
+                &[],
+            ).map(|r| r.get::<_, bool>(0)).unwrap_or(false) && 
+            pg_client.query_one(
+                "SELECT EXISTS (
+                    SELECT 1 FROM turns WHERE source IN ('claude_code', 'codex')
+                )",
+                &[],
+            ).map(|r| r.get::<_, bool>(0)).unwrap_or(false);
+
+            if has_old_data {
+                println!("检测到远程 PostgreSQL 老数据库版本，执行一键数据清洗并记录 db_meta 表...");
+                let _ = pg_client.execute("DELETE FROM turns WHERE source IN ('claude_code', 'codex')", &[]);
+                let _ = pg_client.execute("DELETE FROM sessions WHERE source IN ('claude_code', 'codex')", &[]);
+            }
             let _ = pg_client.execute(
                 "CREATE TABLE db_meta (
                     key TEXT PRIMARY KEY,
