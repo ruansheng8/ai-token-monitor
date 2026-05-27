@@ -119,6 +119,33 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
     let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
     let _ = conn.execute("PRAGMA synchronous=NORMAL;", []);
 
+    // ===== 数据库一键清洗迁移，防止 claude_code / codex 历史会话 input_tokens 偏小 (v1) =====
+    let meta_exists: Result<i32, _> = conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='db_meta'",
+        [],
+        |_| Ok(1),
+    );
+    if meta_exists.is_err() {
+        let tables_exist: Result<i32, _> = conn.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='turns'",
+            [],
+            |_| Ok(1),
+        );
+        if tables_exist.is_ok() {
+            println!("检测到老数据库版本，执行一键数据清洗，强制 claude_code/codex 重新增量计算总 Token...");
+            let _ = conn.execute("DELETE FROM turns WHERE source IN ('claude_code', 'codex')", []);
+            let _ = conn.execute("DELETE FROM sessions WHERE source IN ('claude_code', 'codex')", []);
+        }
+        let _ = conn.execute(
+            "CREATE TABLE db_meta (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            )",
+            [],
+        );
+        let _ = conn.execute("INSERT OR REPLACE INTO db_meta (key, value) VALUES ('version', '1')", []);
+    }
+
     // 首先检查是否存在 sessions 表
     let sessions_exists: Result<i32, _> = conn.query_row(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'",
@@ -421,6 +448,19 @@ fn find_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>) {
     }
 }
 
+fn get_total_input_tokens(model: &str, input: i64, cached: i64) -> i64 {
+    let model_lower = model.to_lowercase();
+    if model_lower.contains("claude") || model_lower.contains("opus") || model_lower.contains("sonnet") || model_lower.contains("haiku") {
+        if input < cached {
+            input + cached
+        } else {
+            input
+        }
+    } else {
+        input + cached
+    }
+}
+
 pub fn estimate_cost(model: &str, input: i64, cached: i64, output: i64) -> f64 {
     let model_lower = model.to_lowercase();
     if model_lower.contains("opus") {
@@ -624,12 +664,13 @@ pub fn sync_claude_code(
                             let model = extract_claude_model(&val);
                             let timestamp = extract_claude_timestamp(&val);
                             let (message_id, request_id) = extract_claude_ids(&val);
-                            let cost = estimate_cost(&model, input, cache_read, output);
+                            let total_input = get_total_input_tokens(&model, input, cache_read);
+                            let cost = estimate_cost(&model, total_input, cache_read, output);
 
                             new_turns.push((
                                 line_idx - 1,
                                 model,
-                                input,
+                                total_input,
                                 cache_read,
                                 output,
                                 0,
@@ -761,12 +802,13 @@ pub fn sync_codex(
                         if let Some((input, cache_read, output, thinking, model)) = extract_codex_tokens_and_model(&val, &default_model) {
                             let timestamp = extract_claude_timestamp(&val);
                             let (message_id, request_id) = extract_claude_ids(&val);
-                            let cost = estimate_cost(&model, input, cache_read, output);
+                            let total_input = get_total_input_tokens(&model, input, cache_read);
+                            let cost = estimate_cost(&model, total_input, cache_read, output);
 
                             new_turns.push((
                                 line_idx - 1,
                                 model,
-                                input,
+                                total_input,
                                 cache_read,
                                 output,
                                 thinking,
@@ -1662,7 +1704,7 @@ mod tests {
 
         let metrics_all_3 = get_aggregated_metrics_from_cache(None, None, None).unwrap();
         assert_eq!(metrics_all_3.totals.total_sessions, 2);
-        assert_eq!(metrics_all_3.totals.total_input, 1400);
+        assert_eq!(metrics_all_3.totals.total_input, 1530);
         assert_eq!(metrics_all_3.totals.total_output, 850);
         assert_eq!(metrics_all_3.totals.total_cached, 160);
 
@@ -1702,6 +1744,28 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
     let mut config: postgres::config::Config = db_url.parse().map_err(|e: postgres::Error| format!("解析 PostgreSQL 连接 URL 失败: {}", e))?;
     config.connect_timeout(std::time::Duration::from_secs(5));
     let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
+
+    // ===== PostgreSQL 数据清洗迁移，防 claude_code / codex 历史会话 input_tokens 偏小 (v1) =====
+    let pg_meta_exists = pg_client.query_one(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'db_meta')",
+        &[],
+    );
+    if let Ok(row) = pg_meta_exists {
+        let exists: bool = row.get(0);
+        if !exists {
+            println!("检测到远程 PostgreSQL 老数据库版本，执行一键数据清洗并记录 db_meta 表...");
+            let _ = pg_client.execute("DELETE FROM turns WHERE source IN ('claude_code', 'codex')", &[]);
+            let _ = pg_client.execute("DELETE FROM sessions WHERE source IN ('claude_code', 'codex')", &[]);
+            let _ = pg_client.execute(
+                "CREATE TABLE db_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )",
+                &[],
+            );
+            let _ = pg_client.execute("INSERT INTO db_meta (key, value) VALUES ('version', '1')", &[]);
+        }
+    }
 
     let cache_path = get_db_cache_path();
     let sqlite_conn = rusqlite::Connection::open(&cache_path).map_err(|e| format!("无法打开本地 SQLite 缓存: {}", e))?;
@@ -1772,11 +1836,19 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
     let total_sessions = sessions_to_sync.len();
     log_progress(&format!("检测到有 {} 个会话存在更新，正在进行增量分批同步...", total_sessions));
 
+    if let Ok(mut status) = get_scan_status().lock() {
+        status.total_files = total_sessions;
+        status.scanned_files = 0;
+    }
+
     // 5. 开启 PG 事务，分批（每 50 个会话）镜像同步变动部分
     let mut pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
     let mut count = 0;
 
     for (idx, (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx)) in sessions_to_sync.into_iter().enumerate() {
+        if let Ok(mut status) = get_scan_status().lock() {
+            status.scanned_files = idx + 1;
+        }
         if count == 0 {
             log_progress(&format!(
                 "正在同步数据至远程 PostgreSQL ({}/{}) ...",

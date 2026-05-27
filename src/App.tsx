@@ -240,8 +240,48 @@ export default function App() {
     setCurrentPage(1);
   }, [searchKeyword, hideZero, sortField, sortOrder, pageSize, source]);
 
-  // 数字格式化
-  const formatNum = (num: number) => new Intl.NumberFormat('zh-CN').format(num || 0);
+  // 精确数字格式化（带千分位）
+  const formatPreciseNum = (num: number) => new Intl.NumberFormat('zh-CN').format(num || 0);
+
+  // 数字格式化，支持中文大数单位（万、百万、千万、亿、十亿、百亿、千亿）
+  const formatNum = (num: number) => {
+    if (num === 0) return '0';
+    if (!num) return '0';
+    const absNum = Math.abs(num);
+    let unit = '';
+    let formatted = absNum;
+
+    if (absNum >= 1e11) {
+      formatted = absNum / 1e11;
+      unit = '千亿';
+    } else if (absNum >= 1e10) {
+      formatted = absNum / 1e10;
+      unit = '百亿';
+    } else if (absNum >= 1e9) {
+      formatted = absNum / 1e9;
+      unit = '十亿';
+    } else if (absNum >= 1e8) {
+      formatted = absNum / 1e8;
+      unit = '亿';
+    } else if (absNum >= 1e7) {
+      formatted = absNum / 1e7;
+      unit = '千万';
+    } else if (absNum >= 1e6) {
+      formatted = absNum / 1e6;
+      unit = '百万';
+    } else if (absNum >= 1e4) {
+      formatted = absNum / 1e4;
+      unit = '万';
+    }
+
+    if (unit) {
+      const str = formatted.toFixed(2);
+      const trimmed = parseFloat(str).toString();
+      return (num < 0 ? '-' : '') + trimmed + unit;
+    }
+
+    return (num < 0 ? '-' : '') + new Intl.NumberFormat('zh-CN').format(absNum);
+  };
 
   // 百分比格式化
   const formatPercent = (val: number) => (val * 100).toFixed(1) + '%';
@@ -469,7 +509,7 @@ export default function App() {
 
       <div className="max-w-[1400px] mx-auto p-6 flex flex-col gap-6">
         {/* 头部导航栏 */}
-        <header className="dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-7 py-4 gap-4">
+        <header className="relative z-30 dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-7 py-4 gap-4">
           <div className="flex items-center gap-4">
             <svg className="w-9 h-9" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -520,7 +560,7 @@ export default function App() {
                     className="fixed inset-0 z-40"
                     onClick={() => setIsSourceDropdownOpen(false)}
                   ></div>
-                  <div className="absolute right-0 mt-2 w-48 bg-bg-secondary/95 dark:bg-[#0f192b]/95 border border-card-border rounded-xl shadow-[0_10px_35px_rgba(0,0,0,0.35)] backdrop-blur-md z-50 py-1.5 flex flex-col gap-0.5 animate-fade-in">
+                  <div className="absolute left-0 right-0 mt-2 bg-bg-secondary/95 dark:bg-[#0f192b]/95 border border-card-border rounded-xl shadow-[0_10px_35px_rgba(0,0,0,0.35)] backdrop-blur-md z-50 py-1.5 flex flex-col gap-0.5 animate-fade-in">
                     {[
                       { value: 'all', label: '全部来源 (All)', icon: <Globe className="w-3.5 h-3.5 text-neon-cyan" /> },
                       { value: 'antigravity', label: 'Antigravity', icon: <GeminiIcon className="w-3.5 h-3.5 text-[#8b5cf6]" /> },
@@ -568,7 +608,7 @@ export default function App() {
             <button
               onClick={handleSyncClick}
               disabled={loading || scanStatus?.is_scanning}
-              className={`flex items-center gap-2 text-sm font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:scale-105 active:scale-100 hover:shadow-neon-cyan/35 text-white px-5 py-2.5 rounded-xl transition-all duration-300 ${
+              className={`flex items-center gap-2 text-sm font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:scale-105 active:scale-100 hover:shadow-neon-cyan/35 text-white px-5 rounded-xl transition-all duration-300 h-10 ${
                 loading || scanStatus?.is_scanning ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
               }`}
             >
