@@ -28,6 +28,7 @@ interface Totals {
   cache_hit_rate: number;
   thinking_ratio: number;
   total_sessions: number;
+  total_cost: number;
 }
 
 interface DailyTrend {
@@ -58,6 +59,7 @@ interface ModelDistribution {
 }
 
 interface SessionItem {
+  source: string;
   uuid: string;
   title: string;
   created_at: string;
@@ -65,6 +67,7 @@ interface SessionItem {
   output: number;
   cached: number;
   thinking: number;
+  cost_usd: number;
   models: string[];
 }
 
@@ -87,6 +90,7 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [source, setSource] = useState<'all' | 'antigravity' | 'claude_code' | 'codex'>('all');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('theme');
     if (saved === 'dark' || saved === 'light') {
@@ -108,7 +112,7 @@ export default function App() {
   // 当过滤条件、排序字段、排序顺序或每页大小发生变化时，重置当前页码
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchKeyword, hideZero, sortField, sortOrder, pageSize]);
+  }, [searchKeyword, hideZero, sortField, sortOrder, pageSize, source]);
 
   // 数字格式化
   const formatNum = (num: number) => new Intl.NumberFormat('zh-CN').format(num || 0);
@@ -151,7 +155,7 @@ export default function App() {
           setTimeout(pollScanStatus, 1000);
         } else {
           // 扫描完成，重新拉取最新数据
-          fetchData();
+          fetchData(source);
         }
       }
     } catch (error) {
@@ -176,11 +180,11 @@ export default function App() {
   };
 
   // 获取数据逻辑
-  const fetchData = async () => {
+  const fetchData = async (currentSource = source) => {
     setLoading(true);
     setRefreshSpin(true);
     try {
-      const response = await fetch(`/api/metrics?t=${Date.now()}`);
+      const response = await fetch(`/api/metrics?source=${currentSource}&t=${Date.now()}`);
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const result: AggregatedMetrics = await response.json();
       setData(result);
@@ -202,11 +206,13 @@ export default function App() {
   };
 
   useEffect(() => {
-    // 1. 先快速读取缓存展示（秒开）
-    fetchData();
-    // 2. 自动启动后台扫描
+    // 自动启动后台扫描
     startScan();
   }, []);
+
+  useEffect(() => {
+    fetchData(source);
+  }, [source]);
 
   // 排序字段切换
   const handleSort = (field: keyof SessionItem | 'total') => {
@@ -349,6 +355,18 @@ export default function App() {
               <span className="w-1.5 h-1.5 bg-neon-green rounded-full shadow-[0_0_8px_var(--color-neon-green)]"></span>
               数据同步于: <span className="font-mono text-neon-cyan font-semibold">{lastUpdate}</span>
             </div>
+
+            {/* 数据源选择器 */}
+            <select
+              value={source}
+              onChange={(e: any) => setSource(e.target.value)}
+              className="bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-3 py-2 text-xs font-semibold text-text-primary outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer h-10"
+            >
+              <option value="all">🌐 全部来源 (All)</option>
+              <option value="antigravity">🤖 Antigravity (Gemini)</option>
+              <option value="claude_code">🎯 Claude Code</option>
+              <option value="codex">🔮 Codex CLI</option>
+            </select>
             
             {/* 主题切换按钮 */}
             <button
@@ -410,7 +428,19 @@ export default function App() {
         )}
 
         {/* KPI 看板 */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
+        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-5">
+          {/* 估计总消费 */}
+          <div className="kpi-card kpi-pink glass-card p-5 flex justify-between items-center group bg-gradient-to-br from-neon-pink/10 to-neon-purple/5 border-neon-pink/20 hover:border-neon-pink/40 shadow-[0_8px_30px_rgba(236,72,153,0.04)]">
+            <div className="flex flex-col">
+              <span className="text-xs text-text-secondary font-medium mb-1">估算总费用</span>
+              <h2 className="text-2xl font-bold font-mono tracking-tight text-neon-pink mb-0.5">${totals ? totals.total_cost.toFixed(3) : '0.000'}</h2>
+              <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Est. Total Cost</span>
+            </div>
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-pink/15 text-neon-pink border border-neon-pink/30 group-hover:scale-110 transition-transform duration-300">
+              <span className="text-lg font-bold font-mono">$</span>
+            </div>
+          </div>
+
           {/* 总消耗 */}
           <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
@@ -633,6 +663,9 @@ export default function App() {
                   <th onClick={() => handleSort('title')} className="sortable text-left py-3 cursor-pointer hover:text-neon-cyan transition-colors">
                     <span className="flex items-center gap-1">会话标题 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
                   </th>
+                  <th onClick={() => handleSort('source')} className="sortable text-left py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center gap-1">统计来源 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
+                  </th>
                   <th onClick={() => handleSort('created_at')} className="sortable text-left py-3 cursor-pointer hover:text-neon-cyan transition-colors">
                     <span className="flex items-center gap-1">创建时间 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
                   </th>
@@ -651,6 +684,9 @@ export default function App() {
                   <th onClick={() => handleSort('thinking')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
                     <span className="flex items-center justify-end gap-1">推理 Token <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
                   </th>
+                  <th onClick={() => handleSort('cost_usd')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
+                    <span className="flex items-center justify-end gap-1">估算费用 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
+                  </th>
                   <th onClick={() => handleSort('total')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
                     <span className="flex items-center justify-end gap-1">总计 Token <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
                   </th>
@@ -659,12 +695,29 @@ export default function App() {
               <tbody>
                 {filteredAndSortedSessions.length > 0 ? (
                   paginatedSessions.map((s) => {
-                    const totalTokens = s.input + s.output;
-                    return (
+                     const totalTokens = s.input + s.output;
+                     return (
                       <tr key={s.uuid} className="hover:bg-table-row-hover transition-colors duration-150 border-b border-card-border">
                         <td className="py-3 pr-4 max-w-[280px]">
                           <div className="font-semibold text-text-primary truncate">{s.title}</div>
                           <span className="font-mono text-[9px] text-text-muted block mt-0.5">{s.uuid}</span>
+                        </td>
+                        <td className="py-3">
+                          {s.source === 'antigravity' && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-neon-purple/15 border border-neon-purple/35 text-neon-purple leading-none">
+                              Antigravity
+                            </span>
+                          )}
+                          {s.source === 'claude_code' && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-500/15 border border-orange-500/35 text-orange-500 leading-none">
+                              Claude Code
+                            </span>
+                          )}
+                          {s.source === 'codex' && (
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">
+                              Codex CLI
+                            </span>
+                          )}
                         </td>
                         <td className="text-xs text-text-secondary py-3">{formatDate(s.created_at)}</td>
                         <td className="py-3">
@@ -686,13 +739,14 @@ export default function App() {
                         <td className="font-mono text-right py-3">{formatNum(s.output)}</td>
                         <td className="font-mono text-right py-3">{formatNum(s.cached)}</td>
                         <td className="font-mono text-right py-3">{formatNum(s.thinking)}</td>
+                        <td className="font-mono text-right text-xs text-text-secondary py-3">${s.cost_usd.toFixed(3)}</td>
                         <td className="font-mono text-right font-bold text-neon-cyan py-3">{formatNum(totalTokens)}</td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={8} className="text-center py-10 text-text-muted italic">
+                    <td colSpan={10} className="text-center py-10 text-text-muted italic">
                       没有符合条件的会话记录
                     </td>
                   </tr>

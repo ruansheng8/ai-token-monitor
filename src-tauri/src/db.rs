@@ -119,39 +119,143 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
     let _ = conn.execute("PRAGMA journal_mode=WAL;", []);
     let _ = conn.execute("PRAGMA synchronous=NORMAL;", []);
 
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS sessions (
-            uuid TEXT PRIMARY KEY,
-            title TEXT,
-            created_at TEXT,
-            last_parsed_idx INTEGER DEFAULT -1
-        )",
+    // 首先检查是否存在 sessions 表
+    let sessions_exists: Result<i32, _> = conn.query_row(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions'",
         [],
-    )?;
-
-    // 检查并升级 sessions 表结构，添加 last_mtime
-    let has_mtime: Result<i32, _> = conn.query_row(
-        "SELECT 1 FROM pragma_table_info('sessions') WHERE name='last_mtime'",
-        [],
-        |_| Ok(1),
+        |r| r.get(0),
     );
-    if has_mtime.is_err() {
-        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN last_mtime REAL DEFAULT 0.0", []);
+
+    let mut should_migrate = false;
+    if sessions_exists.is_ok() {
+        // 如果 sessions 表存在，检查表结构是否已升级为包含 source 列的新版表结构
+        let has_source: Result<i32, _> = conn.query_row(
+            "SELECT 1 FROM pragma_table_info('sessions') WHERE name='source'",
+            [],
+            |_| Ok(1),
+        );
+        if has_source.is_err() {
+            should_migrate = true;
+        }
     }
 
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS turns (
-            uuid TEXT,
-            idx INTEGER,
-            model TEXT,
-            uncached_input INTEGER,
-            cached_input INTEGER,
-            output INTEGER,
-            thinking INTEGER,
-            PRIMARY KEY (uuid, idx)
-        )",
-        [],
-    )?;
+    if should_migrate {
+        println!("检测到旧版数据库表结构，正在执行平滑迁移...");
+        // 开启数据库迁移事务
+        let _ = conn.execute("BEGIN TRANSACTION;", []);
+
+        // 1. 将 old 表重命名
+        let rename_sessions = conn.execute("ALTER TABLE sessions RENAME TO sessions_old;", []);
+        let rename_turns = conn.execute("ALTER TABLE turns RENAME TO turns_old;", []);
+
+        if rename_sessions.is_ok() && rename_turns.is_ok() {
+            // 2. 创建基于联合主键的新表结构
+            conn.execute(
+                "CREATE TABLE sessions (
+                    source TEXT NOT NULL,
+                    uuid TEXT NOT NULL,
+                    title TEXT,
+                    created_at TEXT,
+                    last_parsed_idx INTEGER DEFAULT -1,
+                    last_mtime REAL DEFAULT 0.0,
+                    project_path TEXT,
+                    PRIMARY KEY (source, uuid)
+                )",
+                [],
+            )?;
+
+            conn.execute(
+                "CREATE TABLE turns (
+                    source TEXT NOT NULL,
+                    uuid TEXT NOT NULL,
+                    idx INTEGER NOT NULL,
+                    model TEXT,
+                    input_tokens INTEGER DEFAULT 0,
+                    cached_input_tokens INTEGER DEFAULT 0,
+                    output_tokens INTEGER DEFAULT 0,
+                    thinking_tokens INTEGER DEFAULT 0,
+                    cost_usd REAL DEFAULT 0.0,
+                    message_id TEXT,
+                    request_id TEXT,
+                    timestamp TEXT,
+                    PRIMARY KEY (source, uuid, idx),
+                    FOREIGN KEY(source, uuid) REFERENCES sessions(source, uuid) ON DELETE CASCADE
+                )",
+                [],
+            )?;
+
+            // 3. 将旧 sessions 表数据迁移至新表（source = 'antigravity'）
+            conn.execute(
+                "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime)
+                 SELECT 'antigravity', uuid, title, created_at, last_parsed_idx, last_mtime
+                 FROM sessions_old",
+                [],
+            )?;
+
+            // 4. 将旧 turns 表数据迁移至新表（source = 'antigravity'，合并 input_tokens，估算 cost_usd）
+            conn.execute(
+                "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id)
+                 SELECT 'antigravity', uuid, idx, model, (uncached_input + cached_input), cached_input, output, thinking, 0.0, '', 'unknown'
+                 FROM turns_old",
+                [],
+            )?;
+
+            // 5. 对历史的 antigravity 轮次数据根据模型进行费用估算
+            conn.execute(
+                "UPDATE turns SET cost_usd = (
+                    CASE 
+                        WHEN model LIKE '%pro%' THEN (input_tokens * 1.25 / 1000000.0 + output_tokens * 5.0 / 1000000.0)
+                        ELSE (input_tokens * 0.075 / 1000000.0 + output_tokens * 0.3 / 1000000.0)
+                    END
+                ) WHERE source = 'antigravity'",
+                [],
+            )?;
+
+            // 6. 清理旧临时表
+            let _ = conn.execute("DROP TABLE sessions_old;", []);
+            let _ = conn.execute("DROP TABLE turns_old;", []);
+            let _ = conn.execute("COMMIT;", []);
+            println!("旧版数据平滑迁移完成！已升级为多源统计表结构。");
+        } else {
+            let _ = conn.execute("ROLLBACK;", []);
+            eprintln!("重命名旧表失败，取消迁移。");
+        }
+    } else {
+        // 如果已是新结构，则直接执行 CREATE TABLE IF NOT EXISTS 以做安全保障
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS sessions (
+                source TEXT NOT NULL,
+                uuid TEXT NOT NULL,
+                title TEXT,
+                created_at TEXT,
+                last_parsed_idx INTEGER DEFAULT -1,
+                last_mtime REAL DEFAULT 0.0,
+                project_path TEXT,
+                PRIMARY KEY (source, uuid)
+            )",
+            [],
+        )?;
+
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS turns (
+                source TEXT NOT NULL,
+                uuid TEXT NOT NULL,
+                idx INTEGER NOT NULL,
+                model TEXT,
+                input_tokens INTEGER DEFAULT 0,
+                cached_input_tokens INTEGER DEFAULT 0,
+                output_tokens INTEGER DEFAULT 0,
+                thinking_tokens INTEGER DEFAULT 0,
+                cost_usd REAL DEFAULT 0.0,
+                message_id TEXT,
+                request_id TEXT,
+                timestamp TEXT,
+                PRIMARY KEY (source, uuid, idx),
+                FOREIGN KEY(source, uuid) REFERENCES sessions(source, uuid) ON DELETE CASCADE
+            )",
+            [],
+        )?;
+    }
 
     conn.execute(
         "UPDATE turns SET model = 'gemini-3.5-flash' WHERE model = 'gemini-3-flash-a'",
@@ -217,6 +321,421 @@ pub fn start_background_scan() {
     });
 }
 
+pub fn get_claude_projects_dir() -> PathBuf {
+    Path::new(&get_user_profile_dir())
+        .join(".claude")
+        .join("projects")
+}
+
+pub fn get_codex_sessions_dir() -> PathBuf {
+    Path::new(&get_user_profile_dir())
+        .join(".codex")
+        .join("sessions")
+}
+
+fn find_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                find_jsonl_files(&path, files);
+            } else if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                files.push(path);
+            }
+        }
+    }
+}
+
+pub fn estimate_cost(model: &str, input: i64, cached: i64, output: i64) -> f64 {
+    let model_lower = model.to_lowercase();
+    if model_lower.contains("opus") {
+        let uncached = (input - cached).max(0);
+        ((uncached as f64 * 15.0) + (cached as f64 * 1.5) + (output as f64 * 75.0)) / 1_000_000.0
+    } else if model_lower.contains("sonnet") || model_lower.contains("claude-3-5") {
+        let uncached = (input - cached).max(0);
+        ((uncached as f64 * 3.0) + (cached as f64 * 0.3) + (output as f64 * 15.0)) / 1_000_000.0
+    } else if model_lower.contains("haiku") {
+        let uncached = (input - cached).max(0);
+        ((uncached as f64 * 0.25) + (cached as f64 * 0.03) + (output as f64 * 1.25)) / 1_000_000.0
+    } else if model_lower.contains("gemini") {
+        if model_lower.contains("pro") {
+            let uncached = (input - cached).max(0);
+            ((uncached as f64 * 1.25) + (cached as f64 * 0.3125) + (output as f64 * 5.0)) / 1_000_000.0
+        } else {
+            let uncached = (input - cached).max(0);
+            ((uncached as f64 * 0.075) + (cached as f64 * 0.01875) + (output as f64 * 0.3)) / 1_000_000.0
+        }
+    } else {
+        let uncached = (input - cached).max(0);
+        ((uncached as f64 * 2.5) + (cached as f64 * 0.25) + (output as f64 * 10.0)) / 1_000_000.0
+    }
+}
+
+fn extract_claude_tokens(val: &serde_json::Value) -> (i64, i64, i64, i64) {
+    let mut input = 0;
+    let mut cache_creation = 0;
+    let mut cache_read = 0;
+    let mut output = 0;
+
+    let sources = vec![
+        val,
+        val.get("usage").unwrap_or(&serde_json::Value::Null),
+        val.get("message").and_then(|m| m.get("usage")).unwrap_or(&serde_json::Value::Null),
+    ];
+
+    for src in sources {
+        if !src.is_object() {
+            continue;
+        }
+
+        let in_t = src.get("input_tokens")
+            .or_else(|| src.get("inputTokens"))
+            .or_else(|| src.get("prompt_tokens"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let out_t = src.get("output_tokens")
+            .or_else(|| src.get("outputTokens"))
+            .or_else(|| src.get("completion_tokens"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let c_create = src.get("cache_creation_tokens")
+            .or_else(|| src.get("cache_creation_input_tokens"))
+            .or_else(|| src.get("cacheCreationInputTokens"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        let c_read = src.get("cache_read_input_tokens")
+            .or_else(|| src.get("cache_read_tokens"))
+            .or_else(|| src.get("cacheReadInputTokens"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
+        if in_t > 0 || out_t > 0 {
+            input = in_t;
+            output = out_t;
+            cache_creation = c_create;
+            cache_read = c_read;
+            break;
+        }
+    }
+
+    (input, cache_creation, cache_read, output)
+}
+
+fn extract_claude_model(val: &serde_json::Value) -> String {
+    let candidates = vec![
+        val.get("message").and_then(|m| m.get("model")),
+        val.get("model"),
+        val.get("Model"),
+        val.get("usage").and_then(|u| u.get("model")),
+        val.get("request").and_then(|r| r.get("model")),
+    ];
+
+    for cand in candidates {
+        if let Some(s) = cand.and_then(|v| v.as_str()) {
+            return s.to_string();
+        }
+    }
+    "unknown".to_string()
+}
+
+fn extract_claude_timestamp(val: &serde_json::Value) -> String {
+    val.get("timestamp")
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        })
+}
+
+fn extract_claude_ids(val: &serde_json::Value) -> (String, String) {
+    let message_id = val.get("message_id")
+        .or_else(|| val.get("message").and_then(|m| m.get("id")))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let request_id = val.get("request_id")
+        .or_else(|| val.get("requestId"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("unknown")
+        .to_string();
+
+    (message_id, request_id)
+}
+
+pub fn sync_claude_code(
+    conn_cache: &mut rusqlite::Connection,
+    progress_offset: usize,
+    total_files: usize,
+    progress_cb: &impl Fn(usize, usize),
+) -> Result<(), rusqlite::Error> {
+    let projects_dir = get_claude_projects_dir();
+    if !projects_dir.exists() {
+        return Ok(());
+    }
+
+    let mut jsonl_files = Vec::new();
+    find_jsonl_files(&projects_dir, &mut jsonl_files);
+
+    let mut session_cache = HashMap::new();
+    if let Ok(mut stmt) = conn_cache.prepare("SELECT uuid, last_parsed_idx, last_mtime FROM sessions WHERE source = 'claude_code'") {
+        if let Ok(mut rows) = stmt.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                if let (Ok(uuid), Ok(idx), Ok(mtime)) = (
+                    row.get::<_, String>(0),
+                    row.get::<_, i64>(1),
+                    row.get::<_, f64>(2),
+                ) {
+                    session_cache.insert(uuid, (idx, mtime));
+                }
+            }
+        }
+    }
+
+    for (idx, file_path) in jsonl_files.into_iter().enumerate() {
+        let current_scanned = progress_offset + idx + 1;
+        progress_cb(current_scanned, total_files);
+
+        let uuid = match file_path.strip_prefix(&projects_dir) {
+            Ok(p) => p.to_string_lossy().to_string(),
+            Err(_) => file_path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+        };
+
+        let mtime = match std::fs::metadata(&file_path).and_then(|m| m.modified()) {
+            Ok(t) => t
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0),
+            Err(_) => 0.0,
+        };
+
+        let mut last_parsed_idx = -1i64;
+        let mut last_mtime = 0.0f64;
+        let mut is_new_session = true;
+
+        if let Some((parsed_idx, m)) = session_cache.get(&uuid) {
+            last_parsed_idx = *parsed_idx;
+            last_mtime = *m;
+            is_new_session = false;
+        }
+
+        if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
+            continue;
+        }
+
+        if let Ok(file) = File::open(&file_path) {
+            let reader = BufReader::new(file);
+            let mut line_idx = 0i64;
+            let mut new_turns = Vec::new();
+
+            for line in reader.lines() {
+                if let Ok(line_str) = line {
+                    if line_str.trim().is_empty() {
+                        continue;
+                    }
+                    line_idx += 1;
+                    if line_idx <= last_parsed_idx {
+                        continue;
+                    }
+
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
+                        let (input, _cache_creation, cache_read, output) = extract_claude_tokens(&val);
+                        if input > 0 || output > 0 {
+                            let model = extract_claude_model(&val);
+                            let timestamp = extract_claude_timestamp(&val);
+                            let (message_id, request_id) = extract_claude_ids(&val);
+                            let cost = estimate_cost(&model, input, cache_read, output);
+
+                            new_turns.push((
+                                line_idx - 1,
+                                model,
+                                input,
+                                cache_read,
+                                output,
+                                0,
+                                cost,
+                                message_id,
+                                request_id,
+                                timestamp,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            let tx = conn_cache.transaction()?;
+            {
+                let title = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                let created_at = if !new_turns.is_empty() {
+                    new_turns[0].9.clone()
+                } else {
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                };
+
+                tx.execute(
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
+                     VALUES ('claude_code', ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(source, uuid) DO UPDATE SET
+                        last_parsed_idx = excluded.last_parsed_idx,
+                        last_mtime = excluded.last_mtime,
+                        title = excluded.title",
+                    rusqlite::params![uuid, title, created_at, line_idx, mtime, file_path.to_string_lossy().to_string()],
+                )?;
+
+                for turn in &new_turns {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
+                         VALUES ('claude_code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        rusqlite::params![uuid, turn.0, turn.1, turn.2, turn.3, turn.4, turn.5, turn.6, turn.7, turn.8, turn.9],
+                    )?;
+                }
+            }
+            tx.commit()?;
+        }
+    }
+
+    Ok(())
+}
+
+pub fn sync_codex(
+    conn_cache: &mut rusqlite::Connection,
+    progress_offset: usize,
+    total_files: usize,
+    progress_cb: &impl Fn(usize, usize),
+) -> Result<(), rusqlite::Error> {
+    let codex_dir = get_codex_sessions_dir();
+    if !codex_dir.exists() {
+        return Ok(());
+    }
+
+    let mut jsonl_files = Vec::new();
+    find_jsonl_files(&codex_dir, &mut jsonl_files);
+
+    let mut session_cache = HashMap::new();
+    if let Ok(mut stmt) = conn_cache.prepare("SELECT uuid, last_parsed_idx, last_mtime FROM sessions WHERE source = 'codex'") {
+        if let Ok(mut rows) = stmt.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                if let (Ok(uuid), Ok(idx), Ok(mtime)) = (
+                    row.get::<_, String>(0),
+                    row.get::<_, i64>(1),
+                    row.get::<_, f64>(2),
+                ) {
+                    session_cache.insert(uuid, (idx, mtime));
+                }
+            }
+        }
+    }
+
+    for (idx, file_path) in jsonl_files.into_iter().enumerate() {
+        let current_scanned = progress_offset + idx + 1;
+        progress_cb(current_scanned, total_files);
+
+        let uuid = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+
+        let mtime = match std::fs::metadata(&file_path).and_then(|m| m.modified()) {
+            Ok(t) => t
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0),
+            Err(_) => 0.0,
+        };
+
+        let mut last_parsed_idx = -1i64;
+        let mut last_mtime = 0.0f64;
+        let mut is_new_session = true;
+
+        if let Some((parsed_idx, m)) = session_cache.get(&uuid) {
+            last_parsed_idx = *parsed_idx;
+            last_mtime = *m;
+            is_new_session = false;
+        }
+
+        if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
+            continue;
+        }
+
+        if let Ok(file) = File::open(&file_path) {
+            let reader = BufReader::new(file);
+            let mut line_idx = 0i64;
+            let mut new_turns = Vec::new();
+
+            for line in reader.lines() {
+                if let Ok(line_str) = line {
+                    if line_str.trim().is_empty() {
+                        continue;
+                    }
+                    line_idx += 1;
+                    if line_idx <= last_parsed_idx {
+                        continue;
+                    }
+
+                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
+                        let (input, _cache_creation, cache_read, output) = extract_claude_tokens(&val);
+                        let thinking = val.get("thinking_tokens")
+                            .or_else(|| val.get("thinking"))
+                            .and_then(|v| v.as_i64())
+                            .unwrap_or(0);
+
+                        if input > 0 || output > 0 {
+                            let model = extract_claude_model(&val);
+                            let timestamp = extract_claude_timestamp(&val);
+                            let (message_id, request_id) = extract_claude_ids(&val);
+                            let cost = estimate_cost(&model, input, cache_read, output);
+
+                            new_turns.push((
+                                line_idx - 1,
+                                model,
+                                input,
+                                cache_read,
+                                output,
+                                thinking,
+                                cost,
+                                message_id,
+                                request_id,
+                                timestamp,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            let tx = conn_cache.transaction()?;
+            {
+                let title = file_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
+                let created_at = if !new_turns.is_empty() {
+                    new_turns[0].9.clone()
+                } else {
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                };
+
+                tx.execute(
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
+                     VALUES ('codex', ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(source, uuid) DO UPDATE SET
+                        last_parsed_idx = excluded.last_parsed_idx,
+                        last_mtime = excluded.last_mtime,
+                        title = excluded.title",
+                    rusqlite::params![uuid, title, created_at, line_idx, mtime, file_path.to_string_lossy().to_string()],
+                )?;
+
+                for turn in &new_turns {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
+                         VALUES ('codex', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        rusqlite::params![uuid, turn.0, turn.1, turn.2, turn.3, turn.4, turn.5, turn.6, turn.7, turn.8, turn.9],
+                    )?;
+                }
+            }
+            tx.commit()?;
+        }
+    }
+
+    Ok(())
+}
+
 pub fn sync_cache_db_with_progress<F>(progress_cb: F) -> Result<(), rusqlite::Error>
 where
     F: Fn(usize, usize) + Send + 'static,
@@ -224,37 +743,53 @@ where
     // 获取全局数据库锁，避免多线程写入冲突
     let _lock = DB_LOCK.lock().unwrap();
 
+    // 1. 扫描 Antigravity 物理文件
     let db_dir = get_conversations_dir();
-    if !db_dir.exists() {
-        progress_cb(0, 0);
-        return Ok(());
-    }
-
-    let mut active_uuids = std::collections::HashSet::new();
     let mut db_files = Vec::new();
+    let mut active_uuids = std::collections::HashSet::new();
 
-    if let Ok(entries) = std::fs::read_dir(db_dir) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("db") {
-                if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
-                    active_uuids.insert(stem.to_string());
-                    db_files.push(path);
+    if db_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&db_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_file() && path.extension().and_then(|s| s.to_str()) == Some("db") {
+                    if let Some(stem) = path.file_stem().and_then(|s| s.to_str()) {
+                        active_uuids.insert(stem.to_string());
+                        db_files.push(path);
+                    }
                 }
             }
         }
     }
 
+    // 2. 扫描 Claude Code 物理文件
+    let projects_dir = get_claude_projects_dir();
+    let mut claude_files = Vec::new();
+    if projects_dir.exists() {
+        find_jsonl_files(&projects_dir, &mut claude_files);
+    }
+
+    // 3. 扫描 Codex 物理文件
+    let codex_dir = get_codex_sessions_dir();
+    let mut codex_files = Vec::new();
+    if codex_dir.exists() {
+        find_jsonl_files(&codex_dir, &mut codex_files);
+    }
+
+    // 计算总文件数
+    let total_files = db_files.len() + claude_files.len() + codex_files.len();
+    progress_cb(0, total_files);
+
     let cache_path = get_db_cache_path();
     let mut conn_cache = rusqlite::Connection::open(&cache_path)?;
 
-    // 启用 WAL 模式和 synchronous=NORMAL，极大地加速并优化并发读写
+    // 启用 WAL 模式和 synchronous=NORMAL
     let _ = conn_cache.execute("PRAGMA journal_mode=WAL;", []);
     let _ = conn_cache.execute("PRAGMA synchronous=NORMAL;", []);
 
-    // A. 自动同步逻辑：如果本地数据库已被物理删除，清理本地缓存
+    // A. 自动同步逻辑：清理已被物理删除的 Antigravity 会话
     let cached_uuids: std::collections::HashSet<String> = {
-        let mut stmt = conn_cache.prepare("SELECT uuid FROM sessions")?;
+        let mut stmt = conn_cache.prepare("SELECT uuid FROM sessions WHERE source = 'antigravity'")?;
         let x: std::collections::HashSet<String> = stmt
             .query_map([], |row| row.get(0))?
             .flatten()
@@ -268,20 +803,16 @@ where
         let tx = conn_cache.transaction()?;
         {
             for uuid in &deleted_uuids {
-                tx.execute("DELETE FROM sessions WHERE uuid = ?", [uuid])?;
-                tx.execute("DELETE FROM turns WHERE uuid = ?", [uuid])?;
+                tx.execute("DELETE FROM sessions WHERE source = 'antigravity' AND uuid = ?", [uuid])?;
+                tx.execute("DELETE FROM turns WHERE source = 'antigravity' AND uuid = ?", [uuid])?;
             }
         }
         tx.commit()?;
-        println!("Removed deleted sessions from cache: {:?}", deleted_uuids);
     }
 
-    let total_files = db_files.len();
-    progress_cb(0, total_files);
-
-    // 预先查询缓存中的所有会话信息，避免在循环中对每个文件进行一次 SQL 查询
+    // B. 预载 Antigravity 会话缓存
     let mut session_cache = HashMap::new();
-    if let Ok(mut stmt) = conn_cache.prepare("SELECT uuid, last_parsed_idx, last_mtime, title FROM sessions") {
+    if let Ok(mut stmt) = conn_cache.prepare("SELECT uuid, last_parsed_idx, last_mtime, title FROM sessions WHERE source = 'antigravity'") {
         if let Ok(mut rows) = stmt.query([]) {
             while let Ok(Some(row)) = rows.next() {
                 if let (Ok(uuid), Ok(idx), Ok(mtime), Ok(title)) = (
@@ -296,7 +827,9 @@ where
         }
     }
 
-    // B. 增量解析，每个会话只拉取新交互数据
+    let db_files_len = db_files.len();
+
+    // C. 增量同步 Antigravity 数据
     for (i, db_path) in db_files.into_iter().enumerate() {
         let uuid = db_path.file_stem().unwrap().to_str().unwrap().to_string();
         let mtime = match std::fs::metadata(&db_path).and_then(|m| m.modified()) {
@@ -319,7 +852,6 @@ where
             is_new_session = false;
         }
 
-        // 超级优化：如果文件修改时间无任何变动，且不是新会话，则直接跳过数据库连接和打开操作
         if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
             progress_cb(i + 1, total_files);
             continue;
@@ -388,21 +920,38 @@ where
         let tx = conn_cache.transaction()?;
         {
             for turn in &new_turns {
+                let cost = estimate_cost(&turn.2, turn.3 + turn.4, turn.4, turn.5);
                 tx.execute(
-                    "INSERT OR REPLACE INTO turns (uuid, idx, model, uncached_input, cached_input, output, thinking) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    rusqlite::params![turn.0, turn.1, turn.2, turn.3, turn.4, turn.5, turn.6],
+                    "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
+                     VALUES ('antigravity', ?, ?, ?, ?, ?, ?, ?, ?, '', 'unknown', ?)",
+                    rusqlite::params![
+                        uuid,
+                        turn.1,
+                        turn.2,
+                        turn.3 + turn.4,
+                        turn.4,
+                        turn.5,
+                        turn.6,
+                        cost,
+                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                    ],
                 )?;
             }
 
             if is_new_session || existing_title.starts_with("Unknown Session") {
                 let (title, created_at) = extract_convo_info(&uuid, &db_path);
                 tx.execute(
-                    "INSERT OR REPLACE INTO sessions (uuid, title, created_at, last_parsed_idx, last_mtime) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime) VALUES ('antigravity', ?, ?, ?, ?, ?)
+                     ON CONFLICT(source, uuid) DO UPDATE SET
+                        title = excluded.title,
+                        created_at = excluded.created_at,
+                        last_parsed_idx = excluded.last_parsed_idx,
+                        last_mtime = excluded.last_mtime",
                     rusqlite::params![uuid, title, created_at, max_idx_in_db, mtime],
                 )?;
             } else {
                 tx.execute(
-                    "UPDATE sessions SET last_parsed_idx = ?, last_mtime = ? WHERE uuid = ?",
+                    "UPDATE sessions SET last_parsed_idx = ?, last_mtime = ? WHERE source = 'antigravity' AND uuid = ?",
                     rusqlite::params![max_idx_in_db, mtime, uuid],
                 )?;
             }
@@ -410,6 +959,12 @@ where
         tx.commit()?;
         progress_cb(i + 1, total_files);
     }
+
+    // D. 增量同步 Claude Code 数据
+    let _ = sync_claude_code(&mut conn_cache, db_files_len, total_files, &progress_cb);
+
+    // E. 增量同步 Codex 数据
+    let _ = sync_codex(&mut conn_cache, db_files_len + claude_files.len(), total_files, &progress_cb);
 
     Ok(())
 }
@@ -426,6 +981,7 @@ pub struct Totals {
     pub cache_hit_rate: f64,
     pub thinking_ratio: f64,
     pub total_sessions: i64,
+    pub total_cost: f64,
 }
 
 #[derive(Serialize)]
@@ -460,6 +1016,7 @@ pub struct ModelDistribution {
 
 #[derive(Serialize)]
 pub struct SessionItem {
+    pub source: String,
     pub uuid: String,
     pub title: String,
     pub created_at: String,
@@ -467,6 +1024,7 @@ pub struct SessionItem {
     pub output: i64,
     pub cached: i64,
     pub thinking: i64,
+    pub cost_usd: f64,
     pub models: Vec<String>,
 }
 
@@ -479,29 +1037,52 @@ pub struct AggregatedMetrics {
     pub sessions: Vec<SessionItem>,
 }
 
-pub fn get_aggregated_metrics_from_cache() -> Result<AggregatedMetrics, rusqlite::Error> {
+pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<AggregatedMetrics, rusqlite::Error> {
     let db_path = get_db_cache_path();
     let conn = rusqlite::Connection::open(&db_path)?;
 
+    // 确定 SQL 的过滤条件
+    let (where_clause, s_where, params) = match source_filter {
+        Some("all") | None => ("".to_string(), "".to_string(), vec![]),
+        Some(s) => (
+            "WHERE source = ?1".to_string(),
+            "WHERE s.source = ?1".to_string(),
+            vec![s.to_string()],
+        ),
+    };
+
     // A. Totals 全局指标
-    let row: Result<(Option<i64>, Option<i64>, Option<i64>, Option<i64>), _> = conn.query_row(
+    let sql_totals = format!(
         "SELECT 
-            SUM(uncached_input + cached_input) as total_input,
-            SUM(output) as total_output,
-            SUM(cached_input) as total_cached,
-            SUM(thinking) as total_thinking
-        FROM turns",
-        [],
-        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            SUM(input_tokens) as total_input,
+            SUM(output_tokens) as total_output,
+            SUM(cached_input_tokens) as total_cached,
+            SUM(thinking_tokens) as total_thinking,
+            SUM(cost_usd) as total_cost
+        FROM turns
+        {}",
+        where_clause
     );
 
-    let (sum_input, sum_output, sum_cached, sum_thinking) = row.unwrap_or((None, None, None, None));
+    let row: Result<(Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<f64>), _> = if params.is_empty() {
+        conn.query_row(&sql_totals, [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+    } else {
+        conn.query_row(&sql_totals, rusqlite::params![params[0]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
+    };
+
+    let (sum_input, sum_output, sum_cached, sum_thinking, sum_cost) = row.unwrap_or((None, None, None, None, None));
     let total_input = sum_input.unwrap_or(0);
     let total_output = sum_output.unwrap_or(0);
     let total_cached = sum_cached.unwrap_or(0);
     let total_thinking = sum_thinking.unwrap_or(0);
+    let total_cost = sum_cost.unwrap_or(0.0);
 
-    let total_sessions: i64 = conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))?;
+    let sql_sessions_count = format!("SELECT COUNT(*) FROM sessions {}", where_clause);
+    let total_sessions: i64 = if params.is_empty() {
+        conn.query_row(&sql_sessions_count, [], |r| r.get(0))?
+    } else {
+        conn.query_row(&sql_sessions_count, rusqlite::params![params[0]], |r| r.get(0))?
+    };
 
     let cache_hit_rate = if total_input > 0 {
         total_cached as f64 / total_input as f64
@@ -523,137 +1104,170 @@ pub fn get_aggregated_metrics_from_cache() -> Result<AggregatedMetrics, rusqlite
         cache_hit_rate,
         thinking_ratio,
         total_sessions,
+        total_cost,
     };
 
     // B. 每日用量序列 (按会话创建日期进行 GROUP BY 聚合)
-    let mut stmt = conn.prepare(
+    let sql_daily = format!(
         "SELECT 
             substr(s.created_at, 1, 10) as date,
-            SUM(t.uncached_input + t.cached_input) as input,
-            SUM(t.output) as output,
-            SUM(t.cached_input) as cached,
-            SUM(t.thinking) as thinking,
+            SUM(t.input_tokens) as input,
+            SUM(t.output_tokens) as output,
+            SUM(t.cached_input_tokens) as cached,
+            SUM(t.thinking_tokens) as thinking,
             COUNT(DISTINCT s.uuid) as sessions
         FROM sessions s
-        LEFT JOIN turns t ON s.uuid = t.uuid
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {}
         GROUP BY date
         ORDER BY date ASC",
-    )?;
-    let daily_trends: Vec<DailyTrend> = stmt
-        .query_map([], |r| {
-            let date: Option<String> = r.get(0)?;
-            let input: Option<i64> = r.get(1)?;
-            let output: Option<i64> = r.get(2)?;
-            let cached: Option<i64> = r.get(3)?;
-            let thinking: Option<i64> = r.get(4)?;
-            let sessions: i64 = r.get(5)?;
-            Ok(DailyTrend {
-                date: date.unwrap_or_default(),
-                input: input.unwrap_or(0),
-                output: output.unwrap_or(0),
-                cached: cached.unwrap_or(0),
-                thinking: thinking.unwrap_or(0),
-                sessions,
-            })
-        })?
-        .flatten()
-        .filter(|item| !item.date.is_empty())
-        .collect();
+        s_where
+    );
+
+    let mut stmt = conn.prepare(&sql_daily)?;
+    let mut rows = if params.is_empty() {
+        stmt.query([])?
+    } else {
+        stmt.query(rusqlite::params![params[0]])?
+    };
+
+    let mut daily_trends = Vec::new();
+    while let Some(row) = rows.next()? {
+        let date: Option<String> = row.get(0)?;
+        let input: Option<i64> = row.get(1)?;
+        let output: Option<i64> = row.get(2)?;
+        let cached: Option<i64> = row.get(3)?;
+        let thinking: Option<i64> = row.get(4)?;
+        let sessions: i64 = row.get(5)?;
+        daily_trends.push(DailyTrend {
+            date: date.unwrap_or_default(),
+            input: input.unwrap_or(0),
+            output: output.unwrap_or(0),
+            cached: cached.unwrap_or(0),
+            thinking: thinking.unwrap_or(0),
+            sessions,
+        });
+    }
 
     // C. 按月聚合汇总
-    let mut stmt = conn.prepare(
+    let sql_monthly = format!(
         "SELECT 
             substr(s.created_at, 1, 7) as month,
-            SUM(t.uncached_input + t.cached_input) as input,
-            SUM(t.output) as output,
-            SUM(t.cached_input) as cached,
-            SUM(t.thinking) as thinking,
+            SUM(t.input_tokens) as input,
+            SUM(t.output_tokens) as output,
+            SUM(t.cached_input_tokens) as cached,
+            SUM(t.thinking_tokens) as thinking,
             COUNT(DISTINCT s.uuid) as sessions
         FROM sessions s
-        LEFT JOIN turns t ON s.uuid = t.uuid
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {}
         GROUP BY month
         ORDER BY month DESC",
-    )?;
-    let monthly_summary: Vec<MonthlySummary> = stmt
-        .query_map([], |r| {
-            let month: Option<String> = r.get(0)?;
-            let input: Option<i64> = r.get(1)?;
-            let output: Option<i64> = r.get(2)?;
-            let cached: Option<i64> = r.get(3)?;
-            let thinking: Option<i64> = r.get(4)?;
-            let sessions: i64 = r.get(5)?;
-            Ok(MonthlySummary {
-                month: month.unwrap_or_default(),
-                input: input.unwrap_or(0),
-                output: output.unwrap_or(0),
-                cached: cached.unwrap_or(0),
-                thinking: thinking.unwrap_or(0),
-                sessions,
-            })
-        })?
-        .flatten()
-        .filter(|item| !item.month.is_empty())
-        .collect();
+        s_where
+    );
+
+    let mut stmt = conn.prepare(&sql_monthly)?;
+    let mut rows = if params.is_empty() {
+        stmt.query([])?
+    } else {
+        stmt.query(rusqlite::params![params[0]])?
+    };
+
+    let mut monthly_summary = Vec::new();
+    while let Some(row) = rows.next()? {
+        let month: Option<String> = row.get(0)?;
+        let input: Option<i64> = row.get(1)?;
+        let output: Option<i64> = row.get(2)?;
+        let cached: Option<i64> = row.get(3)?;
+        let thinking: Option<i64> = row.get(4)?;
+        let sessions: i64 = row.get(5)?;
+        monthly_summary.push(MonthlySummary {
+            month: month.unwrap_or_default(),
+            input: input.unwrap_or(0),
+            output: output.unwrap_or(0),
+            cached: cached.unwrap_or(0),
+            thinking: thinking.unwrap_or(0),
+            sessions,
+        });
+    }
 
     // D. 底层模型分布
-    let mut stmt = conn.prepare(
+    let sql_model_dist = format!(
         "SELECT 
             CASE WHEN model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE model END as model_mapped,
-            SUM(uncached_input + cached_input) as input,
-            SUM(output) as output,
-            SUM(cached_input) as cached,
-            SUM(thinking) as thinking,
-            SUM(uncached_input + cached_input + output) as total_tokens
+            SUM(input_tokens) as input,
+            SUM(output_tokens) as output,
+            SUM(cached_input_tokens) as cached,
+            SUM(thinking_tokens) as thinking,
+            SUM(input_tokens + output_tokens) as total_tokens
         FROM turns
-        WHERE model IS NOT NULL AND model != 'unknown' AND model != ''
+        {}
+        {}
         GROUP BY model_mapped
         ORDER BY total_tokens DESC",
-    )?;
-    let model_distribution: Vec<ModelDistribution> = stmt
-        .query_map([], |r| {
-            let model: String = r.get(0)?;
-            let input: Option<i64> = r.get(1)?;
-            let output: Option<i64> = r.get(2)?;
-            let cached: Option<i64> = r.get(3)?;
-            let thinking: Option<i64> = r.get(4)?;
-            let total_tokens: Option<i64> = r.get(5)?;
-            Ok(ModelDistribution {
-                model,
-                input: input.unwrap_or(0),
-                output: output.unwrap_or(0),
-                cached: cached.unwrap_or(0),
-                thinking: thinking.unwrap_or(0),
-                total_tokens: total_tokens.unwrap_or(0),
-            })
-        })?
-        .flatten()
-        .collect();
+        if where_clause.is_empty() { "WHERE" } else { "WHERE source = ?1 AND" },
+        "model IS NOT NULL AND model != 'unknown' AND model != ''"
+    );
+
+    let mut stmt = conn.prepare(&sql_model_dist)?;
+    let mut rows = if params.is_empty() {
+        stmt.query([])?
+    } else {
+        stmt.query(rusqlite::params![params[0]])?
+    };
+
+    let mut model_distribution = Vec::new();
+    while let Some(row) = rows.next()? {
+        let model: String = row.get(0)?;
+        let input: Option<i64> = row.get(1)?;
+        let output: Option<i64> = row.get(2)?;
+        let cached: Option<i64> = row.get(3)?;
+        let thinking: Option<i64> = row.get(4)?;
+        let total_tokens: Option<i64> = row.get(5)?;
+        model_distribution.push(ModelDistribution {
+            model,
+            input: input.unwrap_or(0),
+            output: output.unwrap_or(0),
+            cached: cached.unwrap_or(0),
+            thinking: thinking.unwrap_or(0),
+            total_tokens: total_tokens.unwrap_or(0),
+        });
+    }
 
     // E. 会话详细明细
-    let mut stmt = conn.prepare(
+    let sql_sessions = format!(
         "SELECT 
+            s.source,
             s.uuid,
             s.title,
             s.created_at,
-            SUM(t.uncached_input + t.cached_input) as input,
-            SUM(t.output) as output,
-            SUM(t.cached_input) as cached,
-            SUM(t.thinking) as thinking
+            SUM(t.input_tokens) as input,
+            SUM(t.output_tokens) as output,
+            SUM(t.cached_input_tokens) as cached,
+            SUM(t.thinking_tokens) as thinking,
+            SUM(t.cost_usd) as cost_usd
         FROM sessions s
-        LEFT JOIN turns t ON s.uuid = t.uuid
-        GROUP BY s.uuid
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {}
+        GROUP BY s.source, s.uuid
         ORDER BY s.created_at DESC",
-    )?;
-    let session_rows: Vec<(String, String, String, i64, i64, i64, i64)> = stmt
-        .query_map([], |r| {
-            let uuid: String = r.get(0)?;
-            let title: Option<String> = r.get(1)?;
-            let created_at: Option<String> = r.get(2)?;
-            let input: Option<i64> = r.get(3)?;
-            let output: Option<i64> = r.get(4)?;
-            let cached: Option<i64> = r.get(5)?;
-            let thinking: Option<i64> = r.get(6)?;
+        s_where
+    );
+
+    let mut stmt = conn.prepare(&sql_sessions)?;
+    let session_rows: Vec<(String, String, String, String, i64, i64, i64, i64, f64)> = if params.is_empty() {
+        stmt.query_map([], |r| {
+            let source: String = r.get(0)?;
+            let uuid: String = r.get(1)?;
+            let title: Option<String> = r.get(2)?;
+            let created_at: Option<String> = r.get(3)?;
+            let input: Option<i64> = r.get(4)?;
+            let output: Option<i64> = r.get(5)?;
+            let cached: Option<i64> = r.get(6)?;
+            let thinking: Option<i64> = r.get(7)?;
+            let cost_usd: Option<f64> = r.get(8)?;
             Ok((
+                source,
                 uuid,
                 title.unwrap_or_default(),
                 created_at.unwrap_or_default(),
@@ -661,34 +1275,75 @@ pub fn get_aggregated_metrics_from_cache() -> Result<AggregatedMetrics, rusqlite
                 output.unwrap_or(0),
                 cached.unwrap_or(0),
                 thinking.unwrap_or(0),
+                cost_usd.unwrap_or(0.0),
             ))
         })?
         .flatten()
-        .collect();
+        .collect()
+    } else {
+        stmt.query_map(rusqlite::params![params[0]], |r| {
+            let source: String = r.get(0)?;
+            let uuid: String = r.get(1)?;
+            let title: Option<String> = r.get(2)?;
+            let created_at: Option<String> = r.get(3)?;
+            let input: Option<i64> = r.get(4)?;
+            let output: Option<i64> = r.get(5)?;
+            let cached: Option<i64> = r.get(6)?;
+            let thinking: Option<i64> = r.get(7)?;
+            let cost_usd: Option<f64> = r.get(8)?;
+            Ok((
+                source,
+                uuid,
+                title.unwrap_or_default(),
+                created_at.unwrap_or_default(),
+                input.unwrap_or(0),
+                output.unwrap_or(0),
+                cached.unwrap_or(0),
+                thinking.unwrap_or(0),
+                cost_usd.unwrap_or(0.0),
+            ))
+        })?
+        .flatten()
+        .collect()
+    };
 
     // 额外提取每个会话使用到的引擎去重列表
-    let mut stmt = conn.prepare(
-        "SELECT uuid, CASE WHEN model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE model END as model_mapped
+    let sql_models = format!(
+        "SELECT source, uuid, CASE WHEN model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE model END as model_mapped
         FROM turns 
-        WHERE model IS NOT NULL AND model != 'unknown' AND model != ''
-        GROUP BY uuid, model_mapped",
-    )?;
+        {}
+        {}
+        GROUP BY source, uuid, model_mapped",
+        if where_clause.is_empty() { "WHERE" } else { "WHERE source = ?1 AND" },
+        "model IS NOT NULL AND model != 'unknown' AND model != ''"
+    );
+
+    let mut stmt = conn.prepare(&sql_models)?;
     let mut model_map: HashMap<String, Vec<String>> = HashMap::new();
-    let mut rows = stmt.query([])?;
+    let mut rows = if params.is_empty() {
+        stmt.query([])?
+    } else {
+        stmt.query(rusqlite::params![params[0]])?
+    };
+
     while let Some(row) = rows.next()? {
-        let uuid: String = row.get(0)?;
-        let model: String = row.get(1)?;
-        model_map.entry(uuid).or_default().push(model);
+        let src: String = row.get(0)?;
+        let uuid: String = row.get(1)?;
+        let model: String = row.get(2)?;
+        let key = format!("{}:{}", src, uuid);
+        model_map.entry(key).or_default().push(model);
     }
 
     let sessions = session_rows
         .into_iter()
-        .map(|(uuid, title, created_at, input, output, cached, thinking)| {
+        .map(|(source, uuid, title, created_at, input, output, cached, thinking, cost_usd)| {
+            let key = format!("{}:{}", source, uuid);
             let models = model_map
-                .get(&uuid)
+                .get(&key)
                 .cloned()
                 .unwrap_or_else(|| vec!["unknown".to_string()]);
             SessionItem {
+                source,
                 uuid,
                 title,
                 created_at,
@@ -696,6 +1351,7 @@ pub fn get_aggregated_metrics_from_cache() -> Result<AggregatedMetrics, rusqlite
                 output,
                 cached,
                 thinking,
+                cost_usd,
                 models,
             }
         })
@@ -709,3 +1365,164 @@ pub fn get_aggregated_metrics_from_cache() -> Result<AggregatedMetrics, rusqlite
         sessions,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{self, File};
+    use std::io::Write;
+
+    #[test]
+    fn test_estimate_cost() {
+        let cost_opus = estimate_cost("claude-3-opus", 1000, 200, 500);
+        assert!((cost_opus - 0.0498).abs() < 1e-6);
+
+        let cost_sonnet = estimate_cost("claude-3-5-sonnet", 1000, 300, 500);
+        assert!((cost_sonnet - 0.00969).abs() < 1e-6);
+
+        let cost_flash = estimate_cost("gemini-2.5-flash", 10000, 2000, 5000);
+        assert!((cost_flash - 0.0021375).abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_extract_claude_helpers() {
+        let sample_json = serde_json::json!({
+            "timestamp": "2026-05-27T12:00:00.000Z",
+            "model": "claude-3-5-sonnet-20241022",
+            "message": {
+                "id": "msg_12345",
+                "usage": {
+                    "input_tokens": 120,
+                    "output_tokens": 80,
+                    "cache_read_input_tokens": 20
+                }
+            },
+            "requestId": "req_abc123"
+        });
+
+        let (in_t, c_create, c_read, out_t) = extract_claude_tokens(&sample_json);
+        assert_eq!(in_t, 120);
+        assert_eq!(c_create, 0);
+        assert_eq!(c_read, 20);
+        assert_eq!(out_t, 80);
+
+        let model = extract_claude_model(&sample_json);
+        assert_eq!(model, "claude-3-5-sonnet-20241022");
+
+        let timestamp = extract_claude_timestamp(&sample_json);
+        assert_eq!(timestamp, "2026-05-27T12:00:00.000Z");
+
+        let (msg_id, req_id) = extract_claude_ids(&sample_json);
+        assert_eq!(msg_id, "msg_12345");
+        assert_eq!(req_id, "req_abc123");
+    }
+
+    #[test]
+    fn test_sync_and_aggregate_integration() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_test_{}", test_id));
+        fs::create_dir_all(&temp_path).unwrap();
+        
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+
+        let db_cache_path = get_db_cache_path();
+        assert!(!db_cache_path.exists());
+        
+        let init_res = init_cache_db();
+        assert!(init_res.is_ok());
+        assert!(db_cache_path.exists());
+
+        let claude_proj_dir = get_claude_projects_dir().join("test-project");
+        fs::create_dir_all(&claude_proj_dir).unwrap();
+        
+        let claude_log_file = claude_proj_dir.join("history.jsonl");
+        let mut file = File::create(&claude_log_file).unwrap();
+        
+        let line_1 = serde_json::json!({
+            "timestamp": "2026-05-27T10:00:00.000Z",
+            "model": "claude-3-5-sonnet",
+            "message": {
+                "id": "msg_001",
+                "usage": {
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_read_input_tokens": 10
+                }
+            },
+            "requestId": "req_001"
+        });
+        writeln!(file, "{}", line_1.to_string()).unwrap();
+        drop(file);
+
+        let mut conn = rusqlite::Connection::open(&db_cache_path).unwrap();
+        sync_claude_code(&mut conn, 0, 1, &|_, _| {}).unwrap();
+
+        let metrics_all = get_aggregated_metrics_from_cache(None).unwrap();
+        assert_eq!(metrics_all.totals.total_sessions, 1);
+        assert_eq!(metrics_all.totals.total_input, 100);
+        assert_eq!(metrics_all.totals.total_output, 50);
+        assert_eq!(metrics_all.totals.total_cached, 10);
+        assert!(metrics_all.totals.total_cost > 0.0);
+
+        let metrics_claude = get_aggregated_metrics_from_cache(Some("claude_code")).unwrap();
+        assert_eq!(metrics_claude.totals.total_sessions, 1);
+        
+        let metrics_antigravity = get_aggregated_metrics_from_cache(Some("antigravity")).unwrap();
+        assert_eq!(metrics_antigravity.totals.total_sessions, 0);
+
+        let mut file_append = fs::OpenOptions::new().append(true).open(&claude_log_file).unwrap();
+        let line_2 = serde_json::json!({
+            "timestamp": "2026-05-27T10:05:00.000Z",
+            "model": "claude-3-5-sonnet",
+            "message": {
+                "id": "msg_002",
+                "usage": {
+                    "input_tokens": 200,
+                    "output_tokens": 100,
+                    "cache_read_input_tokens": 20
+                }
+            },
+            "requestId": "req_002"
+        });
+        writeln!(file_append, "{}", line_2.to_string()).unwrap();
+        drop(file_append);
+
+        sync_claude_code(&mut conn, 0, 1, &|_, _| {}).unwrap();
+
+        let metrics_all_2 = get_aggregated_metrics_from_cache(None).unwrap();
+        assert_eq!(metrics_all_2.totals.total_sessions, 1);
+        assert_eq!(metrics_all_2.totals.total_input, 300);
+        assert_eq!(metrics_all_2.totals.total_output, 150);
+        assert_eq!(metrics_all_2.totals.total_cached, 30);
+
+        let codex_sess_dir = get_codex_sessions_dir();
+        fs::create_dir_all(&codex_sess_dir).unwrap();
+        
+        let codex_log_file = codex_sess_dir.join("rollout-test.jsonl");
+        let mut file_codex = File::create(&codex_log_file).unwrap();
+        
+        let codex_line = serde_json::json!({
+            "timestamp": "2026-05-27T11:00:00.000Z",
+            "model": "gpt-4o-mini",
+            "usage": {
+                "input_tokens": 500,
+                "output_tokens": 300,
+                "cache_read_input_tokens": 50
+            },
+            "thinking_tokens": 0
+        });
+        writeln!(file_codex, "{}", codex_line.to_string()).unwrap();
+        drop(file_codex);
+
+        sync_codex(&mut conn, 0, 1, &|_, _| {}).unwrap();
+
+        let metrics_all_3 = get_aggregated_metrics_from_cache(None).unwrap();
+        assert_eq!(metrics_all_3.totals.total_sessions, 2);
+        assert_eq!(metrics_all_3.totals.total_input, 800);
+        assert_eq!(metrics_all_3.totals.total_output, 450);
+
+        drop(conn);
+        let _ = fs::remove_dir_all(&temp_path);
+    }
+}
+

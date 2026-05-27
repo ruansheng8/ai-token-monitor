@@ -9,9 +9,12 @@ use crate::db::{
     get_aggregated_metrics_from_cache, start_background_scan, get_scan_status,
 };
 
-pub async fn handle_metrics() -> Response<Body> {
-    match tokio::task::spawn_blocking(|| {
-        get_aggregated_metrics_from_cache()
+pub async fn handle_metrics(
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response<Body> {
+    let source = params.get("source").cloned();
+    match tokio::task::spawn_blocking(move || {
+        get_aggregated_metrics_from_cache(source.as_deref())
     })
     .await
     {
