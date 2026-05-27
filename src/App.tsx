@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
+import { listen } from '@tauri-apps/api/event';
 import {
   Cpu,
   ArrowDown,
@@ -22,6 +23,7 @@ import {
 } from 'lucide-react';
 import { DailyTrendChart } from './components/charts/DailyTrendChart';
 import { SourceTrendChart } from './components/charts/SourceTrendChart';
+import { PerformanceChart } from './components/charts/PerformanceChart';
 
 // 官方 SVG 图标组件
 const GeminiIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
@@ -39,6 +41,12 @@ const ClaudeIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
 const OpenAIIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   <svg className={className} fill="currentColor" fillRule="evenodd" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
     <path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"></path>
+  </svg>
+);
+
+const CursorIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg className={className} fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path d="M10.3 22.8a1 1 0 01-.8-.4l-3.3-5.7-3.8 3.7c-.5.4-1.2.3-1.4-.2A1 1 0 011 20V2a1 1 0 011.7-.7l13.6 13.6c.4.4.4 1 0 1.4l-4.2 1.3 3.3 5.7c.2.5 0 1.1-.4 1.3l-3.8 1c-.3.2-.6.3-.9.3z" />
   </svg>
 );
 
@@ -102,6 +110,19 @@ interface SourceTrendItem {
   cost: number;
 }
 
+interface ModelPerformance {
+  model: string;
+  avg_latency: number;
+  avg_tps: number;
+  sample_count: number;
+}
+
+interface PerformanceTrend {
+  date: string;
+  avg_latency: number;
+  avg_tps: number;
+}
+
 interface AggregatedMetrics {
   totals: Totals;
   daily_trends: DailyTrend[];
@@ -109,6 +130,8 @@ interface AggregatedMetrics {
   model_distribution: ModelDistribution[];
   sessions: SessionItem[];
   source_trends: SourceTrendItem[];
+  model_performance: ModelPerformance[];
+  performance_trends: PerformanceTrend[];
 }
 
 // 获取指定时间区间的起止日期（格式：YYYY-MM-DD）
@@ -149,18 +172,68 @@ const getDateBounds = (range: 'all' | 'today' | 'week' | '30days' | 'month' | 'q
   }
 };
 
+const exportToCSV = (sessions: SessionItem[]) => {
+  if (!sessions || sessions.length === 0) return;
+  
+  const headers = ['来源/引擎', '会话 UUID', '会话标题', '创建时间', '输入 Tokens', '输出 Tokens', '缓存 Tokens', '推理 Tokens', '产生费用 (USD)', '使用模型'];
+  const csvRows = [headers.join(',')];
+  
+  sessions.forEach(s => {
+    const row = [
+      s.source,
+      s.uuid,
+      `"${s.title.replace(/"/g, '""')}"`,
+      s.created_at,
+      s.input,
+      s.output,
+      s.cached,
+      s.thinking,
+      s.cost_usd.toFixed(6),
+      `"${s.models.join('; ')}"`
+    ];
+    csvRows.push(row.join(','));
+  });
+  
+  const csvContent = '\uFEFF' + csvRows.join('\n');
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', `AI_Token_Monitor_Report_${new Date().toISOString().slice(0, 10)}.csv`);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+};
+
 export default function App() {
   const [data, setData] = useState<AggregatedMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshSpin, setRefreshSpin] = useState(false);
   const [lastUpdate, setLastUpdate] = useState('--:--:--');
   const [searchKeyword, setSearchKeyword] = useState('');
+
+  // 离线容灾网络状态监测
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(() => {
+    const handleOnline = () => setIsOnline(true);
+    const handleOffline = () => setIsOnline(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
   const [hideZero, setHideZero] = useState(true);
   const [sortField, setSortField] = useState<keyof SessionItem | 'total'>('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
-  const [source, setSource] = useState<'all' | 'antigravity' | 'claude_code' | 'codex'>('all');
+  const [source, setSource] = useState<'all' | 'antigravity' | 'claude_code' | 'codex' | 'cursor'>('all');
   const [isSourceDropdownOpen, setIsSourceDropdownOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<'all' | 'today' | 'week' | '30days' | 'month' | 'quarter' | 'custom'>('30days');
   const [startDate, setStartDate] = useState<string>(getDateBounds('30days').start);
@@ -180,6 +253,30 @@ export default function App() {
   const [testLoading, setTestLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [configMessage, setConfigMessage] = useState<{ success: boolean; text: string } | null>(null);
+
+  // 数据库清理与优化瘦身状态
+  const [cleanLoading, setCleanLoading] = useState(false);
+  const [cleanMessage, setCleanMessage] = useState<string | null>(null);
+
+  const handleDbClean = async () => {
+    setCleanLoading(true);
+    setCleanMessage(null);
+    try {
+      const res = await fetch('/api/db/clean', { method: 'POST' });
+      const resData = await res.json();
+      if (resData.success) {
+        setCleanMessage(`✅ ${resData.message}`);
+        // 静默重新拉取大盘最新数据以刷新会话数和数据
+        fetchData();
+      } else {
+        setCleanMessage(`❌ 数据库优化失败: ${resData.message}`);
+      }
+    } catch (e: any) {
+      setCleanMessage(`❌ 接口通信异常: ${e.message || e}`);
+    } finally {
+      setCleanLoading(false);
+    }
+  };
 
   // 当配置弹窗打开时，拉取后端最新配置并回显
   useEffect(() => {
@@ -375,6 +472,21 @@ export default function App() {
     fetchData(source, startDate, endDate);
   }, [source, startDate, endDate]);
 
+  useEffect(() => {
+    let unlisten: () => void;
+    listen('db-updated', () => {
+      console.log('[热同步] 收到后端数据更新通知，正在重载大盘数据...');
+      fetchData(source, startDate, endDate);
+    }).then((u) => {
+      unlisten = u;
+    });
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, [source, startDate, endDate]);
+
   // 排序字段切换
   const handleSort = (field: keyof SessionItem | 'total') => {
     if (sortField === field) {
@@ -487,6 +599,12 @@ export default function App() {
 
   return (
     <div className="relative min-height-screen text-text-primary">
+      {/* 离线脱机模式微光横幅 */}
+      {!isOnline && (
+        <div className="bg-gradient-to-r from-amber-600/95 to-orange-500/95 text-white text-xs font-semibold py-2 px-4 shadow-[0_4px_20px_rgba(249,115,22,0.15)] flex items-center justify-center gap-2 border-b border-orange-500/50 backdrop-blur-sm z-[9999] animate-pulse-glow no-print">
+          <span>⚠️ 物理网络已断开。AI Token Monitor 已平滑启用「本地脱机容灾模式」，自动拦截云端延迟，保障本地大盘 100% 极速可用！</span>
+        </div>
+      )}
       {/* 背景光效 */}
       <div className="background-decor-1 bg-decor-cyan animate-pulse-glow fixed -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
       <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse fixed -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
@@ -528,11 +646,13 @@ export default function App() {
                   {source === 'antigravity' && <GeminiIcon className="w-4 h-4 text-[#8b5cf6]" />}
                   {source === 'claude_code' && <ClaudeIcon className="w-4 h-4 text-[#d97757]" />}
                   {source === 'codex' && <OpenAIIcon className="w-4 h-4 text-[#10a37f]" />}
+                  {source === 'cursor' && <CursorIcon className="w-4 h-4 text-[#00bcd4]" />}
                   <span>
                     {source === 'all' && '全部来源 (All)'}
                     {source === 'antigravity' && 'Antigravity'}
                     {source === 'claude_code' && 'Claude Code'}
                     {source === 'codex' && 'Codex CLI'}
+                    {source === 'cursor' && 'Cursor'}
                   </span>
                 </div>
                 <ChevronDown className={`w-3.5 h-3.5 text-text-secondary transition-transform duration-300 ${isSourceDropdownOpen ? 'rotate-180' : ''}`} />
@@ -550,6 +670,7 @@ export default function App() {
                       { value: 'antigravity', label: 'Antigravity', icon: <GeminiIcon className="w-3.5 h-3.5 text-[#8b5cf6]" /> },
                       { value: 'claude_code', label: 'Claude Code', icon: <ClaudeIcon className="w-3.5 h-3.5 text-[#d97757]" /> },
                       { value: 'codex', label: 'Codex CLI', icon: <OpenAIIcon className="w-3.5 h-3.5 text-[#10a37f]" /> },
+                      { value: 'cursor', label: 'Cursor', icon: <CursorIcon className="w-3.5 h-3.5 text-[#00bcd4]" /> },
                     ].map((opt) => (
                       <button
                         key={opt.value}
@@ -941,11 +1062,85 @@ export default function App() {
           </div>
         </section>
 
+        {/* 深度效能诊断面板 */}
+        {data?.performance_trends && data.performance_trends.length > 0 && (
+          <section className="glass-card p-6 flex flex-col gap-6">
+            <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-2 border-b border-card-border gap-2">
+              <div>
+                <h2 className="text-base font-semibold text-text-primary flex items-center gap-2">
+                  ⚡ 深度效能诊断中心 (Performance & Efficiency)
+                </h2>
+                <p className="text-xs text-text-secondary mt-1">
+                  监测交互时的每秒 Token 产出速度 (TPS) 与接口 Turn 级响应延迟 (Latency)
+                </p>
+              </div>
+            </div>
+            
+            <div className="grid grid-cols-1 lg:grid-cols-[1.8fr_1fr] gap-6">
+              {/* 性能趋势折线图 */}
+              <div className="w-full bg-slate-500/5 dark:bg-white/[0.01] rounded-2xl p-4 border border-card-border/50">
+                <PerformanceChart data={data.performance_trends} theme={theme} />
+              </div>
+              
+              {/* 模型效能排行榜 */}
+              <div className="flex flex-col gap-4">
+                <div className="bg-bg-secondary/40 dark:bg-white/3 border border-card-border rounded-2xl p-4 flex-1">
+                  <h3 className="text-xs font-semibold text-text-primary mb-3">🤖 模型效能诊断评估</h3>
+                  <div className="flex flex-col gap-3.5 max-h-[250px] overflow-y-auto pr-1">
+                    {data?.model_performance && data.model_performance.length > 0 ? (
+                      data.model_performance.map((mp) => (
+                        <div key={mp.model} className="flex flex-col gap-1 border-b border-card-border/40 pb-2.5 last:border-0 last:pb-0">
+                          <div className="flex justify-between items-center text-xs">
+                            <span className="font-semibold text-text-primary truncate max-w-[170px]" title={mp.model}>{mp.model}</span>
+                            <span className="text-text-secondary font-mono text-[10px] bg-slate-200/50 dark:bg-white/10 px-1.5 py-0.5 rounded-md">
+                              {mp.sample_count} 次交互
+                            </span>
+                          </div>
+                          <div className="grid grid-cols-2 gap-4 mt-1 text-[11px]">
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-text-secondary text-[10px]">生成速率 (TPS)</span>
+                              <span className="font-semibold font-mono text-neon-cyan">{mp.avg_tps.toFixed(1)} Token/s</span>
+                            </div>
+                            <div className="flex flex-col gap-0.5">
+                              <span className="text-text-secondary text-[10px]">平均延迟 (Latency)</span>
+                              <span className="font-semibold font-mono text-neon-purple">{mp.avg_latency.toFixed(2)} 秒</span>
+                            </div>
+                          </div>
+                        </div>
+                      ))
+                    ) : (
+                      <div className="text-center py-6 text-text-muted text-xs italic">暂无模型评估样本，请确保进行了 Cursor 交互</div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* 会话明细 */}
         <section className="glass-card p-6">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 mb-5 border-b border-card-border">
             <h2 className="text-base font-semibold text-text-primary">会话用量明细</h2>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
+              {/* 报表导出操作按钮 */}
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => exportToCSV(filteredAndSortedSessions)}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-200/60 hover:bg-slate-300/60 dark:bg-white/5 dark:hover:bg-white/10 text-text-primary border border-card-border cursor-pointer transition-all duration-200 flex items-center gap-1 shadow-sm"
+                  title="导出当前筛选出的账单为高兼容 CSV (Excel/WPS 无缝支持)"
+                >
+                  📥 导出 CSV 账单
+                </button>
+                <button
+                  onClick={() => window.print()}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-sm hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer flex items-center gap-1"
+                  title="高保真 PDF 账单/打印报表生成"
+                >
+                  🖨️ 生成财务报表
+                </button>
+              </div>
+
               {/* 开关 */}
               <label className="flex items-center gap-2 cursor-pointer select-none">
                 <span className="text-xs text-text-secondary font-medium">隐藏 0 消耗会话</span>
@@ -1034,6 +1229,12 @@ export default function App() {
                             <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">
                               <OpenAIIcon className="w-3 h-3 text-[#10a37f]" />
                               Codex CLI
+                            </span>
+                          )}
+                          {s.source === 'cursor' && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/35 text-blue-500 leading-none">
+                              <CursorIcon className="w-3 h-3 text-[#00bcd4]" />
+                              Cursor
                             </span>
                           )}
                         </td>
@@ -1484,6 +1685,48 @@ export default function App() {
                     <span>💾 保存并应用配置</span>
                   )}
                 </button>
+              </div>
+
+              {/* 数据库清理与优化瘦身区域 */}
+              <div className="border-t border-card-border pt-4 mt-2 flex flex-col gap-3 relative z-10">
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
+                    🧹 数据库维护与空间整理 (Maintenance)
+                  </span>
+                  <span className="text-[10px] text-text-muted mt-0.5">
+                    清除无效的 0 token 对话，删除不含交互的僵尸空会话，并重组物理磁盘空间碎片 (VACUUM)
+                  </span>
+                </div>
+                
+                <button
+                  type="button"
+                  onClick={handleDbClean}
+                  disabled={cleanLoading}
+                  className="w-full py-2.5 rounded-xl border border-card-border text-xs font-bold text-text-secondary hover:text-text-primary hover:border-neon-purple/40 hover:bg-neon-purple/5 transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
+                >
+                  {cleanLoading ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-neon-purple" />
+                      <span>正在收紧碎片并清理僵尸会话...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>✨ 一键收紧碎片与深度瘦身</span>
+                    </>
+                  )}
+                </button>
+                
+                {cleanMessage && (
+                  <div className="text-[11px] font-medium p-2.5 rounded-xl bg-bg-secondary border border-card-border text-text-secondary whitespace-pre-line animate-fade-in relative">
+                    <button
+                      onClick={() => setCleanMessage(null)}
+                      className="absolute right-2 top-2 text-[10px] text-text-muted hover:text-text-primary"
+                    >
+                      ×
+                    </button>
+                    {cleanMessage}
+                  </div>
+                )}
               </div>
             </div>
           </div>

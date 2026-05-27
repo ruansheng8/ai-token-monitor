@@ -284,4 +284,39 @@ body {
   font-size: 13px;
 }
 
+@media print {
+  /* 隐藏所有交互式组件与非打印元素 */
+  button, 
+  input, 
+  select, 
+  label, 
+  .no-print, 
+  .settings-panel,
+  .refresh-btn,
+  .search-box {
+    display: none !important;
+  }
+  
+  /* 优化页面底色以节省油墨，保证极高财务报表可读性 */
+  body {
+    background: #ffffff !important;
+    color: #000000 !important;
+  }
+  
+  .glass-card {
+    background: #ffffff !important;
+    border: 1px solid #e2e8f0 !important;
+    box-shadow: none !important;
+    transform: none !important;
+    page-break-inside: avoid;
+  }
+  
+  /* 保证表格边框可读性 */
+  .data-table th, 
+  .data-table td {
+    border-bottom: 1px solid #cbd5e1 !important;
+    color: #000000 !important;
+  }
+}
+
 

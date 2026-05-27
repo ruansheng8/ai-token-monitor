@@ -148,9 +148,28 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
             message_id TEXT,
             request_id TEXT,
             timestamp TEXT,
+            latency REAL DEFAULT 0.0,
+            tps REAL DEFAULT 0.0,
             PRIMARY KEY (source, uuid, idx),
             FOREIGN KEY(source, uuid) REFERENCES sessions(source, uuid) ON DELETE CASCADE
         )",
+        [],
+    )?;
+
+    // 检查 turns 表是否已升级包含 latency 列，如果没有则添加
+    let has_latency: Result<i32, _> = conn.query_row(
+        "SELECT 1 FROM pragma_table_info('turns') WHERE name='latency'",
+        [],
+        |_| Ok(1),
+    );
+    if has_latency.is_err() {
+        println!("正在平滑迁移本地 cache 数据库表结构：在 turns 表中新增 latency 和 tps 列...");
+        let _ = conn.execute("ALTER TABLE turns ADD COLUMN latency REAL DEFAULT 0.0;", []);
+        let _ = conn.execute("ALTER TABLE turns ADD COLUMN tps REAL DEFAULT 0.0;", []);
+    }
+
+    conn.execute(
+        "UPDATE turns SET model = 'gemini-3.5-flash' WHERE model = 'gemini-3-flash-a'",
         [],
     )?;
 
@@ -171,6 +190,7 @@ pub struct ScanStatus {
 }
 
 pub static DB_LOCK: Mutex<()> = Mutex::new(());
+pub static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
 
 pub fn get_scan_status() -> &'static Mutex<ScanStatus> {
     static STATUS: OnceLock<Mutex<ScanStatus>> = OnceLock::new();
@@ -226,6 +246,12 @@ pub fn start_background_scan() {
             status.is_scanning = false;
             if let Err(e) = result {
                 status.error = Some(e.to_string());
+            } else {
+                // 触发 Tauri 前端热同步事件
+                if let Some(app_handle) = APP_HANDLE.get() {
+                    use tauri::Emitter;
+                    let _ = app_handle.emit("db-updated", serde_json::json!({ "status": "success" }));
+                }
             }
         }
     });
@@ -726,6 +752,293 @@ pub fn sync_codex(
     Ok(())
 }
 
+pub fn get_cursor_db_path() -> PathBuf {
+    Path::new(&get_user_profile_dir())
+        .join("AppData")
+        .join("Roaming")
+        .join("Cursor")
+        .join("User")
+        .join("globalStorage")
+        .join("state.vscdb")
+}
+
+pub fn sync_cursor(
+    conn_cache: &mut rusqlite::Connection,
+    progress_offset: usize,
+    total_files: usize,
+    progress_cb: &impl Fn(usize, usize),
+) -> Result<(), rusqlite::Error> {
+    let cursor_db = get_cursor_db_path();
+    if !cursor_db.exists() {
+        return Ok(());
+    }
+
+    log_progress("正在扫描并增量同步 Cursor 编辑器历史会话数据...");
+
+    // 使用只读标志打开 Cursor 的 SQLite 数据库，避免占用文件锁
+    let conn_cursor = match rusqlite::Connection::open_with_flags(
+        &cursor_db,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    ) {
+        Ok(c) => c,
+        Err(e) => {
+            log_progress(&format!("打开 Cursor 数据库失败 (可能正被独占锁定): {}", e));
+            return Ok(());
+        }
+    };
+
+    // 预载已缓存的 Cursor 会话，以进行增量同步判断
+    let mut session_cache = HashMap::new();
+    if let Ok(mut stmt) = conn_cache.prepare("SELECT uuid, last_parsed_idx, last_mtime FROM sessions WHERE source = 'cursor'") {
+        if let Ok(mut rows) = stmt.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                if let (Ok(uuid), Ok(idx), Ok(mtime)) = (
+                    row.get::<_, String>(0),
+                    row.get::<_, i64>(1),
+                    row.get::<_, f64>(2),
+                ) {
+                    session_cache.insert(uuid, (idx, mtime));
+                }
+            }
+        }
+    }
+
+    // 从 cursorDiskKV 表中读取所有的 composerData 会话数据
+    let mut stmt = match conn_cursor.prepare("SELECT key, value FROM cursorDiskKV WHERE key LIKE 'composerData:%'") {
+        Ok(s) => s,
+        Err(e) => {
+            log_progress(&format!("查询 Cursor 数据库表失败 (可能表未初始化): {}", e));
+            return Ok(());
+        }
+    };
+    
+    let mut rows = stmt.query([])?;
+    let mut composer_sessions = Vec::new();
+    while let Some(row) = rows.next()? {
+        let key: String = row.get(0)?;
+        let val: String = row.get(1)?;
+        composer_sessions.push((key, val));
+    }
+
+    for (session_idx, (key, val)) in composer_sessions.into_iter().enumerate() {
+        let current_scanned = progress_offset + session_idx + 1;
+        progress_cb(current_scanned, total_files);
+
+        let composer_id = key.trim_start_matches("composerData:").to_string();
+        let data: serde_json::Value = match serde_json::from_str(&val) {
+            Ok(d) => d,
+            Err(_) => continue,
+        };
+
+        // 提取会话标题
+        let mut title = data.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("未命名 Composer 会话")
+            .to_string();
+        
+        // 修复部分乱码
+        if title.contains('\u{0000}') {
+            title = "Composer 会话".to_string();
+        }
+
+        // 提取最后修改时间（毫秒级时间戳转换为秒级浮点数）
+        let last_updated = data.get("lastUpdatedAt")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0) / 1000.0;
+
+        let mut last_parsed_idx = -1i64;
+        let mut last_mtime = 0.0f64;
+        let mut is_new_session = true;
+
+        if let Some((parsed_idx, m)) = session_cache.get(&composer_id) {
+            last_parsed_idx = *parsed_idx;
+            last_mtime = *m;
+            is_new_session = false;
+        }
+
+        // 增量比较：如果 lastUpdatedAt 未变且不是新会话，则直接跳过
+        if !is_new_session && (last_mtime - last_updated).abs() < 1e-4 {
+            continue;
+        }
+
+        let headers: Vec<serde_json::Value> = data.get("fullConversationHeadersOnly")
+            .and_then(|v| v.as_array())
+            .cloned()
+            .unwrap_or_default();
+
+        let mut new_turns = Vec::new();
+        let mut idx = 0;
+
+        for (h_idx, header) in headers.iter().enumerate() {
+            let bubble_id = match header.get("bubbleId").and_then(|v| v.as_str()) {
+                Some(b) => b,
+                None => continue,
+            };
+
+            let bubble_key = format!("bubbleId:{}:{}", composer_id, bubble_id);
+            let bubble_val: Result<String, _> = conn_cursor.query_row(
+                "SELECT value FROM cursorDiskKV WHERE key = ?",
+                [&bubble_key],
+                |row| row.get(0),
+            );
+
+            if let Ok(b_str) = bubble_val {
+                if let Ok(b_json) = serde_json::from_str::<serde_json::Value>(&b_str) {
+                    let bubble_type = b_json.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
+                    if bubble_type == 2 { // Assistant 气泡才算有效交互轮次
+                        let token_count = b_json.get("tokenCount");
+                        let input_tokens = token_count.and_then(|tc| tc.get("inputTokens").and_then(|v| v.as_i64())).unwrap_or(0);
+                        let output_tokens = token_count.and_then(|tc| tc.get("outputTokens").and_then(|v| v.as_i64())).unwrap_or(0);
+
+                        let mut model = b_json.get("modelInfo")
+                            .and_then(|mi| mi.get("modelName").and_then(|v| v.as_str()))
+                            .unwrap_or("default")
+                            .to_string();
+
+                        if model == "default" {
+                            model = data.get("modelConfig")
+                                .and_then(|mc| mc.get("modelName").and_then(|v| v.as_str()))
+                                .unwrap_or("default")
+                                .to_string();
+                        }
+
+                        if model == "default" || model.is_empty() {
+                            model = "claude-3-5-sonnet".to_string();
+                        }
+
+                        if input_tokens > 0 || output_tokens > 0 {
+                            let timestamp_ms = b_json.get("createdAt")
+                                .and_then(|v| v.as_i64())
+                                .unwrap_or(data.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0));
+
+                            let timestamp = if timestamp_ms > 0 {
+                                if let Some(dt) = DateTime::from_timestamp(timestamp_ms / 1000, (timestamp_ms % 1000) as u32 * 1_000_000) {
+                                    dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                                } else {
+                                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                                }
+                            } else {
+                                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                            };
+
+                            // 计算交互延迟 Latency 和 TPS
+                            let mut latency = 0.0;
+                            let mut tps = 0.0;
+
+                            if h_idx > 0 {
+                                let prev_header = &headers[h_idx - 1];
+                                let prev_type = prev_header.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
+                                if prev_type == 1 { // 上一轮是 User 输入
+                                    if let Some(prev_bubble_id) = prev_header.get("bubbleId").and_then(|v| v.as_str()) {
+                                        let prev_key = format!("bubbleId:{}:{}", composer_id, prev_bubble_id);
+                                        let prev_val: Result<String, _> = conn_cursor.query_row(
+                                            "SELECT value FROM cursorDiskKV WHERE key = ?",
+                                            [&prev_key],
+                                            |row| row.get(0),
+                                        );
+                                        if let Ok(p_str) = prev_val {
+                                            if let Ok(p_json) = serde_json::from_str::<serde_json::Value>(&p_str) {
+                                                let prev_created_ms = p_json.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0);
+                                                if prev_created_ms > 0 && timestamp_ms > prev_created_ms {
+                                                    latency = (timestamp_ms - prev_created_ms) as f64 / 1000.0;
+                                                    if latency > 0.0 {
+                                                        tps = output_tokens as f64 / latency;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            let cost = estimate_cost(&model, input_tokens, 0, output_tokens);
+                            let message_id = bubble_id.to_string();
+                            let request_id = b_json.get("requestId").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+
+                            new_turns.push((
+                                idx,
+                                model,
+                                input_tokens,
+                                0i64, // cached_input_tokens
+                                output_tokens,
+                                0i64, // thinking_tokens
+                                cost,
+                                message_id,
+                                request_id,
+                                timestamp,
+                                latency,
+                                tps,
+                            ));
+                            idx += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // 执行增量写入事务
+        let tx = conn_cache.transaction()?;
+        {
+            tx.execute("DELETE FROM turns WHERE source = 'cursor' AND uuid = ?", [&composer_id])?;
+
+            let created_at_ms = data.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0);
+            let created_at = if created_at_ms > 0 {
+                if let Some(dt) = DateTime::from_timestamp(created_at_ms / 1000, (created_at_ms % 1000) as u32 * 1_000_000) {
+                    dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                } else {
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                }
+            } else {
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            };
+
+            tx.execute(
+                "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
+                 VALUES ('cursor', ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(source, uuid) DO UPDATE SET
+                    last_parsed_idx = excluded.last_parsed_idx,
+                    last_mtime = excluded.last_mtime,
+                    title = excluded.title",
+                rusqlite::params![
+                    composer_id,
+                    title,
+                    created_at,
+                    idx as i64,
+                    last_updated,
+                    cursor_db.to_string_lossy().to_string(),
+                ],
+            )?;
+
+            for turn in &new_turns {
+                tx.execute(
+                    "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp, latency, tps)
+                     VALUES ('cursor', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    rusqlite::params![
+                        composer_id,
+                        turn.0,
+                        turn.1, // model
+                        turn.2, // input_tokens
+                        turn.3, // cached_input_tokens
+                        turn.4, // output_tokens
+                        turn.5, // thinking_tokens
+                        turn.6, // cost_usd
+                        turn.7, // message_id
+                        turn.8, // request_id
+                        turn.9, // timestamp
+                        turn.10, // latency
+                        turn.11, // tps
+                    ],
+                )?;
+            }
+        }
+        tx.commit()?;
+    }
+
+    Ok(())
+}
+
 pub fn sync_cache_db_with_progress<F>(progress_cb: F) -> Result<(), rusqlite::Error>
 where
     F: Fn(usize, usize) + Send + 'static,
@@ -766,13 +1079,18 @@ where
         find_jsonl_files(&codex_dir, &mut codex_files);
     }
 
+    // 4. 检测 Cursor 数据库
+    let cursor_db = get_cursor_db_path();
+    let has_cursor = cursor_db.exists();
+
     // 计算总文件数
-    let total_files = db_files.len() + claude_files.len() + codex_files.len();
+    let total_files = db_files.len() + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 };
     progress_cb(0, total_files);
 
-    let msg = format!("发现待同步物理文件共 {} 个（Antigravity: {}, Claude Code: {}, Codex: {}）", 
-        total_files, db_files.len(), claude_files.len(), codex_files.len());
+    let msg = format!("发现待同步物理数据源共 {} 个（Antigravity: {}, Claude Code: {}, Codex: {}, Cursor: {}）", 
+        total_files, db_files.len(), claude_files.len(), codex_files.len(), if has_cursor { 1 } else { 0 });
     log_progress(&msg);
+
 
     let cache_path = get_db_cache_path();
     let mut conn_cache = rusqlite::Connection::open(&cache_path)?;
@@ -972,7 +1290,10 @@ where
     // E. 增量同步 Codex 数据
     let _ = sync_codex(&mut conn_cache, db_files_len + claude_files.len(), total_files, &progress_cb);
 
-    // F. 如果配置了 PostgreSQL 模式，自动将本地 SQLite 增量好的最新数据一键同步至 PostgreSQL
+    // F. 增量同步 Cursor 数据
+    let _ = sync_cursor(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len(), total_files, &progress_cb);
+
+    // G. 如果配置了 PostgreSQL 模式，自动将本地 SQLite 增量好的最新数据一键同步至 PostgreSQL
     if let Err(e) = sync_local_to_postgres() {
         log_progress(&format!("同步到 PostgreSQL 失败: {}", e));
         return Err(rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(
@@ -1052,6 +1373,21 @@ pub struct SourceTrend {
 }
 
 #[derive(Serialize)]
+pub struct ModelPerformance {
+    pub model: String,
+    pub avg_latency: f64,
+    pub avg_tps: f64,
+    pub sample_count: i64,
+}
+
+#[derive(Serialize)]
+pub struct PerformanceTrend {
+    pub date: String,
+    pub avg_latency: f64,
+    pub avg_tps: f64,
+}
+
+#[derive(Serialize)]
 pub struct AggregatedMetrics {
     pub totals: Totals,
     pub daily_trends: Vec<DailyTrend>,
@@ -1059,6 +1395,8 @@ pub struct AggregatedMetrics {
     pub model_distribution: Vec<ModelDistribution>,
     pub sessions: Vec<SessionItem>,
     pub source_trends: Vec<SourceTrend>,
+    pub model_performance: Vec<ModelPerformance>,
+    pub performance_trends: Vec<PerformanceTrend>,
 }
 
 pub fn get_aggregated_metrics_from_cache(
@@ -1069,8 +1407,13 @@ pub fn get_aggregated_metrics_from_cache(
     let _ = dotenvy::dotenv();
     let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
     if db_type.to_lowercase() == "postgres" {
-        return get_pg_aggregated_metrics(source_filter, start_date, end_date)
-            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))));
+        match get_pg_aggregated_metrics(source_filter, start_date, end_date) {
+            Ok(metrics) => return Ok(metrics),
+            Err(e) => {
+                eprintln!("[离线容灾] 远程 PostgreSQL 连接测试或读取失败: {}。系统已自动且无缝降级为本地 SQLite 缓存模式！", e);
+                // 降级，继续在下方使用本地 SQLite 缓存返回
+            }
+        }
     }
 
     let db_path = get_db_cache_path();
@@ -1400,6 +1743,69 @@ pub fn get_aggregated_metrics_from_cache(
         });
     }
 
+    // G. 各模型平均 Latency & TPS (仅考虑 latency > 0.0)
+    let sql_model_perf = format!(
+        "SELECT 
+            t.model as model_mapped,
+            AVG(t.latency) as avg_latency,
+            AVG(t.tps) as avg_tps,
+            COUNT(*) as sample_count
+        FROM turns t
+        INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
+        {} {}
+        GROUP BY model_mapped
+        ORDER BY sample_count DESC",
+        where_clause,
+        if where_clause.is_empty() { "WHERE t.latency > 0.0 AND t.model IS NOT NULL AND t.model != ''" } else { "AND t.latency > 0.0 AND t.model IS NOT NULL AND t.model != ''" }
+    );
+
+    let mut stmt = conn.prepare(&sql_model_perf)?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.clone()))?;
+
+    let mut model_performance = Vec::new();
+    while let Some(row) = rows.next()? {
+        let model: String = row.get(0)?;
+        let avg_latency: Option<f64> = row.get(1)?;
+        let avg_tps: Option<f64> = row.get(2)?;
+        let sample_count: i64 = row.get(3)?;
+        model_performance.push(ModelPerformance {
+            model,
+            avg_latency: avg_latency.unwrap_or(0.0),
+            avg_tps: avg_tps.unwrap_or(0.0),
+            sample_count,
+        });
+    }
+
+    // H. 每日性能走势 (仅考虑 latency > 0.0)
+    let sql_perf_trends = format!(
+        "SELECT 
+            substr(s.created_at, 1, 10) as date,
+            AVG(t.latency) as avg_latency,
+            AVG(t.tps) as avg_tps
+        FROM sessions s
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {} {}
+        GROUP BY date
+        ORDER BY date ASC",
+        where_clause,
+        if where_clause.is_empty() { "WHERE t.latency > 0.0" } else { "AND t.latency > 0.0" }
+    );
+
+    let mut stmt = conn.prepare(&sql_perf_trends)?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.clone()))?;
+
+    let mut performance_trends = Vec::new();
+    while let Some(row) = rows.next()? {
+        let date: Option<String> = row.get(0)?;
+        let avg_latency: Option<f64> = row.get(1)?;
+        let avg_tps: Option<f64> = row.get(2)?;
+        performance_trends.push(PerformanceTrend {
+            date: date.unwrap_or_default(),
+            avg_latency: avg_latency.unwrap_or(0.0),
+            avg_tps: avg_tps.unwrap_or(0.0),
+        });
+    }
+
     Ok(AggregatedMetrics {
         totals,
         daily_trends,
@@ -1407,6 +1813,8 @@ pub fn get_aggregated_metrics_from_cache(
         model_distribution,
         sessions,
         source_trends,
+        model_performance,
+        performance_trends,
     })
 }
 
@@ -1621,6 +2029,16 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
     config.connect_timeout(std::time::Duration::from_secs(5));
     let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
 
+    // 运行 Postgres 数据库迁移以保证表结构最新 (包含新列如 latency 和 tps)
+    {
+        let db_conn = crate::db_adapter::DbConn::Postgres(std::sync::Mutex::new(pg_client));
+        crate::db_adapter::init_tables(&db_conn).map_err(|e| format!("执行 PostgreSQL 数据库迁移失败: {}", e))?;
+        pg_client = match db_conn {
+            crate::db_adapter::DbConn::Postgres(mutex) => mutex.into_inner().map_err(|_| "无法重新获取 PostgreSQL 客户端".to_string())?,
+            _ => unreachable!(),
+        };
+    }
+
     // ===== PostgreSQL 数据清洗迁移，防 claude_code / codex 历史会话 input_tokens 偏小 (v1) =====
     let pg_meta_exists = pg_client.query_one(
         "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'db_meta')",
@@ -1794,7 +2212,9 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 cost_usd DOUBLE PRECISION,
                 message_id TEXT,
                 request_id TEXT,
-                timestamp TEXT
+                timestamp TEXT,
+                latency DOUBLE PRECISION,
+                tps DOUBLE PRECISION
             ) ON COMMIT DROP",
             &[],
         ).map_err(|e| format!("创建临时轮次表失败: {}", e))?;
@@ -1823,7 +2243,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
             // 查询该会话的增量 turns
             let mut sqlite_turns_stmt = sqlite_conn
                 .prepare(
-                    "SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp 
+                    "SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp, latency, tps 
                      FROM turns 
                      WHERE source = ? AND uuid = ? AND idx > ?"
                 )
@@ -1845,9 +2265,11 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 let message_id: Option<String> = row.get(9).map_err(|e| e.to_string())?;
                 let request_id: Option<String> = row.get(10).map_err(|e| e.to_string())?;
                 let timestamp: Option<String> = row.get(11).map_err(|e| e.to_string())?;
+                let latency: f64 = row.get(12).map_err(|e| e.to_string())?;
+                let tps: f64 = row.get(13).map_err(|e| e.to_string())?;
 
                 turns_copy_data.push_str(&format!(
-                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                     pg_copy_string_raw(&src),
                     pg_copy_string_raw(&uid),
                     idx,
@@ -1859,7 +2281,9 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                     cost_usd,
                     pg_copy_string(&message_id),
                     pg_copy_string(&request_id),
-                    pg_copy_string(&timestamp)
+                    pg_copy_string(&timestamp),
+                    latency,
+                    tps
                 ));
             }
         }
@@ -1899,8 +2323,8 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
 
         if !turns_copy_data.is_empty() {
             pg_tx.execute(
-                "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
-                 SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp FROM temp_turns
+                "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp, latency, tps)
+                 SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp, latency, tps FROM temp_turns
                  ON CONFLICT (source, uuid, idx) DO UPDATE SET
                     model = EXCLUDED.model,
                     input_tokens = EXCLUDED.input_tokens,
@@ -1910,7 +2334,9 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                     cost_usd = EXCLUDED.cost_usd,
                     message_id = EXCLUDED.message_id,
                     request_id = EXCLUDED.request_id,
-                    timestamp = EXCLUDED.timestamp",
+                    timestamp = EXCLUDED.timestamp,
+                    latency = EXCLUDED.latency,
+                    tps = EXCLUDED.tps",
                 &[],
             ).map_err(|e| format!("批量合并轮次记录失败: {}", e))?;
         }
@@ -1950,6 +2376,16 @@ pub fn get_pg_aggregated_metrics(
     let mut config: postgres::config::Config = db_url.parse().map_err(|e: postgres::Error| format!("解析 PostgreSQL 连接 URL 失败: {}", e))?;
     config.connect_timeout(std::time::Duration::from_secs(5));
     let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
+
+    // 运行 Postgres 数据库迁移以保证表结构最新 (包含新列如 latency 和 tps)
+    {
+        let db_conn = crate::db_adapter::DbConn::Postgres(std::sync::Mutex::new(pg_client));
+        crate::db_adapter::init_tables(&db_conn).map_err(|e| format!("执行 PostgreSQL 数据库迁移失败: {}", e))?;
+        pg_client = match db_conn {
+            crate::db_adapter::DbConn::Postgres(mutex) => mutex.into_inner().map_err(|_| "无法重新获取 PostgreSQL 客户端".to_string())?,
+            _ => unreachable!(),
+        };
+    }
 
     let mut conditions = Vec::new();
     let mut params: Vec<String> = Vec::new();
@@ -2238,6 +2674,65 @@ pub fn get_pg_aggregated_metrics(
         });
     }
 
+    // 7. Model Performance
+    let sql_model_perf = format!(
+        "SELECT 
+            t.model,
+            AVG(t.latency) as avg_latency,
+            AVG(t.tps) as avg_tps,
+            COUNT(*) as sample_count
+        FROM turns t
+        INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
+        {} {}
+        GROUP BY t.model
+        ORDER BY sample_count DESC",
+        where_clause,
+        if where_clause.is_empty() { "WHERE t.latency > 0.0 AND t.model IS NOT NULL AND t.model != ''" } else { "AND t.latency > 0.0 AND t.model IS NOT NULL AND t.model != ''" }
+    );
+
+    let rows_model_perf = pg_client.query(&sql_model_perf, &pg_params[..]).map_err(|e| e.to_string())?;
+    let mut model_performance = Vec::new();
+    for r in rows_model_perf {
+        let model: Option<String> = r.get(0);
+        let avg_latency: Option<f64> = r.get(1);
+        let avg_tps: Option<f64> = r.get(2);
+        let sample_count: Option<i64> = r.get(3);
+        model_performance.push(ModelPerformance {
+            model: model.unwrap_or_else(|| "unknown".to_string()),
+            avg_latency: avg_latency.unwrap_or(0.0),
+            avg_tps: avg_tps.unwrap_or(0.0),
+            sample_count: sample_count.unwrap_or(0),
+        });
+    }
+
+    // 8. Performance Trends
+    let sql_perf_trends = format!(
+        "SELECT 
+            SUBSTR(s.created_at, 1, 10) as date,
+            AVG(t.latency) as avg_latency,
+            AVG(t.tps) as avg_tps
+        FROM sessions s
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {} {}
+        GROUP BY date
+        ORDER BY date ASC",
+        where_clause,
+        if where_clause.is_empty() { "WHERE t.latency > 0.0" } else { "AND t.latency > 0.0" }
+    );
+
+    let rows_perf_trends = pg_client.query(&sql_perf_trends, &pg_params[..]).map_err(|e| e.to_string())?;
+    let mut performance_trends = Vec::new();
+    for r in rows_perf_trends {
+        let date: Option<String> = r.get(0);
+        let avg_latency: Option<f64> = r.get(1);
+        let avg_tps: Option<f64> = r.get(2);
+        performance_trends.push(PerformanceTrend {
+            date: date.unwrap_or_default(),
+            avg_latency: avg_latency.unwrap_or(0.0),
+            avg_tps: avg_tps.unwrap_or(0.0),
+        });
+    }
+
     Ok(AggregatedMetrics {
         totals,
         daily_trends,
@@ -2245,7 +2740,84 @@ pub fn get_pg_aggregated_metrics(
         model_distribution,
         sessions,
         source_trends,
+        model_performance,
+        performance_trends,
     })
+}
+
+pub fn clean_cache_db() -> Result<String, String> {
+    let _ = dotenvy::dotenv();
+    let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
+    
+    if db_type.to_lowercase() == "postgres" {
+        // PostgreSQL 清理
+        let pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();
+        let pg_port = std::env::var("DB_PG_PORT").unwrap_or_default();
+        let pg_user = std::env::var("DB_PG_USER").unwrap_or_default();
+        let pg_password = std::env::var("DB_PG_PASSWORD").unwrap_or_default();
+        let pg_database = std::env::var("DB_PG_DATABASE").unwrap_or_default();
+
+        let db_url = if !pg_host.trim().is_empty() {
+            format!(
+                "postgresql://{}:{}@{}:{}/{}",
+                pg_user, pg_password, pg_host, pg_port, pg_database
+            )
+        } else {
+            std::env::var("DATABASE_URL").map_err(|e| format!("未配置 PostgreSQL 数据库 URL: {}", e))?
+        };
+
+        let mut config: postgres::config::Config = db_url.parse().map_err(|e: postgres::Error| e.to_string())?;
+        config.connect_timeout(std::time::Duration::from_secs(5));
+        let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
+
+        // 1. 清理 input_tokens=0 且 output_tokens=0 的无意义 turns
+        let deleted_turns = pg_client.execute(
+            "DELETE FROM turns WHERE input_tokens = 0 AND output_tokens = 0",
+            &[],
+        ).map_err(|e| e.to_string())?;
+
+        // 2. 清理没有 turns 关联的空会话
+        let deleted_sessions = pg_client.execute(
+            "DELETE FROM sessions WHERE (source, uuid) NOT IN (SELECT DISTINCT source, uuid FROM turns)",
+            &[],
+        ).map_err(|e| e.to_string())?;
+
+        return Ok(format!(
+            "远程 PostgreSQL 数据库优化完成！\n共清理无效交互: {} 轮\n共删除僵尸空会话: {} 个",
+            deleted_turns, deleted_sessions
+        ));
+    }
+
+    // 本地 SQLite 清理
+    let db_path = get_db_cache_path();
+    let mut conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| format!("无法连接到本地 SQLite: {}", e))?;
+
+    let tx = conn.transaction()
+        .map_err(|e| format!("开启 SQLite 事务失败: {}", e))?;
+
+    // 1. 删除无效的 turns
+    let deleted_turns = tx.execute(
+        "DELETE FROM turns WHERE input_tokens = 0 AND output_tokens = 0",
+        [],
+    ).map_err(|e| format!("清理 turns 失败: {}", e))?;
+
+    // 2. 删除无 turns 的空会话
+    let deleted_sessions = tx.execute(
+        "DELETE FROM sessions WHERE (source, uuid) NOT IN (SELECT DISTINCT source, uuid FROM turns)",
+        [],
+    ).map_err(|e| format!("清理 sessions 失败: {}", e))?;
+
+    tx.commit().map_err(|e| format!("提交 SQLite 事务失败: {}", e))?;
+
+    // 3. 执行 VACUUM 收紧本地磁盘空间，整理碎片
+    conn.execute("VACUUM", [])
+        .map_err(|e| format!("SQLite VACUUM 空间收紧失败: {}", e))?;
+
+    Ok(format!(
+        "本地 SQLite 缓存数据库优化瘦身成功！\n共清理无效交互: {} 轮\n共删除僵尸空会话: {} 个\n物理磁盘碎片整理已生效 (VACUUM)",
+        deleted_turns, deleted_sessions
+    ))
 }
 
 

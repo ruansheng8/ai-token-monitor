@@ -444,3 +444,39 @@ pub async fn handle_config_save(
     }
 }
 
+pub async fn handle_db_clean() -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        crate::db::clean_cache_db()
+    }).await;
+
+    match result {
+        Ok(Ok(msg)) => {
+            let body = serde_json::json!({ "success": true, "message": msg });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Ok(Err(err)) => {
+            let body = serde_json::json!({ "success": false, "message": err });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Err(e) => {
+            let body = serde_json::json!({ "success": false, "message": format!("内部线程错误: {}", e) });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+    }
+}
+
