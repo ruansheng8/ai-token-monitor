@@ -320,8 +320,21 @@ pub fn init_new_conn() -> Result<DbConn, String> {
     let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
     
     if db_type.to_lowercase() == "postgres" {
-        let db_url = std::env::var("DATABASE_URL")
-            .unwrap_or_else(|_| "postgresql://postgres:password@localhost:5432/token_monitor".to_string());
+        let pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();
+        let pg_port = std::env::var("DB_PG_PORT").unwrap_or_default();
+        let pg_user = std::env::var("DB_PG_USER").unwrap_or_default();
+        let pg_password = std::env::var("DB_PG_PASSWORD").unwrap_or_default();
+        let pg_database = std::env::var("DB_PG_DATABASE").unwrap_or_default();
+
+        let db_url = if !pg_host.trim().is_empty() {
+            format!(
+                "postgresql://{}:{}@{}:{}/{}",
+                pg_user, pg_password, pg_host, pg_port, pg_database
+            )
+        } else {
+            std::env::var("DATABASE_URL")
+                .unwrap_or_else(|_| "postgresql://postgres:password@localhost:5432/token_monitor".to_string())
+        };
         
         let client = postgres::Client::connect(&db_url, postgres::NoTls)
             .map_err(|e| format!("Failed to connect Postgres: {}", e))?;
@@ -369,4 +382,38 @@ pub fn reset_conn_pool() {
     let lock = GLOBAL_CONN.get_or_init(|| Mutex::new(None));
     let mut guard = lock.lock().unwrap();
     *guard = None;
+}
+
+// 从完整连接串中解析出 (host, port, user, password, database)
+pub fn parse_pg_url(url: &str) -> Option<(String, String, String, String, String)> {
+    if !url.starts_with("postgresql://") && !url.starts_with("postgres://") {
+        return None;
+    }
+    let rest = if url.starts_with("postgresql://") {
+        &url["postgresql://".len()..]
+    } else {
+        &url["postgres://".len()..]
+    };
+
+    let parts: Vec<&str> = rest.splitn(2, '@').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+
+    let user_pass = parts[0];
+    let host_port_db = parts[1];
+
+    let up_parts: Vec<&str> = user_pass.splitn(2, ':').collect();
+    let user = up_parts.get(0).cloned().unwrap_or("").to_string();
+    let pass = up_parts.get(1).cloned().unwrap_or("").to_string();
+
+    let hp_db_parts: Vec<&str> = host_port_db.splitn(2, '/').collect();
+    let host_port = hp_db_parts.get(0).cloned().unwrap_or("");
+    let database = hp_db_parts.get(1).cloned().unwrap_or("").to_string();
+
+    let hp_parts: Vec<&str> = host_port.splitn(2, ':').collect();
+    let host = hp_parts.get(0).cloned().unwrap_or("").to_string();
+    let port = hp_parts.get(1).cloned().unwrap_or("5432").to_string();
+
+    Some((host, port, user, pass, database))
 }

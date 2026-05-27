@@ -7,7 +7,7 @@ mod db_adapter;
 
 
 use axum::{routing::{get, post}, Router};
-use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback, handle_config_test, handle_config_save};
+use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback, handle_config_get, handle_config_test, handle_config_save};
 
 
 fn main() {
@@ -34,6 +34,7 @@ fn main() {
                 .route("/api/metrics", get(handle_metrics))
                 .route("/api/scan/start", get(handle_scan_start).post(handle_scan_start))
                 .route("/api/scan/status", get(handle_scan_status))
+                .route("/api/config", get(handle_config_get))
                 .route("/api/config/test", post(handle_config_test))
                 .route("/api/config/save", post(handle_config_save))
                 .fallback(serve_static_file_fallback);

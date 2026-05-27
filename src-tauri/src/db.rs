@@ -1509,6 +1509,7 @@ mod tests {
         fs::create_dir_all(&temp_path).unwrap();
         
         std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+        std::env::set_var("DATABASE_TYPE", "sqlite");
 
         let db_cache_path = get_db_cache_path();
         assert!(!db_cache_path.exists());
@@ -1639,18 +1640,53 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
     }
 
     println!("检测到远程 PostgreSQL 模式，正在触发增量同步...");
-    let db_url = std::env::var("DATABASE_URL").map_err(|e| e.to_string())?;
-    let mut pg_client = postgres::Client::connect(&db_url, postgres::NoTls).map_err(|e| e.to_string())?;
+    
+    // 1. 统一提取 PostgreSQL 配置，合成正确的连接 URL，支持拆分字段，与 db_adapter.rs 一致
+    let pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();
+    let pg_port = std::env::var("DB_PG_PORT").unwrap_or_default();
+    let pg_user = std::env::var("DB_PG_USER").unwrap_or_default();
+    let pg_password = std::env::var("DB_PG_PASSWORD").unwrap_or_default();
+    let pg_database = std::env::var("DB_PG_DATABASE").unwrap_or_default();
+
+    let db_url = if !pg_host.trim().is_empty() {
+        format!(
+            "postgresql://{}:{}@{}:{}/{}",
+            pg_user, pg_password, pg_host, pg_port, pg_database
+        )
+    } else {
+        std::env::var("DATABASE_URL").map_err(|e| format!("未配置 PostgreSQL 数据库 URL: {}", e))?
+    };
+
+    // 2. 使用 Config 配置超时时间并进行连接，快速失败防止无限卡死
+    let mut config: postgres::config::Config = db_url.parse().map_err(|e: postgres::Error| format!("解析 PostgreSQL 连接 URL 失败: {}", e))?;
+    config.connect_timeout(std::time::Duration::from_secs(5));
+    let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
 
     let cache_path = get_db_cache_path();
-    let sqlite_conn = rusqlite::Connection::open(&cache_path).map_err(|e| e.to_string())?;
+    let sqlite_conn = rusqlite::Connection::open(&cache_path).map_err(|e| format!("无法打开本地 SQLite 缓存: {}", e))?;
 
-    // 1. 同步 sessions 表
-    let mut stmt = sqlite_conn.prepare("SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path FROM sessions").map_err(|e| e.to_string())?;
-    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-    
-    let mut pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
-    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+    // 3. 首先拉取远程 PostgreSQL 中已同步的会话最新状态，避免全量低效同步
+    let mut pg_sessions = std::collections::HashMap::new();
+    let pg_rows = pg_client
+        .query("SELECT source, uuid, last_mtime, last_parsed_idx FROM sessions", &[])
+        .map_err(|e| format!("读取远程 sessions 失败: {}", e))?;
+    for row in pg_rows {
+        let source: String = row.get(0);
+        let uuid: String = row.get(1);
+        let last_mtime: f64 = row.get(2);
+        let last_parsed_idx: i64 = row.get(3);
+        pg_sessions.insert((source, uuid), (last_mtime, last_parsed_idx));
+    }
+
+    // 4. 遍历本地 SQLite sessions 表，决定哪些 session 以及哪些 turns 需要被增量同步
+    let mut sqlite_sessions_stmt = sqlite_conn
+        .prepare("SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path FROM sessions")
+        .map_err(|e| e.to_string())?;
+    let mut sqlite_sessions_rows = sqlite_sessions_stmt.query([]).map_err(|e| e.to_string())?;
+
+    let mut sessions_to_sync = Vec::new();
+
+    while let Some(row) = sqlite_sessions_rows.next().map_err(|e| e.to_string())? {
         let source: String = row.get(0).map_err(|e| e.to_string())?;
         let uuid: String = row.get(1).map_err(|e| e.to_string())?;
         let title: Option<String> = row.get(2).map_err(|e| e.to_string())?;
@@ -1659,6 +1695,46 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
         let last_mtime: f64 = row.get(5).map_err(|e| e.to_string())?;
         let project_path: Option<String> = row.get(6).map_err(|e| e.to_string())?;
 
+        let mut need_sync = false;
+        let mut pg_last_parsed_idx = -1i64;
+
+        if let Some(&(pg_mtime, pg_idx)) = pg_sessions.get(&(source.clone(), uuid.clone())) {
+            // 本地 last_mtime 领先，或者 last_parsed_idx 领先，说明需要同步
+            if last_mtime > pg_mtime + 1e-4 || last_parsed_idx > pg_idx {
+                need_sync = true;
+                pg_last_parsed_idx = pg_idx;
+            }
+        } else {
+            // PG 侧尚无此会话，全新同步
+            need_sync = true;
+        }
+
+        if need_sync {
+            sessions_to_sync.push((
+                source,
+                uuid,
+                title,
+                created_at,
+                last_parsed_idx,
+                last_mtime,
+                project_path,
+                pg_last_parsed_idx,
+            ));
+        }
+    }
+
+    if sessions_to_sync.is_empty() {
+        println!("所有本地数据与远程 PostgreSQL 保持一致，无需增量同步。");
+        return Ok(());
+    }
+
+    println!("检测到有 {} 个会话存在更新，正在进行增量差分同步...", sessions_to_sync.len());
+
+    // 5. 开启 PG 事务，批量/增量镜像同步变动部分
+    let mut pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
+
+    for (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx) in sessions_to_sync {
+        // A. 同步会话表状态
         pg_tx.execute(
             "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
@@ -1669,43 +1745,53 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 last_mtime = EXCLUDED.last_mtime,
                 project_path = EXCLUDED.project_path",
             &[&source, &uuid, &title, &created_at, &last_parsed_idx, &last_mtime, &project_path],
-        ).map_err(|e| e.to_string())?;
+        ).map_err(|e| format!("同步会话记录失败: {}", e))?;
+
+        // B. 只查询本地 SQLite 中 idx 大于 PostgreSQL 侧已记录最大 index 的增量 turns 并同步
+        let mut sqlite_turns_stmt = sqlite_conn
+            .prepare(
+                "SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp 
+                 FROM turns 
+                 WHERE source = ? AND uuid = ? AND idx > ?"
+            )
+            .map_err(|e| e.to_string())?;
+        let mut sqlite_turns_rows = sqlite_turns_stmt
+            .query(rusqlite::params![source, uuid, pg_last_parsed_idx])
+            .map_err(|e| e.to_string())?;
+
+        while let Some(row) = sqlite_turns_rows.next().map_err(|e| e.to_string())? {
+            let src: String = row.get(0).map_err(|e| e.to_string())?;
+            let uid: String = row.get(1).map_err(|e| e.to_string())?;
+            let idx: i64 = row.get(2).map_err(|e| e.to_string())?;
+            let model: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+            let input_tokens: i64 = row.get(4).map_err(|e| e.to_string())?;
+            let cached_input_tokens: i64 = row.get(5).map_err(|e| e.to_string())?;
+            let output_tokens: i64 = row.get(6).map_err(|e| e.to_string())?;
+            let thinking_tokens: i64 = row.get(7).map_err(|e| e.to_string())?;
+            let cost_usd: f64 = row.get(8).map_err(|e| e.to_string())?;
+            let message_id: Option<String> = row.get(9).map_err(|e| e.to_string())?;
+            let request_id: Option<String> = row.get(10).map_err(|e| e.to_string())?;
+            let timestamp: Option<String> = row.get(11).map_err(|e| e.to_string())?;
+
+            pg_tx.execute(
+                "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 ON CONFLICT (source, uuid, idx) DO UPDATE SET
+                    model = EXCLUDED.model,
+                    input_tokens = EXCLUDED.input_tokens,
+                    cached_input_tokens = EXCLUDED.cached_input_tokens,
+                    output_tokens = EXCLUDED.output_tokens,
+                    thinking_tokens = EXCLUDED.thinking_tokens,
+                    cost_usd = EXCLUDED.cost_usd,
+                    message_id = EXCLUDED.message_id,
+                    request_id = EXCLUDED.request_id,
+                    timestamp = EXCLUDED.timestamp",
+                &[&src, &uid, &idx, &model, &input_tokens, &cached_input_tokens, &output_tokens, &thinking_tokens, &cost_usd, &message_id, &request_id, &timestamp],
+            ).map_err(|e| format!("同步轮次记录失败: {}", e))?;
+        }
     }
 
-    // 2. 同步 turns 表
-    let mut stmt = sqlite_conn.prepare("SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp FROM turns").map_err(|e| e.to_string())?;
-    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
-    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
-        let source: String = row.get(0).map_err(|e| e.to_string())?;
-        let uuid: String = row.get(1).map_err(|e| e.to_string())?;
-        let idx: i64 = row.get(2).map_err(|e| e.to_string())?;
-        let model: Option<String> = row.get(3).map_err(|e| e.to_string())?;
-        let input_tokens: i64 = row.get(4).map_err(|e| e.to_string())?;
-        let cached_input_tokens: i64 = row.get(5).map_err(|e| e.to_string())?;
-        let output_tokens: i64 = row.get(6).map_err(|e| e.to_string())?;
-        let thinking_tokens: i64 = row.get(7).map_err(|e| e.to_string())?;
-        let cost_usd: f64 = row.get(8).map_err(|e| e.to_string())?;
-        let message_id: Option<String> = row.get(9).map_err(|e| e.to_string())?;
-        let request_id: Option<String> = row.get(10).map_err(|e| e.to_string())?;
-        let timestamp: Option<String> = row.get(11).map_err(|e| e.to_string())?;
-
-        pg_tx.execute(
-            "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-             ON CONFLICT (source, uuid, idx) DO UPDATE SET
-                model = EXCLUDED.model,
-                input_tokens = EXCLUDED.input_tokens,
-                cached_input_tokens = EXCLUDED.cached_input_tokens,
-                output_tokens = EXCLUDED.output_tokens,
-                thinking_tokens = EXCLUDED.thinking_tokens,
-                cost_usd = EXCLUDED.cost_usd,
-                message_id = EXCLUDED.message_id,
-                request_id = EXCLUDED.request_id,
-                timestamp = EXCLUDED.timestamp",
-            &[&source, &uuid, &idx, &model, &input_tokens, &cached_input_tokens, &output_tokens, &thinking_tokens, &cost_usd, &message_id, &request_id, &timestamp],
-        ).map_err(|e| e.to_string())?;
-    }
-    pg_tx.commit().map_err(|e| e.to_string())?;
+    pg_tx.commit().map_err(|e| format!("提交 PostgreSQL 同步事务失败: {}", e))?;
     println!("SQLite 本地增量数据镜像成功同步到远程 PostgreSQL 数据库！");
     Ok(())
 }
@@ -1715,8 +1801,28 @@ pub fn get_pg_aggregated_metrics(
     start_date: Option<&str>,
     end_date: Option<&str>,
 ) -> Result<AggregatedMetrics, String> {
-    let db_url = std::env::var("DATABASE_URL").map_err(|e| e.to_string())?;
-    let mut pg_client = postgres::Client::connect(&db_url, postgres::NoTls).map_err(|e| e.to_string())?;
+    let _ = dotenvy::dotenv();
+    
+    // 1. 统一提取 PostgreSQL 配置，合成正确的连接 URL，支持拆分字段，与 db_adapter.rs 一致
+    let pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();
+    let pg_port = std::env::var("DB_PG_PORT").unwrap_or_default();
+    let pg_user = std::env::var("DB_PG_USER").unwrap_or_default();
+    let pg_password = std::env::var("DB_PG_PASSWORD").unwrap_or_default();
+    let pg_database = std::env::var("DB_PG_DATABASE").unwrap_or_default();
+
+    let db_url = if !pg_host.trim().is_empty() {
+        format!(
+            "postgresql://{}:{}@{}:{}/{}",
+            pg_user, pg_password, pg_host, pg_port, pg_database
+        )
+    } else {
+        std::env::var("DATABASE_URL").map_err(|e| format!("未配置 PostgreSQL 数据库 URL: {}", e))?
+    };
+
+    // 2. 使用 Config 配置超时时间并进行连接，快速失败防止大盘加载挂起
+    let mut config: postgres::config::Config = db_url.parse().map_err(|e: postgres::Error| format!("解析 PostgreSQL 连接 URL 失败: {}", e))?;
+    config.connect_timeout(std::time::Duration::from_secs(5));
+    let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
 
     let mut conditions = Vec::new();
     let mut params: Vec<String> = Vec::new();
@@ -1757,13 +1863,13 @@ pub fn get_pg_aggregated_metrics(
         pg_params.push(p);
     }
 
-    // 1. Totals
+    // 1. Totals (CAST AS BIGINT 防止 PG SUM(bigint) 默认返回 NUMERIC 类型引起 Rust 侧反序列化 Panic)
     let sql_totals = format!(
         "SELECT 
-            SUM(t.input_tokens) as total_input,
-            SUM(t.output_tokens) as total_output,
-            SUM(t.cached_input_tokens) as total_cached,
-            SUM(t.thinking_tokens) as total_thinking,
+            CAST(SUM(t.input_tokens) AS BIGINT) as total_input,
+            CAST(SUM(t.output_tokens) AS BIGINT) as total_output,
+            CAST(SUM(t.cached_input_tokens) AS BIGINT) as total_cached,
+            CAST(SUM(t.thinking_tokens) AS BIGINT) as total_thinking,
             SUM(t.cost_usd) as total_cost
         FROM turns t
         INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
@@ -1816,10 +1922,10 @@ pub fn get_pg_aggregated_metrics(
     let sql_daily = format!(
         "SELECT 
             SUBSTR(s.created_at, 1, 10) as date,
-            SUM(t.input_tokens) as input,
-            SUM(t.output_tokens) as output,
-            SUM(t.cached_input_tokens) as cached,
-            SUM(t.thinking_tokens) as thinking,
+            CAST(SUM(t.input_tokens) AS BIGINT) as input,
+            CAST(SUM(t.output_tokens) AS BIGINT) as output,
+            CAST(SUM(t.cached_input_tokens) AS BIGINT) as cached,
+            CAST(SUM(t.thinking_tokens) AS BIGINT) as thinking,
             COUNT(DISTINCT s.uuid) as sessions
         FROM sessions s
         LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
@@ -1852,10 +1958,10 @@ pub fn get_pg_aggregated_metrics(
     let sql_monthly = format!(
         "SELECT 
             SUBSTR(s.created_at, 1, 7) as month,
-            SUM(t.input_tokens) as input,
-            SUM(t.output_tokens) as output,
-            SUM(t.cached_input_tokens) as cached,
-            SUM(t.thinking_tokens) as thinking,
+            CAST(SUM(t.input_tokens) AS BIGINT) as input,
+            CAST(SUM(t.output_tokens) AS BIGINT) as output,
+            CAST(SUM(t.cached_input_tokens) AS BIGINT) as cached,
+            CAST(SUM(t.thinking_tokens) AS BIGINT) as thinking,
             COUNT(DISTINCT s.uuid) as sessions
         FROM sessions s
         LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
@@ -1888,10 +1994,10 @@ pub fn get_pg_aggregated_metrics(
     let sql_model = format!(
         "SELECT 
             t.model,
-            SUM(t.input_tokens) as input,
-            SUM(t.output_tokens) as output,
-            SUM(t.cached_input_tokens) as cached,
-            SUM(t.thinking_tokens) as thinking
+            CAST(SUM(t.input_tokens) AS BIGINT) as input,
+            CAST(SUM(t.output_tokens) AS BIGINT) as output,
+            CAST(SUM(t.cached_input_tokens) AS BIGINT) as cached,
+            CAST(SUM(t.thinking_tokens) AS BIGINT) as thinking
         FROM turns t
         INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
         {}
@@ -1926,10 +2032,10 @@ pub fn get_pg_aggregated_metrics(
             s.uuid,
             s.title,
             s.created_at,
-            COALESCE(SUM(t.input_tokens), 0) as input,
-            COALESCE(SUM(t.output_tokens), 0) as output,
-            COALESCE(SUM(t.cached_input_tokens), 0) as cached,
-            COALESCE(SUM(t.thinking_tokens), 0) as thinking,
+            CAST(COALESCE(SUM(t.input_tokens), 0) AS BIGINT) as input,
+            CAST(COALESCE(SUM(t.output_tokens), 0) AS BIGINT) as output,
+            CAST(COALESCE(SUM(t.cached_input_tokens), 0) AS BIGINT) as cached,
+            CAST(COALESCE(SUM(t.thinking_tokens), 0) AS BIGINT) as thinking,
             COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
         FROM sessions s
         LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
@@ -1980,7 +2086,7 @@ pub fn get_pg_aggregated_metrics(
         "SELECT 
             SUBSTR(s.created_at, 1, 10) as date,
             s.source,
-            SUM(t.input_tokens + t.output_tokens) as tokens,
+            CAST(SUM(t.input_tokens + t.output_tokens) AS BIGINT) as tokens,
             SUM(t.cost_usd) as cost
         FROM sessions s
         LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid

@@ -170,11 +170,43 @@ export default function App() {
   const [isConfigOpen, setIsConfigOpen] = useState(false);
   const [dbType, setDbType] = useState<'sqlite' | 'postgres'>('sqlite');
   const [sqlitePath, setSqlitePath] = useState('');
-  const [pgUrl, setPgUrl] = useState('');
+  const [pgHost, setPgHost] = useState('');
+  const [pgPort, setPgPort] = useState('5432');
+  const [pgUser, setPgUser] = useState('');
+  const [pgPassword, setPgPassword] = useState('');
+  const [pgDatabase, setPgDatabase] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [testLoading, setTestLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [configMessage, setConfigMessage] = useState<{ success: boolean; text: string } | null>(null);
 
+  // 当配置弹窗打开时，拉取后端最新配置并回显
+  useEffect(() => {
+    if (isConfigOpen) {
+      const loadConfig = async () => {
+        try {
+          const res = await fetch(`/api/config?t=${Date.now()}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data.db_type) {
+              setDbType(data.db_type.toLowerCase() === 'postgres' ? 'postgres' : 'sqlite');
+            }
+            if (data.sqlite_path) {
+              setSqlitePath(data.sqlite_path);
+            }
+            setPgHost(data.pg_host || '');
+            setPgPort(data.pg_port || '5432');
+            setPgUser(data.pg_user || '');
+            setPgPassword(data.pg_password || '');
+            setPgDatabase(data.pg_database || '');
+          }
+        } catch (e) {
+          console.error("加载数据源配置失败", e);
+        }
+      };
+      loadConfig();
+    }
+  }, [isConfigOpen]);
 
   useEffect(() => {
     if (timeRange !== 'custom') {
@@ -1062,7 +1094,16 @@ export default function App() {
           <div className="background-decor-1 bg-decor-cyan animate-pulse-glow absolute -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
           <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse absolute -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
 
-          <div className="glass-card rounded-[32px] max-w-[500px] w-full p-8 flex flex-col items-center text-center gap-6 border border-white/10 dark:border-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.3)]">
+          <div className="glass-card rounded-[32px] max-w-[500px] w-full p-8 flex flex-col items-center text-center gap-6 border border-white/10 dark:border-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.3)] relative">
+            {/* 右上角系统配置图标，支持在同步挂起或有 BUG 时手动切换回本地 SQLite 模式 */}
+            <button
+              onClick={() => setIsConfigOpen(true)}
+              className="absolute top-5 right-5 w-8 h-8 rounded-xl flex items-center justify-center bg-bg-secondary/60 dark:bg-white/5 hover:bg-bg-secondary dark:hover:bg-white/10 text-text-secondary hover:text-neon-cyan transition-all duration-300 hover:rotate-45 active:scale-95 cursor-pointer border border-card-border shadow-sm group"
+              title="配置数据源"
+            >
+              <Settings className="w-4 h-4 text-text-secondary group-hover:text-neon-cyan transition-colors" />
+            </button>
+
             <svg className="w-16 h-16 animate-spin text-neon-cyan mb-2" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12" stroke="url(#spinner-grad-main)" strokeWidth="3" strokeLinecap="round"/>
               <defs>
@@ -1112,7 +1153,7 @@ export default function App() {
 
       {/* 数据库数据源配置弹窗 */}
       {isConfigOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
           <div className="relative w-full max-w-lg rounded-3xl border border-card-border bg-bg-secondary/95 dark:bg-[#0f192b]/95 backdrop-blur-xl p-6 text-text-primary shadow-2xl overflow-hidden shadow-neon-cyan/5">
             {/* 装饰性背景光效 */}
             <div className="absolute -top-24 -left-24 w-48 h-48 bg-neon-cyan/20 rounded-full blur-3xl pointer-events-none"></div>
@@ -1184,17 +1225,78 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <div className="flex flex-col gap-2 animate-fade-in">
-                  <label className="text-xs font-semibold text-text-secondary">🔗 统一连接串 (DATABASE_URL)</label>
-                  <input
-                    type="text"
-                    value={pgUrl}
-                    onChange={(e) => setPgUrl(e.target.value)}
-                    placeholder="postgresql://your_username:your_password@host:5432/token_monitor"
-                    className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-3 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
-                  />
+                <div className="flex flex-col gap-3.5 animate-fade-in text-left">
+                  {/* 主机与端口并排 */}
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="col-span-2 flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-text-secondary">🖥️ 主机地址 (Host)</label>
+                      <input
+                        type="text"
+                        value={pgHost}
+                        onChange={(e) => setPgHost(e.target.value)}
+                        placeholder="localhost 或 IP 地址"
+                        className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-text-secondary">🔌 端口 (Port)</label>
+                      <input
+                        type="text"
+                        value={pgPort}
+                        onChange={(e) => setPgPort(e.target.value)}
+                        placeholder="5432"
+                        className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                      />
+                    </div>
+                  </div>
+
+                  {/* 用户名与密码并排 */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-text-secondary">👤 用户名 (Username)</label>
+                      <input
+                        type="text"
+                        value={pgUser}
+                        onChange={(e) => setPgUser(e.target.value)}
+                        placeholder="postgres"
+                        className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                      />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <label className="text-xs font-semibold text-text-secondary">🔑 密码 (Password)</label>
+                      <div className="relative w-full">
+                        <input
+                          type={showPassword ? "text" : "password"}
+                          value={pgPassword}
+                          onChange={(e) => setPgPassword(e.target.value)}
+                          placeholder="数据库密码"
+                          className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl pl-4 pr-10 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(!showPassword)}
+                          className="absolute right-3 top-2 flex items-center justify-center text-xs text-text-muted hover:text-text-primary focus:outline-none bg-transparent border-none cursor-pointer select-none"
+                        >
+                          {showPassword ? "👁️" : "👁️‍🗨️"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* 数据库名称 */}
+                  <div className="flex flex-col gap-1.5">
+                    <label className="text-xs font-semibold text-text-secondary">🗄️ 数据库名称 (Database)</label>
+                    <input
+                      type="text"
+                      value={pgDatabase}
+                      onChange={(e) => setPgDatabase(e.target.value)}
+                      placeholder="token_monitor"
+                      className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                    />
+                  </div>
+                  
                   <p className="text-[10px] text-text-muted leading-relaxed">
-                    * 示例格式：<span className="font-mono text-neon-purple">postgresql://user:password@host:port/dbname</span>。连接测试成功后，若对方是新空库，系统会自动初始化 sessions 和 turns 表结构。
+                    * 连接测试成功后，若对方是新空库，系统会自动初始化 sessions 和 turns 表结构。
                   </p>
                 </div>
               )}
@@ -1225,7 +1327,11 @@ export default function App() {
                         body: JSON.stringify({
                           db_type: dbType,
                           sqlite_path: sqlitePath,
-                          pg_url: pgUrl
+                          pg_host: pgHost,
+                          pg_port: pgPort,
+                          pg_user: pgUser,
+                          pg_password: pgPassword,
+                          pg_database: pgDatabase,
                         })
                       });
                       if (response.ok) {
@@ -1261,7 +1367,11 @@ export default function App() {
                         body: JSON.stringify({
                           db_type: dbType,
                           sqlite_path: sqlitePath,
-                          pg_url: pgUrl
+                          pg_host: pgHost,
+                          pg_port: pgPort,
+                          pg_user: pgUser,
+                          pg_password: pgPassword,
+                          pg_database: pgDatabase,
                         })
                       });
                       if (response.ok) {

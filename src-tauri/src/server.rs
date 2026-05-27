@@ -180,11 +180,79 @@ pub async fn serve_static_file_fallback(uri: Uri) -> impl IntoResponse {
 
 // ==================== 数据库数据源配置接口 ====================
 
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, serde::Serialize)]
 pub struct ConfigReq {
     pub db_type: String,
     pub sqlite_path: Option<String>,
-    pub pg_url: Option<String>,
+    pub pg_host: Option<String>,
+    pub pg_port: Option<String>,
+    pub pg_user: Option<String>,
+    pub pg_password: Option<String>,
+    pub pg_database: Option<String>,
+}
+
+pub async fn handle_config_get() -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        // 强制加载项目目录下的 .env
+        let _ = dotenvy::dotenv();
+
+        let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
+        let sqlite_path = std::env::var("DB_SQLITE_PATH").ok();
+        
+        let mut pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();
+        let mut pg_port = std::env::var("DB_PG_PORT").unwrap_or_default();
+        let mut pg_user = std::env::var("DB_PG_USER").unwrap_or_default();
+        let mut pg_password = std::env::var("DB_PG_PASSWORD").unwrap_or_default();
+        let mut pg_database = std::env::var("DB_PG_DATABASE").unwrap_or_default();
+
+        // 向上兼容：如果拆分的属性为空，但存在 DATABASE_URL，则尝试解析并回显它
+        if pg_host.trim().is_empty() {
+            if let Ok(db_url) = std::env::var("DATABASE_URL") {
+                if let Some((h, p, u, pwd, db)) = crate::db_adapter::parse_pg_url(&db_url) {
+                    pg_host = h;
+                    pg_port = p;
+                    pg_user = u;
+                    pg_password = pwd;
+                    pg_database = db;
+                }
+            }
+        }
+
+        let resp = ConfigReq {
+            db_type,
+            sqlite_path,
+            pg_host: Some(pg_host),
+            pg_port: Some(pg_port),
+            pg_user: Some(pg_user),
+            pg_password: Some(pg_password),
+            pg_database: Some(pg_database),
+        };
+
+        Ok::<ConfigReq, String>(resp)
+    }).await;
+
+    match result {
+        Ok(Ok(data)) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body_json_helper(&data)).unwrap()))
+                .unwrap()
+        }
+        _ => {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .body(Body::from("Internal Server Error"))
+                .unwrap()
+        }
+    }
+}
+
+// 辅助序列化
+fn body_json_helper(data: &ConfigReq) -> serde_json::Value {
+    serde_json::to_value(data).unwrap_or(serde_json::Value::Null)
 }
 
 pub async fn handle_config_test(
@@ -192,10 +260,21 @@ pub async fn handle_config_test(
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
         if req.db_type.to_lowercase() == "postgres" {
-            let url = req.pg_url.unwrap_or_default();
-            if url.trim().is_empty() {
-                return Err("PostgreSQL 连接串不能为空".to_string());
+            let host = req.pg_host.unwrap_or_default();
+            let port = req.pg_port.unwrap_or_default();
+            let user = req.pg_user.unwrap_or_default();
+            let password = req.pg_password.unwrap_or_default();
+            let database = req.pg_database.unwrap_or_default();
+
+            if host.trim().is_empty() {
+                return Err("PostgreSQL 主机 (Host) 不能为空".to_string());
             }
+
+            let url = format!(
+                "postgresql://{}:{}@{}:{}/{}",
+                user, password, host, port, database
+            );
+
             let client = postgres::Client::connect(&url, postgres::NoTls)
                 .map_err(|e| format!("PostgreSQL 连接失败: {}", e))?;
             
@@ -294,9 +373,32 @@ pub async fn handle_config_save(
         } else {
             set_env_var(&mut lines, "DB_SQLITE_PATH", "");
         }
-        if let Some(url) = &req.pg_url {
-            set_env_var(&mut lines, "DATABASE_URL", url);
+
+        let host = req.pg_host.clone().unwrap_or_default();
+        let port = req.pg_port.clone().unwrap_or_default();
+        let user = req.pg_user.clone().unwrap_or_default();
+        let password = req.pg_password.clone().unwrap_or_default();
+        let database = req.pg_database.clone().unwrap_or_default();
+
+        if req.db_type.to_lowercase() == "postgres" {
+            set_env_var(&mut lines, "DB_PG_HOST", &host);
+            set_env_var(&mut lines, "DB_PG_PORT", &port);
+            set_env_var(&mut lines, "DB_PG_USER", &user);
+            set_env_var(&mut lines, "DB_PG_PASSWORD", &password);
+            set_env_var(&mut lines, "DB_PG_DATABASE", &database);
+            
+            let url = format!(
+                "postgresql://{}:{}@{}:{}/{}",
+                user, password, host, port, database
+            );
+            set_env_var(&mut lines, "DATABASE_URL", &url);
         } else {
+            // 清空 postgres 相关变量以保一致性
+            set_env_var(&mut lines, "DB_PG_HOST", "");
+            set_env_var(&mut lines, "DB_PG_PORT", "");
+            set_env_var(&mut lines, "DB_PG_USER", "");
+            set_env_var(&mut lines, "DB_PG_PASSWORD", "");
+            set_env_var(&mut lines, "DB_PG_DATABASE", "");
             set_env_var(&mut lines, "DATABASE_URL", "");
         }
 
