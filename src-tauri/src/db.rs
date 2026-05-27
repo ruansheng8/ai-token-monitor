@@ -1733,63 +1733,174 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
         status.scanned_files = 0;
     }
 
-    // 5. 开启 PG 事务，分批（每 50 个会话）镜像同步变动部分
-    let mut pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
-    let mut count = 0;
-
-    for (idx, (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx)) in sessions_to_sync.into_iter().enumerate() {
-        if let Ok(mut status) = get_scan_status().lock() {
-            status.scanned_files = idx + 1;
+    // 辅助转义函数
+    fn pg_copy_string_raw(s: &str) -> String {
+        let mut escaped = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                '\\' => escaped.push_str("\\\\"),
+                '\t' => escaped.push_str("\\t"),
+                '\n' => escaped.push_str("\\n"),
+                '\r' => escaped.push_str("\\r"),
+                _ => escaped.push(c),
+            }
         }
-        if count == 0 {
-            log_progress(&format!(
-                "正在同步数据至远程 PostgreSQL ({}/{}) ...",
-                idx, total_sessions
+        escaped
+    }
+
+    fn pg_copy_string(val: &Option<String>) -> String {
+        match val {
+            Some(s) => pg_copy_string_raw(s),
+            None => "\\N".to_string(),
+        }
+    }
+
+    let mut scanned_count = 0;
+
+    // 5. 分批（每 50 个会话）镜像同步变动部分
+    for session_chunk in sessions_to_sync.chunks(50) {
+        log_progress(&format!(
+            "正在同步数据至远程 PostgreSQL ({}/{}) ...",
+            scanned_count, total_sessions
+        ));
+
+        // 开启 PG 事务
+        let mut pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
+
+        // A. 创建临时表 (ON COMMIT DROP，事务提交时自动销毁)
+        pg_tx.execute(
+            "CREATE TEMP TABLE temp_sessions (
+                source TEXT,
+                uuid TEXT,
+                title TEXT,
+                created_at TEXT,
+                last_parsed_idx BIGINT,
+                last_mtime DOUBLE PRECISION,
+                project_path TEXT
+            ) ON COMMIT DROP",
+            &[],
+        ).map_err(|e| format!("创建临时会话表失败: {}", e))?;
+
+        pg_tx.execute(
+            "CREATE TEMP TABLE temp_turns (
+                source TEXT,
+                uuid TEXT,
+                idx BIGINT,
+                model TEXT,
+                input_tokens BIGINT,
+                cached_input_tokens BIGINT,
+                output_tokens BIGINT,
+                thinking_tokens BIGINT,
+                cost_usd DOUBLE PRECISION,
+                message_id TEXT,
+                request_id TEXT,
+                timestamp TEXT
+            ) ON COMMIT DROP",
+            &[],
+        ).map_err(|e| format!("创建临时轮次表失败: {}", e))?;
+
+        let mut session_copy_data = String::new();
+        let mut turns_copy_data = String::new();
+
+        for (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx) in session_chunk {
+            scanned_count += 1;
+            if let Ok(mut status) = get_scan_status().lock() {
+                status.scanned_files = scanned_count;
+            }
+
+            // 构造 sessions COPY 行
+            session_copy_data.push_str(&format!(
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                pg_copy_string_raw(source),
+                pg_copy_string_raw(uuid),
+                pg_copy_string(title),
+                pg_copy_string(created_at),
+                last_parsed_idx,
+                last_mtime,
+                pg_copy_string(project_path)
             ));
+
+            // 查询该会话的增量 turns
+            let mut sqlite_turns_stmt = sqlite_conn
+                .prepare(
+                    "SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp 
+                     FROM turns 
+                     WHERE source = ? AND uuid = ? AND idx > ?"
+                )
+                .map_err(|e| e.to_string())?;
+            let mut sqlite_turns_rows = sqlite_turns_stmt
+                .query(rusqlite::params![source, uuid, pg_last_parsed_idx])
+                .map_err(|e| e.to_string())?;
+
+            while let Some(row) = sqlite_turns_rows.next().map_err(|e| e.to_string())? {
+                let src: String = row.get(0).map_err(|e| e.to_string())?;
+                let uid: String = row.get(1).map_err(|e| e.to_string())?;
+                let idx: i64 = row.get(2).map_err(|e| e.to_string())?;
+                let model: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+                let input_tokens: i64 = row.get(4).map_err(|e| e.to_string())?;
+                let cached_input_tokens: i64 = row.get(5).map_err(|e| e.to_string())?;
+                let output_tokens: i64 = row.get(6).map_err(|e| e.to_string())?;
+                let thinking_tokens: i64 = row.get(7).map_err(|e| e.to_string())?;
+                let cost_usd: f64 = row.get(8).map_err(|e| e.to_string())?;
+                let message_id: Option<String> = row.get(9).map_err(|e| e.to_string())?;
+                let request_id: Option<String> = row.get(10).map_err(|e| e.to_string())?;
+                let timestamp: Option<String> = row.get(11).map_err(|e| e.to_string())?;
+
+                turns_copy_data.push_str(&format!(
+                    "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    pg_copy_string_raw(&src),
+                    pg_copy_string_raw(&uid),
+                    idx,
+                    pg_copy_string(&model),
+                    input_tokens,
+                    cached_input_tokens,
+                    output_tokens,
+                    thinking_tokens,
+                    cost_usd,
+                    pg_copy_string(&message_id),
+                    pg_copy_string(&request_id),
+                    pg_copy_string(&timestamp)
+                ));
+            }
         }
 
-        // A. 同步会话表状态
+        // B. 使用 COPY 流式写入临时会话表
+        if !session_copy_data.is_empty() {
+            use std::io::Write;
+            let mut writer = pg_tx.copy_in("COPY temp_sessions FROM STDIN (FORMAT text, NULL '\\N')")
+                .map_err(|e| format!("流式同步会话失败: {}", e))?;
+            writer.write_all(session_copy_data.as_bytes())
+                .map_err(|e| format!("流式写入会话数据失败: {}", e))?;
+            writer.finish().map_err(|e| format!("结束流式写入会话失败: {}", e))?;
+        }
+
+        // C. 使用 COPY 流式写入临时轮次表
+        if !turns_copy_data.is_empty() {
+            use std::io::Write;
+            let mut writer = pg_tx.copy_in("COPY temp_turns FROM STDIN (FORMAT text, NULL '\\N')")
+                .map_err(|e| format!("流式同步轮次失败: {}", e))?;
+            writer.write_all(turns_copy_data.as_bytes())
+                .map_err(|e| format!("流式写入轮次数据失败: {}", e))?;
+            writer.finish().map_err(|e| format!("结束流式写入轮次失败: {}", e))?;
+        }
+
+        // D. 批量 Merge (将临时表的数据高速同步到正式表，处理冲突)
         pg_tx.execute(
             "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path FROM temp_sessions
              ON CONFLICT (source, uuid) DO UPDATE SET
                 title = EXCLUDED.title,
                 created_at = EXCLUDED.created_at,
                 last_parsed_idx = EXCLUDED.last_parsed_idx,
                 last_mtime = EXCLUDED.last_mtime,
                 project_path = EXCLUDED.project_path",
-            &[&source, &uuid, &title, &created_at, &last_parsed_idx, &last_mtime, &project_path],
-        ).map_err(|e| format!("同步会话记录失败: {}", e))?;
+            &[],
+        ).map_err(|e| format!("批量合并会话记录失败: {}", e))?;
 
-        // B. 只查询本地 SQLite 中 idx 大于 PostgreSQL 侧已记录最大 index 的增量 turns 并同步
-        let mut sqlite_turns_stmt = sqlite_conn
-            .prepare(
-                "SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp 
-                 FROM turns 
-                 WHERE source = ? AND uuid = ? AND idx > ?"
-            )
-            .map_err(|e| e.to_string())?;
-        let mut sqlite_turns_rows = sqlite_turns_stmt
-            .query(rusqlite::params![source, uuid, pg_last_parsed_idx])
-            .map_err(|e| e.to_string())?;
-
-        while let Some(row) = sqlite_turns_rows.next().map_err(|e| e.to_string())? {
-            let src: String = row.get(0).map_err(|e| e.to_string())?;
-            let uid: String = row.get(1).map_err(|e| e.to_string())?;
-            let idx: i64 = row.get(2).map_err(|e| e.to_string())?;
-            let model: Option<String> = row.get(3).map_err(|e| e.to_string())?;
-            let input_tokens: i64 = row.get(4).map_err(|e| e.to_string())?;
-            let cached_input_tokens: i64 = row.get(5).map_err(|e| e.to_string())?;
-            let output_tokens: i64 = row.get(6).map_err(|e| e.to_string())?;
-            let thinking_tokens: i64 = row.get(7).map_err(|e| e.to_string())?;
-            let cost_usd: f64 = row.get(8).map_err(|e| e.to_string())?;
-            let message_id: Option<String> = row.get(9).map_err(|e| e.to_string())?;
-            let request_id: Option<String> = row.get(10).map_err(|e| e.to_string())?;
-            let timestamp: Option<String> = row.get(11).map_err(|e| e.to_string())?;
-
+        if !turns_copy_data.is_empty() {
             pg_tx.execute(
                 "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                 SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp FROM temp_turns
                  ON CONFLICT (source, uuid, idx) DO UPDATE SET
                     model = EXCLUDED.model,
                     input_tokens = EXCLUDED.input_tokens,
@@ -1800,19 +1911,11 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                     message_id = EXCLUDED.message_id,
                     request_id = EXCLUDED.request_id,
                     timestamp = EXCLUDED.timestamp",
-                &[&src, &uid, &idx, &model, &input_tokens, &cached_input_tokens, &output_tokens, &thinking_tokens, &cost_usd, &message_id, &request_id, &timestamp],
-            ).map_err(|e| format!("同步轮次记录失败: {}", e))?;
+                &[],
+            ).map_err(|e| format!("批量合并轮次记录失败: {}", e))?;
         }
 
-        count += 1;
-        if count >= 50 {
-            pg_tx.commit().map_err(|e| format!("提交 PostgreSQL 同步事务失败: {}", e))?;
-            pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
-            count = 0;
-        }
-    }
-
-    if count > 0 {
+        // 提交事务，自动 Drop 临时表
         pg_tx.commit().map_err(|e| format!("提交 PostgreSQL 同步事务失败: {}", e))?;
     }
 
