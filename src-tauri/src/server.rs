@@ -177,3 +177,167 @@ pub async fn serve_static_file_fallback(uri: Uri) -> impl IntoResponse {
             .unwrap(),
     }
 }
+
+// ==================== 数据库数据源配置接口 ====================
+
+#[derive(serde::Deserialize)]
+pub struct ConfigReq {
+    pub db_type: String,
+    pub sqlite_path: Option<String>,
+    pub pg_url: Option<String>,
+}
+
+pub async fn handle_config_test(
+    axum::Json(req): axum::Json<ConfigReq>,
+) -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        if req.db_type.to_lowercase() == "postgres" {
+            let url = req.pg_url.unwrap_or_default();
+            if url.trim().is_empty() {
+                return Err("PostgreSQL 连接串不能为空".to_string());
+            }
+            let client = postgres::Client::connect(&url, postgres::NoTls)
+                .map_err(|e| format!("PostgreSQL 连接失败: {}", e))?;
+            
+            let conn = crate::db_adapter::DbConn::Postgres(std::sync::Mutex::new(client));
+            crate::db_adapter::init_tables(&conn)
+                .map_err(|e| format!("表结构校验/初始化失败: {}", e))?;
+            
+            Ok("PostgreSQL 连接测试成功，且空库表结构已校验/初始化完毕！".to_string())
+        } else {
+            let path_str = req.sqlite_path.unwrap_or_default();
+            let path = if path_str.trim().is_empty() {
+                crate::db_adapter::get_default_sqlite_path()
+            } else {
+                std::path::PathBuf::from(path_str)
+            };
+
+            if let Some(parent) = path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+
+            let conn_sqlite = rusqlite::Connection::open(&path)
+                .map_err(|e| format!("SQLite 连接失败: {}", e))?;
+            
+            let conn = crate::db_adapter::DbConn::Sqlite(std::sync::Mutex::new(conn_sqlite));
+            crate::db_adapter::init_tables(&conn)
+                .map_err(|e| format!("表结构校验/初始化失败: {}", e))?;
+            
+            Ok(format!("SQLite 连接测试成功，且表结构已校验/初始化完毕！\n路径: {}", path.to_string_lossy()))
+        }
+    }).await;
+
+    match result {
+        Ok(Ok(msg)) => {
+            let body = serde_json::json!({ "success": true, "message": msg });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Ok(Err(err)) => {
+            let body = serde_json::json!({ "success": false, "message": err });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Err(e) => {
+            let body = serde_json::json!({ "success": false, "message": format!("内部线程错误: {}", e) });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+    }
+}
+
+pub async fn handle_config_save(
+    axum::Json(req): axum::Json<ConfigReq>,
+) -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let env_path = std::env::current_dir()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .join(".env");
+        
+        let mut content = String::new();
+        if env_path.exists() {
+            content = std::fs::read_to_string(&env_path).unwrap_or_default();
+        }
+
+        let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
+
+        fn set_env_var(lines: &mut Vec<String>, key: &str, val: &str) {
+            let prefix = format!("{}=", key);
+            let mut found = false;
+            for line in lines.iter_mut() {
+                if line.trim().starts_with(&prefix) {
+                    *line = format!("{}={}", key, val);
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                lines.push(format!("{}={}", key, val));
+            }
+        }
+
+        set_env_var(&mut lines, "DATABASE_TYPE", &req.db_type);
+        if let Some(path) = &req.sqlite_path {
+            set_env_var(&mut lines, "DB_SQLITE_PATH", path);
+        } else {
+            set_env_var(&mut lines, "DB_SQLITE_PATH", "");
+        }
+        if let Some(url) = &req.pg_url {
+            set_env_var(&mut lines, "DATABASE_URL", url);
+        } else {
+            set_env_var(&mut lines, "DATABASE_URL", "");
+        }
+
+        let new_content = lines.join("\n") + "\n";
+        std::fs::write(&env_path, new_content)
+            .map_err(|e| format!("写入 .env 配置文件失败: {}", e))?;
+
+        // 触发热连接池重载
+        crate::db_adapter::reset_conn_pool();
+
+        Ok::<String, String>("配置参数已成功写入 .env，且后端数据库连接已热重载生效！".to_string())
+    }).await;
+
+    match result {
+        Ok(Ok(msg)) => {
+            let body = serde_json::json!({ "success": true, "message": msg });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Ok(Err(err)) => {
+            let body = serde_json::json!({ "success": false, "message": err });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Err(e) => {
+            let body = serde_json::json!({ "success": false, "message": format!("内部线程错误: {}", e) });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+    }
+}
+

@@ -8,3 +8,4 @@ ai-token-monitor.exe
 *.log
 .DS_Store
 node_modules/
+.superpowers/brainstorm/

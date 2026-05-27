@@ -14,10 +14,32 @@ import {
   Sun,
   Moon,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  Globe,
+  ChevronDown,
+  Settings
 } from 'lucide-react';
 import { DailyTrendChart } from './components/charts/DailyTrendChart';
 import { SourceTrendChart } from './components/charts/SourceTrendChart';
+
+// 官方 SVG 图标组件
+const GeminiIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg className={className} fill="currentColor" fillRule="evenodd" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path d="M20.616 10.835a14.147 14.147 0 01-4.45-3.001 14.111 14.111 0 01-3.678-6.452.503.503 0 00-.975 0 14.134 14.134 0 01-3.679 6.452 14.155 14.155 0 01-4.45 3.001c-.65.28-1.318.505-2.002.678a.502.502 0 000 .975c.684.172 1.35.397 2.002.677a14.147 14.147 0 014.45 3.001 14.112 14.112 0 013.679 6.453.502.502 0 00.975 0c.172-.685.397-1.351.677-2.003a14.145 14.145 0 013.001-4.45 14.113 14.113 0 016.453-3.678.503.503 0 000-.975 13.245 13.245 0 01-2.003-.678z"></path>
+  </svg>
+);
+
+const ClaudeIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg className={className} fill="currentColor" fillRule="evenodd" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path d="M4.709 15.955l4.72-2.647.08-.23-.08-.128H9.2l-.79-.048-2.698-.073-2.339-.097-2.266-.122-.571-.121L0 11.784l.055-.352.48-.321.686.06 1.52.103 2.278.158 1.652.097 2.449.255h.389l.055-.157-.134-.098-.103-.097-2.358-1.596-2.552-1.688-1.336-.972-.724-.491-.364-.462-.158-1.008.656-.722.881.06.225.061.893.686 1.908 1.476 2.491 1.833.365.304.145-.103.019-.073-.164-.274-1.355-2.446-1.446-2.49-.644-1.032-.17-.619a2.97 2.97 0 01-.104-.729L6.283.134 6.696 0l.996.134.42.364.62 1.414 1.002 2.229 1.555 3.03.456.898.243.832.091.255h.158V9.01l.128-1.706.237-2.095.23-2.695.08-.76.376-.91.747-.492.584.28.48.685-.067.444-.286 1.851-.559 2.903-.364 1.942h.212l.243-.242.985-1.306 1.652-2.064.73-.82.85-.904.547-.431h1.033l.76 1.129-.34 1.166-1.064 1.347-.881 1.142-1.264 1.7-.79 1.36.073.11.188-.02 2.856-.606 1.543-.28 1.841-.315.833.388.091.395-.328.807-1.969.486-2.309.462-3.439.813-.042.03.049.061 1.549.146.662.036h1.622l3.02.225.79.522.474.638-.079.485-1.215.62-1.64-.389-3.829-.91-1.312-.329h-.182v.11l1.093 1.068 2.006 1.81 2.509 2.33.127.578-.322.455-.34-.049-2.205-1.657-.851-.747-1.926-1.62h-.128v.17l.444.649 2.345 3.521.122 1.08-.17.353-.608.213-.668-.122-1.374-1.925-1.415-2.167-1.143-1.943-.14.08-.674 7.254-.316.37-.729.28-.607-.461-.322-.747.322-1.476.389-1.924.315-1.53.286-1.9.17-.632-.012-.042-.14.018-1.434 1.967-2.18 2.945-1.726 1.845-.414.164-.717-.37.067-.662.401-.589 2.388-3.036 1.44-1.882.93-1.086-.006-.158h-.055L4.132 18.56l-1.13.146-.487-.456.061-.746.231-.243 1.908-1.312-.006.006z"></path>
+  </svg>
+);
+
+const OpenAIIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg className={className} fill="currentColor" fillRule="evenodd" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+    <path d="M9.205 8.658v-2.26c0-.19.072-.333.238-.428l4.543-2.616c.619-.357 1.356-.523 2.117-.523 2.854 0 4.662 2.212 4.662 4.566 0 .167 0 .357-.024.547l-4.71-2.759a.797.797 0 00-.856 0l-5.97 3.473zm10.609 8.8V12.06c0-.333-.143-.57-.429-.737l-5.97-3.473 1.95-1.118a.433.433 0 01.476 0l4.543 2.617c1.309.76 2.189 2.378 2.189 3.948 0 1.808-1.07 3.473-2.76 4.163zM7.802 12.703l-1.95-1.142c-.167-.095-.239-.238-.239-.428V5.899c0-2.545 1.95-4.472 4.591-4.472 1 0 1.927.333 2.712.928L8.23 5.067c-.285.166-.428.404-.428.737v6.898zM12 15.128l-2.795-1.57v-3.33L12 8.658l2.795 1.57v3.33L12 15.128zm1.796 7.23c-1 0-1.927-.332-2.712-.927l4.686-2.712c.285-.166.428-.404.428-.737v-6.898l1.974 1.142c.167.095.238.238.238.428v5.233c0 2.545-1.974 4.472-4.614 4.472zm-5.637-5.303l-4.544-2.617c-1.308-.761-2.188-2.378-2.188-3.948A4.482 4.482 0 014.21 6.327v5.423c0 .333.143.571.428.738l5.947 3.449-1.95 1.118a.432.432 0 01-.476 0zm-.262 3.9c-2.688 0-4.662-2.021-4.662-4.519 0-.19.024-.38.047-.57l4.686 2.71c.286.167.571.167.856 0l5.97-3.448v2.26c0 .19-.07.333-.237.428l-4.543 2.616c-.619.357-1.356.523-2.117.523zm5.899 2.83a5.947 5.947 0 005.827-4.756C22.287 18.339 24 15.84 24 13.296c0-1.665-.713-3.282-1.998-4.448.119-.5.19-.999.19-1.498 0-3.401-2.759-5.947-5.946-5.947-.642 0-1.26.095-1.88.31A5.962 5.962 0 0010.205 0a5.947 5.947 0 00-5.827 4.757C1.713 5.447 0 7.945 0 10.49c0 1.666.713 3.283 1.998 4.448-.119.5-.19 1-.19 1.499 0 3.401 2.759 5.946 5.946 5.946.642 0 1.26-.095 1.88-.309a5.96 5.96 0 004.162 1.713z"></path>
+  </svg>
+);
 
 // 类型定义
 interface Totals {
@@ -88,6 +110,44 @@ interface AggregatedMetrics {
   source_trends: SourceTrendItem[];
 }
 
+// 获取指定时间区间的起止日期（格式：YYYY-MM-DD）
+const getDateBounds = (range: 'all' | 'today' | 'week' | '30days' | 'month' | 'quarter' | 'custom') => {
+  const now = new Date();
+  const formatDateStr = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  switch (range) {
+    case 'today': {
+      const dStr = formatDateStr(now);
+      return { start: dStr, end: dStr };
+    }
+    case 'week': {
+      const past = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+      return { start: formatDateStr(past), end: formatDateStr(now) };
+    }
+    case '30days': {
+      const past = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
+      return { start: formatDateStr(past), end: formatDateStr(now) };
+    }
+    case 'month': {
+      const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { start: formatDateStr(firstDay), end: formatDateStr(now) };
+    }
+    case 'quarter': {
+      const currentMonth = now.getMonth();
+      const quarterStartMonth = Math.floor(currentMonth / 3) * 3;
+      const firstDay = new Date(now.getFullYear(), quarterStartMonth, 1);
+      return { start: formatDateStr(firstDay), end: formatDateStr(now) };
+    }
+    default:
+      return { start: '', end: '' };
+  }
+};
+
 export default function App() {
   const [data, setData] = useState<AggregatedMetrics | null>(null);
   const [loading, setLoading] = useState(false);
@@ -100,43 +160,21 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [source, setSource] = useState<'all' | 'antigravity' | 'claude_code' | 'codex'>('all');
-  const [timeRange, setTimeRange] = useState<'all' | 'today' | 'week' | 'month' | 'quarter' | 'custom'>('all');
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [isSourceDropdownOpen, setIsSourceDropdownOpen] = useState(false);
+  const [timeRange, setTimeRange] = useState<'all' | 'today' | 'week' | '30days' | 'month' | 'quarter' | 'custom'>('30days');
+  const [startDate, setStartDate] = useState<string>(getDateBounds('30days').start);
+  const [endDate, setEndDate] = useState<string>(getDateBounds('30days').end);
   const [chartDimension, setChartDimension] = useState<'type' | 'source'>('type');
 
-  const getDateBounds = (range: 'all' | 'today' | 'week' | 'month' | 'quarter' | 'custom') => {
-    const now = new Date();
-    const formatDateStr = (d: Date) => {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      return `${y}-${m}-${day}`;
-    };
+  // 数据库数据源配置状态
+  const [isConfigOpen, setIsConfigOpen] = useState(false);
+  const [dbType, setDbType] = useState<'sqlite' | 'postgres'>('sqlite');
+  const [sqlitePath, setSqlitePath] = useState('');
+  const [pgUrl, setPgUrl] = useState('');
+  const [testLoading, setTestLoading] = useState(false);
+  const [saveLoading, setSaveLoading] = useState(false);
+  const [configMessage, setConfigMessage] = useState<{ success: boolean; text: string } | null>(null);
 
-    switch (range) {
-      case 'today': {
-        const dStr = formatDateStr(now);
-        return { start: dStr, end: dStr };
-      }
-      case 'week': {
-        const past = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
-        return { start: formatDateStr(past), end: formatDateStr(now) };
-      }
-      case 'month': {
-        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
-        return { start: formatDateStr(firstDay), end: formatDateStr(now) };
-      }
-      case 'quarter': {
-        const currentMonth = now.getMonth();
-        const quarterStartMonth = Math.floor(currentMonth / 3) * 3;
-        const firstDay = new Date(now.getFullYear(), quarterStartMonth, 1);
-        return { start: formatDateStr(firstDay), end: formatDateStr(now) };
-      }
-      default:
-        return { start: '', end: '' };
-    }
-  };
 
   useEffect(() => {
     if (timeRange !== 'custom') {
@@ -412,17 +450,68 @@ export default function App() {
             </div>
 
             {/* 数据源选择器 */}
-            <select
-              value={source}
-              onChange={(e: any) => setSource(e.target.value)}
-              className="bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-3 py-2 text-xs font-semibold text-text-primary outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer h-10"
+            <div className="relative">
+              <button
+                onClick={() => setIsSourceDropdownOpen(!isSourceDropdownOpen)}
+                className="flex items-center gap-2 bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-3.5 py-2 text-xs font-semibold text-text-primary outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer h-10 min-w-[170px] justify-between shadow-sm select-none"
+              >
+                <div className="flex items-center gap-2">
+                  {source === 'all' && <Globe className="w-4 h-4 text-neon-cyan" />}
+                  {source === 'antigravity' && <GeminiIcon className="w-4 h-4 text-[#8b5cf6]" />}
+                  {source === 'claude_code' && <ClaudeIcon className="w-4 h-4 text-[#d97757]" />}
+                  {source === 'codex' && <OpenAIIcon className="w-4 h-4 text-[#10a37f]" />}
+                  <span>
+                    {source === 'all' && '全部来源 (All)'}
+                    {source === 'antigravity' && 'Antigravity'}
+                    {source === 'claude_code' && 'Claude Code'}
+                    {source === 'codex' && 'Codex CLI'}
+                  </span>
+                </div>
+                <ChevronDown className={`w-3.5 h-3.5 text-text-secondary transition-transform duration-300 ${isSourceDropdownOpen ? 'rotate-180' : ''}`} />
+              </button>
+
+              {isSourceDropdownOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setIsSourceDropdownOpen(false)}
+                  ></div>
+                  <div className="absolute right-0 mt-2 w-48 bg-bg-secondary/95 dark:bg-[#0f192b]/95 border border-card-border rounded-xl shadow-[0_10px_35px_rgba(0,0,0,0.35)] backdrop-blur-md z-50 py-1.5 flex flex-col gap-0.5 animate-fade-in">
+                    {[
+                      { value: 'all', label: '全部来源 (All)', icon: <Globe className="w-3.5 h-3.5 text-neon-cyan" /> },
+                      { value: 'antigravity', label: 'Antigravity', icon: <GeminiIcon className="w-3.5 h-3.5 text-[#8b5cf6]" /> },
+                      { value: 'claude_code', label: 'Claude Code', icon: <ClaudeIcon className="w-3.5 h-3.5 text-[#d97757]" /> },
+                      { value: 'codex', label: 'Codex CLI', icon: <OpenAIIcon className="w-3.5 h-3.5 text-[#10a37f]" /> },
+                    ].map((opt) => (
+                      <button
+                        key={opt.value}
+                        onClick={() => {
+                          setSource(opt.value as any);
+                          setIsSourceDropdownOpen(false);
+                        }}
+                        className={`flex items-center gap-2.5 px-4 py-2.5 text-xs font-semibold text-left transition-all duration-200 cursor-pointer ${
+                          source === opt.value
+                            ? 'bg-gradient-to-r from-neon-cyan/15 to-neon-purple/10 text-neon-cyan border-l-2 border-neon-cyan'
+                            : 'text-text-secondary hover:text-text-primary hover:bg-white/5 border-l-2 border-transparent'
+                        }`}
+                      >
+                        {opt.icon}
+                        <span>{opt.label}</span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+            {/* 数据库数据源配置按钮 */}
+            <button
+              onClick={() => setIsConfigOpen(true)}
+              className="flex items-center justify-center w-10 h-10 rounded-xl bg-bg-secondary/40 dark:bg-white/5 border border-card-border hover:border-neon-cyan/40 hover:scale-105 active:scale-100 transition-all duration-300 cursor-pointer text-text-secondary hover:text-neon-cyan"
+              title="系统数据源配置"
             >
-              <option value="all">🌐 全部来源 (All)</option>
-              <option value="antigravity">🤖 Antigravity (Gemini)</option>
-              <option value="claude_code">🎯 Claude Code</option>
-              <option value="codex">🔮 Codex CLI</option>
-            </select>
-            
+              <Settings className="w-5 h-5 hover:rotate-45 transition-transform duration-300" />
+            </button>
+
             {/* 主题切换按钮 */}
             <button
               onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
@@ -453,6 +542,7 @@ export default function App() {
               { key: 'all', label: '全部时间' },
               { key: 'today', label: '今日' },
               { key: 'week', label: '最近7天' },
+              { key: '30days', label: '最近30天' },
               { key: 'month', label: '本月' },
               { key: 'quarter', label: '本季度' },
               { key: 'custom', label: '自定义' },
@@ -642,7 +732,7 @@ export default function App() {
         <section className="chart-section glass-card p-6">
           <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-3 mb-5 border-b border-card-border gap-3">
             <h2 className="text-base font-semibold text-text-primary">
-              {source === 'all' && chartDimension === 'source' ? '各引擎每日用量对比走势 (Token 曲线)' : '每日用量走势 (Token 堆叠柱状图)'}
+              {source === 'all' && chartDimension === 'source' ? '各引擎每日用量对比走势 (Token 堆叠柱状图)' : '每日用量走势 (Token 堆叠柱状图)'}
             </h2>
             
             {source === 'all' && (
@@ -839,17 +929,20 @@ export default function App() {
                         </td>
                         <td className="py-3">
                           {s.source === 'antigravity' && (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-neon-purple/15 border border-neon-purple/35 text-neon-purple leading-none">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-neon-purple/15 border border-neon-purple/35 text-neon-purple leading-none">
+                              <GeminiIcon className="w-3 h-3 text-[#8b5cf6]" />
                               Antigravity
                             </span>
                           )}
                           {s.source === 'claude_code' && (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-500/15 border border-orange-500/35 text-orange-500 leading-none">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-500/15 border border-orange-500/35 text-orange-500 leading-none">
+                              <ClaudeIcon className="w-3 h-3 text-[#d97757]" />
                               Claude Code
                             </span>
                           )}
                           {s.source === 'codex' && (
-                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">
+                              <OpenAIIcon className="w-3 h-3 text-[#10a37f]" />
                               Codex CLI
                             </span>
                           )}
@@ -1014,6 +1107,194 @@ export default function App() {
         <div className="fixed inset-0 bg-bg-app/85 backdrop-blur-md z-[9999] flex flex-col items-center justify-center gap-5">
           <div className="w-[50px] h-[50px] border-4 border-neon-cyan/10 rounded-full border-t-neon-cyan border-b-neon-purple animate-spin"></div>
           <p className="text-sm font-semibold text-text-secondary tracking-wide">正在拉取大盘缓存指标数据...</p>
+        </div>
+      )}
+
+      {/* 数据库数据源配置弹窗 */}
+      {isConfigOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="relative w-full max-w-lg rounded-3xl border border-card-border bg-bg-secondary/95 dark:bg-[#0f192b]/95 backdrop-blur-xl p-6 text-text-primary shadow-2xl overflow-hidden shadow-neon-cyan/5">
+            {/* 装饰性背景光效 */}
+            <div className="absolute -top-24 -left-24 w-48 h-48 bg-neon-cyan/20 rounded-full blur-3xl pointer-events-none"></div>
+            <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-neon-purple/20 rounded-full blur-3xl pointer-events-none"></div>
+
+            <div className="flex justify-between items-center pb-4 border-b border-card-border mb-5 relative z-10">
+              <h2 className="text-lg font-bold flex items-center gap-2">
+                <Settings className="w-5 h-5 text-neon-cyan animate-spin-slow" />
+                <span className="bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent">系统数据源配置</span>
+              </h2>
+              <button
+                onClick={() => {
+                  setIsConfigOpen(false);
+                  setConfigMessage(null);
+                }}
+                className="w-8 h-8 rounded-full flex items-center justify-center bg-bg-secondary/60 dark:bg-white/5 hover:bg-bg-secondary dark:hover:bg-white/10 text-text-secondary hover:text-text-primary transition-all cursor-pointer border border-card-border"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="space-y-5 relative z-10">
+              <div className="flex flex-col gap-2">
+                <label className="text-xs font-semibold text-text-secondary">🔌 数据库类型 (Database Engine)</label>
+                <div className="grid grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDbType('sqlite');
+                      setConfigMessage(null);
+                    }}
+                    className={`py-3 rounded-xl border text-xs font-bold transition-all duration-300 cursor-pointer text-center ${
+                      dbType === 'sqlite'
+                        ? 'bg-neon-cyan/15 border-neon-cyan text-neon-cyan shadow-[0_0_10px_rgba(6,182,212,0.15)]'
+                        : 'bg-bg-secondary/40 dark:bg-white/3 border border-card-border text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 hover:bg-bg-secondary/80'
+                    }`}
+                  >
+                    SQLite (本地嵌入式)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDbType('postgres');
+                      setConfigMessage(null);
+                    }}
+                    className={`py-3 rounded-xl border text-xs font-bold transition-all duration-300 cursor-pointer text-center ${
+                      dbType === 'postgres'
+                        ? 'bg-neon-purple/15 border-neon-purple text-neon-purple shadow-[0_0_10px_rgba(168,85,247,0.15)]'
+                        : 'bg-bg-secondary/40 dark:bg-white/3 border border-card-border text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 hover:bg-bg-secondary/80'
+                    }`}
+                  >
+                    PostgreSQL (远程数据库)
+                  </button>
+                </div>
+              </div>
+
+              {dbType === 'sqlite' ? (
+                <div className="flex flex-col gap-2 animate-fade-in">
+                  <label className="text-xs font-semibold text-text-secondary">📂 自定义数据库物理路径</label>
+                  <input
+                    type="text"
+                    value={sqlitePath}
+                    onChange={(e) => setSqlitePath(e.target.value)}
+                    placeholder="请输入绝对路径，例如 D:\data\stats.db"
+                    className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-3 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
+                  />
+                  <p className="text-[10px] text-text-muted leading-relaxed">
+                    * 默认路径：<code className="bg-bg-secondary dark:bg-black/30 px-1.5 py-0.5 rounded text-neon-cyan font-mono">USERPROFILE\.ai_token_monitor\token_stats.db</code>。如果留空或使用默认位置，系统会自动管理。若修改为新路径，系统将自动在该目录下创建表。
+                  </p>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-2 animate-fade-in">
+                  <label className="text-xs font-semibold text-text-secondary">🔗 统一连接串 (DATABASE_URL)</label>
+                  <input
+                    type="text"
+                    value={pgUrl}
+                    onChange={(e) => setPgUrl(e.target.value)}
+                    placeholder="postgresql://your_username:your_password@host:5432/token_monitor"
+                    className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-3 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                  />
+                  <p className="text-[10px] text-text-muted leading-relaxed">
+                    * 示例格式：<span className="font-mono text-neon-purple">postgresql://user:password@host:port/dbname</span>。连接测试成功后，若对方是新空库，系统会自动初始化 sessions 和 turns 表结构。
+                  </p>
+                </div>
+              )}
+
+              {configMessage && (
+                <div
+                  className={`p-3 rounded-xl border text-xs leading-relaxed flex gap-2 items-start animate-fade-in ${
+                    configMessage.success
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                  }`}
+                >
+                  <span className="text-sm">{configMessage.success ? '✅' : '❌'}</span>
+                  <div className="whitespace-pre-wrap font-medium">{configMessage.text}</div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 pt-3">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setTestLoading(true);
+                    setConfigMessage(null);
+                    try {
+                      const response = await fetch('/api/config/test', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          db_type: dbType,
+                          sqlite_path: sqlitePath,
+                          pg_url: pgUrl
+                        })
+                      });
+                      if (response.ok) {
+                        const res = await response.json();
+                        setConfigMessage({ success: res.success, text: res.message });
+                      } else {
+                        setConfigMessage({ success: false, text: '服务器返回错误，连接测试失败。' });
+                      }
+                    } catch (e: any) {
+                      setConfigMessage({ success: false, text: `网络错误：${e.message}` });
+                    } finally {
+                      setTestLoading(false);
+                    }
+                  }}
+                  disabled={testLoading || saveLoading}
+                  className="py-3 rounded-xl bg-bg-secondary/40 dark:bg-white/5 border border-card-border text-xs font-bold text-text-primary hover:bg-bg-secondary/80 hover:border-neon-cyan/40 hover:text-neon-cyan transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
+                >
+                  {testLoading ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <span>⚡ 一键测试连接</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    setSaveLoading(true);
+                    setConfigMessage(null);
+                    try {
+                      const response = await fetch('/api/config/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          db_type: dbType,
+                          sqlite_path: sqlitePath,
+                          pg_url: pgUrl
+                        })
+                      });
+                      if (response.ok) {
+                        const res = await response.json();
+                        if (res.success) {
+                          alert(res.message);
+                          setIsConfigOpen(false);
+                          // 成功保存后，立即拉取新库看板数据，完成免重启即时切换！
+                          fetchData(source, startDate, endDate);
+                        } else {
+                          setConfigMessage({ success: false, text: res.message });
+                        }
+                      } else {
+                        setConfigMessage({ success: false, text: '服务器保存失败。' });
+                      }
+                    } catch (e: any) {
+                      setConfigMessage({ success: false, text: `网络保存错误：${e.message}` });
+                    } finally {
+                      setSaveLoading(false);
+                    }
+                  }}
+                  disabled={testLoading || saveLoading}
+                  className="py-3 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple hover:shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105 text-xs font-bold text-white transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
+                >
+                  {saveLoading ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <span>💾 保存并应用配置</span>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
         </div>
       )}
     </div>

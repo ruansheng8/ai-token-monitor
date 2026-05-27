@@ -333,6 +333,64 @@ pub fn get_codex_sessions_dir() -> PathBuf {
         .join("sessions")
 }
 
+pub fn get_codex_config_model() -> String {
+    let config_path = Path::new(&get_user_profile_dir())
+        .join(".codex")
+        .join("config.toml");
+    if config_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(config_path) {
+            for line in content.lines() {
+                let trimmed = line.trim();
+                if trimmed.starts_with("model ") || trimmed.starts_with("model=") {
+                    let parts: Vec<&str> = trimmed.split('=').collect();
+                    if parts.len() >= 2 {
+                        let val = parts[1].trim().trim_matches('"').trim_matches('\'').trim();
+                        if !val.is_empty() {
+                            return val.to_string();
+                        }
+                    }
+                }
+            }
+        }
+    }
+    "gpt-5".to_string()
+}
+
+fn extract_codex_tokens_and_model(val: &serde_json::Value, default_model: &str) -> Option<(i64, i64, i64, i64, String)> {
+    // 1. Try real Codex format
+    if val.get("type").and_then(|t| t.as_str()) == Some("event_msg") {
+        if let Some(payload) = val.get("payload") {
+            if payload.get("type").and_then(|t| t.as_str()) == Some("token_count") {
+                if let Some(info) = payload.get("info") {
+                    if let Some(last_usage) = info.get("last_token_usage") {
+                        let input = last_usage.get("input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let cached = last_usage.get("cached_input_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let output = last_usage.get("output_tokens").and_then(|v| v.as_i64()).unwrap_or(0);
+                        let thinking = last_usage.get("reasoning_output_tokens")
+                            .or_else(|| last_usage.get("thinking_tokens"))
+                            .and_then(|v| v.as_i64()).unwrap_or(0);
+                        
+                        return Some((input, cached, output, thinking, default_model.to_string()));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. Fallback to Claude format for backwards compatibility/existing tests
+    let (input, _cache_creation, cache_read, output) = extract_claude_tokens(val);
+    if input > 0 || output > 0 {
+        let model = extract_claude_model(val);
+        let model_name = if model == "unknown" { default_model.to_string() } else { model };
+        let thinking = val.get("thinking_tokens")
+            .or_else(|| val.get("thinking"))
+            .and_then(|v| v.as_i64()).unwrap_or(0);
+        return Some((input, cache_read, output, thinking, model_name));
+    }
+
+    None
+}
+
 fn find_jsonl_files(dir: &Path, files: &mut Vec<PathBuf>) {
     if let Ok(entries) = std::fs::read_dir(dir) {
         for entry in entries.flatten() {
@@ -611,6 +669,8 @@ pub fn sync_codex(
         return Ok(());
     }
 
+    let default_model = get_codex_config_model();
+
     let mut jsonl_files = Vec::new();
     find_jsonl_files(&codex_dir, &mut jsonl_files);
 
@@ -673,14 +733,7 @@ pub fn sync_codex(
                     }
 
                     if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
-                        let (input, _cache_creation, cache_read, output) = extract_claude_tokens(&val);
-                        let thinking = val.get("thinking_tokens")
-                            .or_else(|| val.get("thinking"))
-                            .and_then(|v| v.as_i64())
-                            .unwrap_or(0);
-
-                        if input > 0 || output > 0 {
-                            let model = extract_claude_model(&val);
+                        if let Some((input, cache_read, output, thinking, model)) = extract_codex_tokens_and_model(&val, &default_model) {
                             let timestamp = extract_claude_timestamp(&val);
                             let (message_id, request_id) = extract_claude_ids(&val);
                             let cost = estimate_cost(&model, input, cache_read, output);
@@ -919,6 +972,24 @@ where
         // 写入增量数据并更新修改时间
         let tx = conn_cache.transaction()?;
         {
+            if is_new_session || existing_title.starts_with("Unknown Session") {
+                let (title, created_at) = extract_convo_info(&uuid, &db_path);
+                tx.execute(
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime) VALUES ('antigravity', ?, ?, ?, ?, ?)
+                     ON CONFLICT(source, uuid) DO UPDATE SET
+                        title = excluded.title,
+                        created_at = excluded.created_at,
+                        last_parsed_idx = excluded.last_parsed_idx,
+                        last_mtime = excluded.last_mtime",
+                    rusqlite::params![uuid, title, created_at, max_idx_in_db, mtime],
+                )?;
+            } else {
+                tx.execute(
+                    "UPDATE sessions SET last_parsed_idx = ?, last_mtime = ? WHERE source = 'antigravity' AND uuid = ?",
+                    rusqlite::params![max_idx_in_db, mtime, uuid],
+                )?;
+            }
+
             for turn in &new_turns {
                 let cost = estimate_cost(&turn.2, turn.3 + turn.4, turn.4, turn.5);
                 tx.execute(
@@ -937,24 +1008,6 @@ where
                     ],
                 )?;
             }
-
-            if is_new_session || existing_title.starts_with("Unknown Session") {
-                let (title, created_at) = extract_convo_info(&uuid, &db_path);
-                tx.execute(
-                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime) VALUES ('antigravity', ?, ?, ?, ?, ?)
-                     ON CONFLICT(source, uuid) DO UPDATE SET
-                        title = excluded.title,
-                        created_at = excluded.created_at,
-                        last_parsed_idx = excluded.last_parsed_idx,
-                        last_mtime = excluded.last_mtime",
-                    rusqlite::params![uuid, title, created_at, max_idx_in_db, mtime],
-                )?;
-            } else {
-                tx.execute(
-                    "UPDATE sessions SET last_parsed_idx = ?, last_mtime = ? WHERE source = 'antigravity' AND uuid = ?",
-                    rusqlite::params![max_idx_in_db, mtime, uuid],
-                )?;
-            }
         }
         tx.commit()?;
         progress_cb(i + 1, total_files);
@@ -965,6 +1018,9 @@ where
 
     // E. 增量同步 Codex 数据
     let _ = sync_codex(&mut conn_cache, db_files_len + claude_files.len(), total_files, &progress_cb);
+
+    // F. 如果配置了 PostgreSQL 模式，自动将本地 SQLite 增量好的最新数据一键同步至 PostgreSQL
+    let _ = sync_local_to_postgres();
 
     Ok(())
 }
@@ -1051,8 +1107,16 @@ pub fn get_aggregated_metrics_from_cache(
     start_date: Option<&str>,
     end_date: Option<&str>,
 ) -> Result<AggregatedMetrics, rusqlite::Error> {
+    let _ = dotenvy::dotenv();
+    let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
+    if db_type.to_lowercase() == "postgres" {
+        return get_pg_aggregated_metrics(source_filter, start_date, end_date)
+            .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))));
+    }
+
     let db_path = get_db_cache_path();
     let conn = rusqlite::Connection::open(&db_path)?;
+
 
     // 构造动态 SQL WHERE 子句与参数绑定
     let mut conditions = Vec::new();
@@ -1533,17 +1597,423 @@ mod tests {
             "thinking_tokens": 0
         });
         writeln!(file_codex, "{}", codex_line.to_string()).unwrap();
+
+        let codex_line_real = serde_json::json!({
+            "timestamp": "2026-05-27T11:05:00.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "last_token_usage": {
+                        "input_tokens": 600,
+                        "cached_input_tokens": 80,
+                        "output_tokens": 400,
+                        "reasoning_output_tokens": 40
+                    }
+                }
+            }
+        });
+        writeln!(file_codex, "{}", codex_line_real.to_string()).unwrap();
         drop(file_codex);
 
         sync_codex(&mut conn, 0, 1, &|_, _| {}).unwrap();
 
         let metrics_all_3 = get_aggregated_metrics_from_cache(None, None, None).unwrap();
         assert_eq!(metrics_all_3.totals.total_sessions, 2);
-        assert_eq!(metrics_all_3.totals.total_input, 800);
-        assert_eq!(metrics_all_3.totals.total_output, 450);
+        assert_eq!(metrics_all_3.totals.total_input, 1400);
+        assert_eq!(metrics_all_3.totals.total_output, 850);
+        assert_eq!(metrics_all_3.totals.total_cached, 160);
 
         drop(conn);
         let _ = fs::remove_dir_all(&temp_path);
     }
 }
+
+// ==================== PostgreSQL 同步与查询路由代理模块 ====================
+
+pub fn sync_local_to_postgres() -> Result<(), String> {
+    let _ = dotenvy::dotenv();
+    let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
+    if db_type.to_lowercase() != "postgres" {
+        return Ok(());
+    }
+
+    println!("检测到远程 PostgreSQL 模式，正在触发增量同步...");
+    let db_url = std::env::var("DATABASE_URL").map_err(|e| e.to_string())?;
+    let mut pg_client = postgres::Client::connect(&db_url, postgres::NoTls).map_err(|e| e.to_string())?;
+
+    let cache_path = get_db_cache_path();
+    let sqlite_conn = rusqlite::Connection::open(&cache_path).map_err(|e| e.to_string())?;
+
+    // 1. 同步 sessions 表
+    let mut stmt = sqlite_conn.prepare("SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path FROM sessions").map_err(|e| e.to_string())?;
+    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+    
+    let mut pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let source: String = row.get(0).map_err(|e| e.to_string())?;
+        let uuid: String = row.get(1).map_err(|e| e.to_string())?;
+        let title: Option<String> = row.get(2).map_err(|e| e.to_string())?;
+        let created_at: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+        let last_parsed_idx: i64 = row.get(4).map_err(|e| e.to_string())?;
+        let last_mtime: f64 = row.get(5).map_err(|e| e.to_string())?;
+        let project_path: Option<String> = row.get(6).map_err(|e| e.to_string())?;
+
+        pg_tx.execute(
+            "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
+             ON CONFLICT (source, uuid) DO UPDATE SET
+                title = EXCLUDED.title,
+                created_at = EXCLUDED.created_at,
+                last_parsed_idx = EXCLUDED.last_parsed_idx,
+                last_mtime = EXCLUDED.last_mtime,
+                project_path = EXCLUDED.project_path",
+            &[&source, &uuid, &title, &created_at, &last_parsed_idx, &last_mtime, &project_path],
+        ).map_err(|e| e.to_string())?;
+    }
+
+    // 2. 同步 turns 表
+    let mut stmt = sqlite_conn.prepare("SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp FROM turns").map_err(|e| e.to_string())?;
+    let mut rows = stmt.query([]).map_err(|e| e.to_string())?;
+    while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        let source: String = row.get(0).map_err(|e| e.to_string())?;
+        let uuid: String = row.get(1).map_err(|e| e.to_string())?;
+        let idx: i64 = row.get(2).map_err(|e| e.to_string())?;
+        let model: Option<String> = row.get(3).map_err(|e| e.to_string())?;
+        let input_tokens: i64 = row.get(4).map_err(|e| e.to_string())?;
+        let cached_input_tokens: i64 = row.get(5).map_err(|e| e.to_string())?;
+        let output_tokens: i64 = row.get(6).map_err(|e| e.to_string())?;
+        let thinking_tokens: i64 = row.get(7).map_err(|e| e.to_string())?;
+        let cost_usd: f64 = row.get(8).map_err(|e| e.to_string())?;
+        let message_id: Option<String> = row.get(9).map_err(|e| e.to_string())?;
+        let request_id: Option<String> = row.get(10).map_err(|e| e.to_string())?;
+        let timestamp: Option<String> = row.get(11).map_err(|e| e.to_string())?;
+
+        pg_tx.execute(
+            "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+             ON CONFLICT (source, uuid, idx) DO UPDATE SET
+                model = EXCLUDED.model,
+                input_tokens = EXCLUDED.input_tokens,
+                cached_input_tokens = EXCLUDED.cached_input_tokens,
+                output_tokens = EXCLUDED.output_tokens,
+                thinking_tokens = EXCLUDED.thinking_tokens,
+                cost_usd = EXCLUDED.cost_usd,
+                message_id = EXCLUDED.message_id,
+                request_id = EXCLUDED.request_id,
+                timestamp = EXCLUDED.timestamp",
+            &[&source, &uuid, &idx, &model, &input_tokens, &cached_input_tokens, &output_tokens, &thinking_tokens, &cost_usd, &message_id, &request_id, &timestamp],
+        ).map_err(|e| e.to_string())?;
+    }
+    pg_tx.commit().map_err(|e| e.to_string())?;
+    println!("SQLite 本地增量数据镜像成功同步到远程 PostgreSQL 数据库！");
+    Ok(())
+}
+
+pub fn get_pg_aggregated_metrics(
+    source_filter: Option<&str>,
+    start_date: Option<&str>,
+    end_date: Option<&str>,
+) -> Result<AggregatedMetrics, String> {
+    let db_url = std::env::var("DATABASE_URL").map_err(|e| e.to_string())?;
+    let mut pg_client = postgres::Client::connect(&db_url, postgres::NoTls).map_err(|e| e.to_string())?;
+
+    let mut conditions = Vec::new();
+    let mut params: Vec<String> = Vec::new();
+    let mut param_idx = 1;
+
+    if let Some(src) = source_filter {
+        if src != "all" {
+            conditions.push(format!("s.source = ${}", param_idx));
+            params.push(src.to_string());
+            param_idx += 1;
+        }
+    }
+
+    if let Some(start) = start_date {
+        if !start.is_empty() {
+            conditions.push(format!("s.created_at >= ${}", param_idx));
+            params.push(format!("{}T00:00:00", start));
+            param_idx += 1;
+        }
+    }
+
+    if let Some(end) = end_date {
+        if !end.is_empty() {
+            conditions.push(format!("s.created_at <= ${}", param_idx));
+            params.push(format!("{}T23:59:59.999", end));
+            param_idx += 1;
+        }
+    }
+
+    let where_clause = if conditions.is_empty() {
+        "".to_string()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
+    };
+
+    let mut pg_params: Vec<&(dyn postgres::types::ToSql + Sync)> = Vec::new();
+    for p in &params {
+        pg_params.push(p);
+    }
+
+    // 1. Totals
+    let sql_totals = format!(
+        "SELECT 
+            SUM(t.input_tokens) as total_input,
+            SUM(t.output_tokens) as total_output,
+            SUM(t.cached_input_tokens) as total_cached,
+            SUM(t.thinking_tokens) as total_thinking,
+            SUM(t.cost_usd) as total_cost
+        FROM turns t
+        INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
+        {}",
+        where_clause
+    );
+
+    let row = pg_client.query_one(&sql_totals, &pg_params[..]).map_err(|e| e.to_string())?;
+    let sum_input: Option<i64> = row.get(0);
+    let sum_output: Option<i64> = row.get(1);
+    let sum_cached: Option<i64> = row.get(2);
+    let sum_thinking: Option<i64> = row.get(3);
+    let sum_cost: Option<f64> = row.get(4);
+
+    let total_input = sum_input.unwrap_or(0);
+    let total_output = sum_output.unwrap_or(0);
+    let total_cached = sum_cached.unwrap_or(0);
+    let total_thinking = sum_thinking.unwrap_or(0);
+    let total_cost = sum_cost.unwrap_or(0.0);
+
+    let sql_sessions_count = format!("SELECT COUNT(*) FROM sessions s {}", where_clause);
+    let total_sessions: i64 = pg_client.query_one(&sql_sessions_count, &pg_params[..])
+        .map_err(|e| e.to_string())?
+        .get(0);
+
+    let cache_hit_rate = if total_input > 0 {
+        total_cached as f64 / total_input as f64
+    } else {
+        0.0
+    };
+    let thinking_ratio = if total_output > 0 {
+        total_thinking as f64 / total_output as f64
+    } else {
+        0.0
+    };
+
+    let totals = Totals {
+        total_input,
+        total_output,
+        total_tokens: total_input + total_output,
+        total_cached,
+        total_thinking,
+        cache_hit_rate,
+        thinking_ratio,
+        total_sessions,
+        total_cost,
+    };
+
+    // 2. Daily Trends
+    let sql_daily = format!(
+        "SELECT 
+            SUBSTR(s.created_at, 1, 10) as date,
+            SUM(t.input_tokens) as input,
+            SUM(t.output_tokens) as output,
+            SUM(t.cached_input_tokens) as cached,
+            SUM(t.thinking_tokens) as thinking,
+            COUNT(DISTINCT s.uuid) as sessions
+        FROM sessions s
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {}
+        GROUP BY date
+        ORDER BY date ASC",
+        where_clause
+    );
+
+    let rows_daily = pg_client.query(&sql_daily, &pg_params[..]).map_err(|e| e.to_string())?;
+    let mut daily_trends = Vec::new();
+    for r in rows_daily {
+        let date: Option<String> = r.get(0);
+        let input: Option<i64> = r.get(1);
+        let output: Option<i64> = r.get(2);
+        let cached: Option<i64> = r.get(3);
+        let thinking: Option<i64> = r.get(4);
+        let sessions: Option<i64> = r.get(5);
+        daily_trends.push(DailyTrend {
+            date: date.unwrap_or_default(),
+            input: input.unwrap_or(0),
+            output: output.unwrap_or(0),
+            cached: cached.unwrap_or(0),
+            thinking: thinking.unwrap_or(0),
+            sessions: sessions.unwrap_or(0),
+        });
+    }
+
+    // 3. Monthly Summary
+    let sql_monthly = format!(
+        "SELECT 
+            SUBSTR(s.created_at, 1, 7) as month,
+            SUM(t.input_tokens) as input,
+            SUM(t.output_tokens) as output,
+            SUM(t.cached_input_tokens) as cached,
+            SUM(t.thinking_tokens) as thinking,
+            COUNT(DISTINCT s.uuid) as sessions
+        FROM sessions s
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {}
+        GROUP BY month
+        ORDER BY month DESC",
+        where_clause
+    );
+
+    let rows_monthly = pg_client.query(&sql_monthly, &pg_params[..]).map_err(|e| e.to_string())?;
+    let mut monthly_summary = Vec::new();
+    for r in rows_monthly {
+        let month: Option<String> = r.get(0);
+        let input: Option<i64> = r.get(1);
+        let output: Option<i64> = r.get(2);
+        let cached: Option<i64> = r.get(3);
+        let thinking: Option<i64> = r.get(4);
+        let sessions: Option<i64> = r.get(5);
+        monthly_summary.push(MonthlySummary {
+            month: month.unwrap_or_default(),
+            input: input.unwrap_or(0),
+            output: output.unwrap_or(0),
+            cached: cached.unwrap_or(0),
+            thinking: thinking.unwrap_or(0),
+            sessions: sessions.unwrap_or(0),
+        });
+    }
+
+    // 4. Model Distribution
+    let sql_model = format!(
+        "SELECT 
+            t.model,
+            SUM(t.input_tokens) as input,
+            SUM(t.output_tokens) as output,
+            SUM(t.cached_input_tokens) as cached,
+            SUM(t.thinking_tokens) as thinking
+        FROM turns t
+        INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
+        {}
+        GROUP BY t.model
+        ORDER BY SUM(t.input_tokens + t.output_tokens) DESC",
+        where_clause
+    );
+
+    let rows_model = pg_client.query(&sql_model, &pg_params[..]).map_err(|e| e.to_string())?;
+    let mut model_distribution = Vec::new();
+    for r in rows_model {
+        let model: Option<String> = r.get(0);
+        let input: Option<i64> = r.get(1);
+        let output: Option<i64> = r.get(2);
+        let cached: Option<i64> = r.get(3);
+        let thinking: Option<i64> = r.get(4);
+        let total_tokens = input.unwrap_or(0) + output.unwrap_or(0);
+        model_distribution.push(ModelDistribution {
+            model: model.unwrap_or_else(|| "unknown".to_string()),
+            input: input.unwrap_or(0),
+            output: output.unwrap_or(0),
+            cached: cached.unwrap_or(0),
+            thinking: thinking.unwrap_or(0),
+            total_tokens,
+        });
+    }
+
+    // 5. Sessions明细
+    let sql_sessions = format!(
+        "SELECT 
+            s.source,
+            s.uuid,
+            s.title,
+            s.created_at,
+            COALESCE(SUM(t.input_tokens), 0) as input,
+            COALESCE(SUM(t.output_tokens), 0) as output,
+            COALESCE(SUM(t.cached_input_tokens), 0) as cached,
+            COALESCE(SUM(t.thinking_tokens), 0) as thinking,
+            COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
+        FROM sessions s
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {}
+        GROUP BY s.source, s.uuid, s.title, s.created_at
+        ORDER BY s.created_at DESC",
+        where_clause
+    );
+
+    let rows_sessions = pg_client.query(&sql_sessions, &pg_params[..]).map_err(|e| e.to_string())?;
+    let mut sessions = Vec::new();
+    for r in rows_sessions {
+        let source: String = r.get(0);
+        let uuid: String = r.get(1);
+        let title: Option<String> = r.get(2);
+        let created_at: Option<String> = r.get(3);
+        let input: i64 = r.get(4);
+        let output: i64 = r.get(5);
+        let cached: i64 = r.get(6);
+        let thinking: i64 = r.get(7);
+        let cost_usd: f64 = r.get(8);
+
+        let sql_session_models = "SELECT DISTINCT model FROM turns WHERE source = $1 AND uuid = $2 AND model IS NOT NULL";
+        let rows_models = pg_client.query(sql_session_models, &[&source, &uuid]).map_err(|e| e.to_string())?;
+        let mut models = Vec::new();
+        for mr in rows_models {
+            if let Some(m) = mr.get::<_, Option<String>>(0) {
+                models.push(m);
+            }
+        }
+
+        sessions.push(SessionItem {
+            source,
+            uuid,
+            title: title.unwrap_or_else(|| "Untitled Session".to_string()),
+            created_at: created_at.unwrap_or_default(),
+            input,
+            output,
+            cached,
+            thinking,
+            cost_usd,
+            models,
+        });
+    }
+
+    // 6. Source Trends
+    let sql_source = format!(
+        "SELECT 
+            SUBSTR(s.created_at, 1, 10) as date,
+            s.source,
+            SUM(t.input_tokens + t.output_tokens) as tokens,
+            SUM(t.cost_usd) as cost
+        FROM sessions s
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {}
+        GROUP BY date, s.source
+        ORDER BY date ASC",
+        where_clause
+    );
+
+    let rows_source = pg_client.query(&sql_source, &pg_params[..]).map_err(|e| e.to_string())?;
+    let mut source_trends = Vec::new();
+    for r in rows_source {
+        let date: Option<String> = r.get(0);
+        let source: String = r.get(1);
+        let tokens: Option<i64> = r.get(2);
+        let cost: Option<f64> = r.get(3);
+        source_trends.push(SourceTrend {
+            date: date.unwrap_or_default(),
+            source,
+            tokens: tokens.unwrap_or(0),
+            cost: cost.unwrap_or(0.0),
+        });
+    }
+
+    Ok(AggregatedMetrics {
+        totals,
+        daily_trends,
+        monthly_summary,
+        model_distribution,
+        sessions,
+        source_trends,
+    })
+}
+
+
 

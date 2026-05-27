@@ -3,9 +3,12 @@
 mod proto;
 mod db;
 mod server;
+mod db_adapter;
 
-use axum::{routing::get, Router};
-use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback};
+
+use axum::{routing::{get, post}, Router};
+use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback, handle_config_test, handle_config_save};
+
 
 fn main() {
     // 启动时初始化本地缓存数据库，确保表结构完备，避免多请求并发竞争初始化导致的数据库锁死
@@ -31,7 +34,10 @@ fn main() {
                 .route("/api/metrics", get(handle_metrics))
                 .route("/api/scan/start", get(handle_scan_start).post(handle_scan_start))
                 .route("/api/scan/status", get(handle_scan_status))
+                .route("/api/config/test", post(handle_config_test))
+                .route("/api/config/save", post(handle_config_save))
                 .fallback(serve_static_file_fallback);
+
 
             // 本地桌面版绑定本地回环地址 127.0.0.1
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));

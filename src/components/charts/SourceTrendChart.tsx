@@ -25,12 +25,6 @@ const SOURCE_LABELS: Record<string, string> = {
   codex: 'Codex CLI',
 };
 
-function hexToRgba(hex: string, alpha: number) {
-  const r = parseInt(hex.slice(1, 3), 16);
-  const g = parseInt(hex.slice(3, 5), 16);
-  const b = parseInt(hex.slice(5, 7), 16);
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
-}
 
 export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
   const isDark = theme === 'dark';
@@ -48,26 +42,14 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
       });
       return {
         name: SOURCE_LABELS[src],
-        type: 'line',
+        type: 'bar',
+        stack: 'total',
         data: srcData,
-        smooth: true,
-        showSymbol: true,
-        symbol: 'circle',
-        symbolSize: 6,
         itemStyle: {
           color: ENGINE_COLORS[src as keyof typeof ENGINE_COLORS],
-          borderWidth: 2,
+          borderRadius: 4,
           borderColor: isDark ? '#0b1528' : '#ffffff',
-        },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: hexToRgba(ENGINE_COLORS[src as keyof typeof ENGINE_COLORS], 0.12) },
-              { offset: 1, color: hexToRgba(ENGINE_COLORS[src as keyof typeof ENGINE_COLORS], 0.01) },
-            ],
-          },
+          borderWidth: 1.5,
         },
       };
     });
