@@ -233,7 +233,7 @@ pub fn init_tables(conn: &DbConn) -> Result<(), String> {
             let mut conn = conn_lock.lock().unwrap();
             let report = sqlite_migrations::migrations::runner()
                 .run(&mut *conn)
-                .map_err(|e| format!("Refinery SQLite migration failed: {}", e))?;
+                .map_err(|e| format!("Refinery SQLite migration failed: {:?} (底层详情: {})", e, e))?;
             for migration in report.applied_migrations() {
                 println!("[数据库迁移] 应用 SQLite 表结构变更: {} (版本 {})", migration.name(), migration.version());
             }
@@ -242,7 +242,7 @@ pub fn init_tables(conn: &DbConn) -> Result<(), String> {
             let mut client = client_lock.lock().unwrap();
             let report = postgres_migrations::migrations::runner()
                 .run(&mut *client)
-                .map_err(|e| format!("Refinery Postgres migration failed: {}", e))?;
+                .map_err(|e| format!("Refinery Postgres migration failed: {:?} (底层详情: {})", e, e))?;
             for migration in report.applied_migrations() {
                 println!("[数据库迁移] 应用 Postgres 表结构变更: {} (版本 {})", migration.name(), migration.version());
             }

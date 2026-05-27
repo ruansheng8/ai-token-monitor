@@ -173,6 +173,12 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
         [],
     )?;
 
+    // 创建高性能索引以优化大盘统计查询性能
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_sessions_source_created ON sessions(source, created_at);", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_model ON turns(model);", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_latency ON turns(latency);", [])?;
+
     Ok(())
 }
 
