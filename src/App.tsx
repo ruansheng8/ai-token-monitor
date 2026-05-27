@@ -17,6 +17,7 @@ import {
   ChevronRight
 } from 'lucide-react';
 import { DailyTrendChart } from './components/charts/DailyTrendChart';
+import { SourceTrendChart } from './components/charts/SourceTrendChart';
 
 // 类型定义
 interface Totals {
@@ -71,12 +72,20 @@ interface SessionItem {
   models: string[];
 }
 
+interface SourceTrendItem {
+  date: string;
+  source: string;
+  tokens: number;
+  cost: number;
+}
+
 interface AggregatedMetrics {
   totals: Totals;
   daily_trends: DailyTrend[];
   monthly_summary: MonthlySummary[];
   model_distribution: ModelDistribution[];
   sessions: SessionItem[];
+  source_trends: SourceTrendItem[];
 }
 
 export default function App() {
@@ -91,6 +100,52 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
   const [source, setSource] = useState<'all' | 'antigravity' | 'claude_code' | 'codex'>('all');
+  const [timeRange, setTimeRange] = useState<'all' | 'today' | 'week' | 'month' | 'quarter' | 'custom'>('all');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+  const [chartDimension, setChartDimension] = useState<'type' | 'source'>('type');
+
+  const getDateBounds = (range: 'all' | 'today' | 'week' | 'month' | 'quarter' | 'custom') => {
+    const now = new Date();
+    const formatDateStr = (d: Date) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    };
+
+    switch (range) {
+      case 'today': {
+        const dStr = formatDateStr(now);
+        return { start: dStr, end: dStr };
+      }
+      case 'week': {
+        const past = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+        return { start: formatDateStr(past), end: formatDateStr(now) };
+      }
+      case 'month': {
+        const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+        return { start: formatDateStr(firstDay), end: formatDateStr(now) };
+      }
+      case 'quarter': {
+        const currentMonth = now.getMonth();
+        const quarterStartMonth = Math.floor(currentMonth / 3) * 3;
+        const firstDay = new Date(now.getFullYear(), quarterStartMonth, 1);
+        return { start: formatDateStr(firstDay), end: formatDateStr(now) };
+      }
+      default:
+        return { start: '', end: '' };
+    }
+  };
+
+  useEffect(() => {
+    if (timeRange !== 'custom') {
+      const bounds = getDateBounds(timeRange);
+      setStartDate(bounds.start);
+      setEndDate(bounds.end);
+    }
+  }, [timeRange]);
+
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('theme');
     if (saved === 'dark' || saved === 'light') {
@@ -155,7 +210,7 @@ export default function App() {
           setTimeout(pollScanStatus, 1000);
         } else {
           // 扫描完成，重新拉取最新数据
-          fetchData(source);
+          fetchData(source, startDate, endDate);
         }
       }
     } catch (error) {
@@ -180,11 +235,11 @@ export default function App() {
   };
 
   // 获取数据逻辑
-  const fetchData = async (currentSource = source) => {
+  const fetchData = async (currentSource = source, start = startDate, end = endDate) => {
     setLoading(true);
     setRefreshSpin(true);
     try {
-      const response = await fetch(`/api/metrics?source=${currentSource}&t=${Date.now()}`);
+      const response = await fetch(`/api/metrics?source=${currentSource}&start_date=${start}&end_date=${end}&t=${Date.now()}`);
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const result: AggregatedMetrics = await response.json();
       setData(result);
@@ -211,8 +266,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    fetchData(source);
-  }, [source]);
+    fetchData(source, startDate, endDate);
+  }, [source, startDate, endDate]);
 
   // 排序字段切换
   const handleSort = (field: keyof SessionItem | 'total') => {
@@ -390,6 +445,51 @@ export default function App() {
           </div>
         </header>
 
+        {/* 时间筛选控制栏 */}
+        <section className="glass-card p-4 flex flex-col md:flex-row justify-between items-center gap-4 border border-card-border bg-bg-secondary/20 shadow-sm backdrop-blur-md rounded-[20px]">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-semibold text-text-secondary mr-2">🕒 时间区间：</span>
+            {[
+              { key: 'all', label: '全部时间' },
+              { key: 'today', label: '今日' },
+              { key: 'week', label: '最近7天' },
+              { key: 'month', label: '本月' },
+              { key: 'quarter', label: '本季度' },
+              { key: 'custom', label: '自定义' },
+            ].map((item) => (
+              <button
+                key={item.key}
+                onClick={() => setTimeRange(item.key as any)}
+                className={`px-4 py-1.5 rounded-xl text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
+                  timeRange === item.key
+                    ? 'bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_12px_rgba(6,182,212,0.2)]'
+                    : 'bg-bg-secondary/40 dark:bg-white/3 border border-card-border text-text-secondary hover:text-text-primary hover:border-neon-cyan/40'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+          </div>
+
+          {timeRange === 'custom' && (
+            <div className="flex items-center gap-2 select-none animate-fade-in">
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-3 py-2 text-xs font-semibold text-text-primary outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer"
+              />
+              <span className="text-xs text-text-secondary font-semibold">至</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-3 py-2 text-xs font-semibold text-text-primary outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer"
+              />
+            </div>
+          )}
+        </section>
+
         {/* 扫描进度条展示 */}
         {scanStatus && scanStatus.is_scanning && (
           <div className="glass-card rounded-[24px] p-5 flex flex-col gap-3 border border-neon-cyan/20 bg-neon-cyan/5 shadow-[0_8px_32px_rgba(6,182,212,0.08)]">
@@ -541,13 +641,48 @@ export default function App() {
         {/* 每日趋势图 */}
         <section className="chart-section glass-card p-6">
           <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-3 mb-5 border-b border-card-border gap-3">
-            <h2 className="text-base font-semibold text-text-primary">每日用量走势 (Token 堆叠柱状图)</h2>
+            <h2 className="text-base font-semibold text-text-primary">
+              {source === 'all' && chartDimension === 'source' ? '各引擎每日用量对比走势 (Token 曲线)' : '每日用量走势 (Token 堆叠柱状图)'}
+            </h2>
+            
+            {source === 'all' && (
+              <div className="rounded-xl border border-card-border bg-bg-secondary/40 dark:bg-white/3 p-0.5 flex items-center gap-0.5 shadow-sm">
+                <button
+                  onClick={() => setChartDimension('type')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
+                    chartDimension === 'type'
+                      ? 'bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_10px_rgba(6,182,212,0.15)]'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
+                  }`}
+                >
+                  📊 类型维度
+                </button>
+                <button
+                  onClick={() => setChartDimension('source')}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
+                    chartDimension === 'source'
+                      ? 'bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_10px_rgba(6,182,212,0.15)]'
+                      : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
+                  }`}
+                >
+                  🤖 来源维度
+                </button>
+              </div>
+            )}
           </div>
           <div className="w-full">
-            {data?.daily_trends && data.daily_trends.length > 0 ? (
-              <DailyTrendChart data={data.daily_trends} theme={theme} />
+            {source === 'all' && chartDimension === 'source' ? (
+              data?.source_trends && data.source_trends.length > 0 ? (
+                <SourceTrendChart data={data.source_trends} theme={theme} />
+              ) : (
+                <div className="h-[350px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+              )
             ) : (
-              <div className="h-[350px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+              data?.daily_trends && data.daily_trends.length > 0 ? (
+                <DailyTrendChart data={data.daily_trends} theme={theme} />
+              ) : (
+                <div className="h-[350px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+              )
             )}
           </div>
         </section>

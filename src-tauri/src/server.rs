@@ -13,8 +13,10 @@ pub async fn handle_metrics(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Response<Body> {
     let source = params.get("source").cloned();
+    let start_date = params.get("start_date").cloned();
+    let end_date = params.get("end_date").cloned();
     match tokio::task::spawn_blocking(move || {
-        get_aggregated_metrics_from_cache(source.as_deref())
+        get_aggregated_metrics_from_cache(source.as_deref(), start_date.as_deref(), end_date.as_deref())
     })
     .await
     {

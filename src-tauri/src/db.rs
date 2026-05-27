@@ -1029,46 +1029,80 @@ pub struct SessionItem {
 }
 
 #[derive(Serialize)]
+pub struct SourceTrend {
+    pub date: String,
+    pub source: String,
+    pub tokens: i64,
+    pub cost: f64,
+}
+
+#[derive(Serialize)]
 pub struct AggregatedMetrics {
     pub totals: Totals,
     pub daily_trends: Vec<DailyTrend>,
     pub monthly_summary: Vec<MonthlySummary>,
     pub model_distribution: Vec<ModelDistribution>,
     pub sessions: Vec<SessionItem>,
+    pub source_trends: Vec<SourceTrend>,
 }
 
-pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<AggregatedMetrics, rusqlite::Error> {
+pub fn get_aggregated_metrics_from_cache(
+    source_filter: Option<&str>,
+    start_date: Option<&str>,
+    end_date: Option<&str>,
+) -> Result<AggregatedMetrics, rusqlite::Error> {
     let db_path = get_db_cache_path();
     let conn = rusqlite::Connection::open(&db_path)?;
 
-    // 确定 SQL 的过滤条件
-    let (where_clause, s_where, params) = match source_filter {
-        Some("all") | None => ("".to_string(), "".to_string(), vec![]),
-        Some(s) => (
-            "WHERE source = ?1".to_string(),
-            "WHERE s.source = ?1".to_string(),
-            vec![s.to_string()],
-        ),
+    // 构造动态 SQL WHERE 子句与参数绑定
+    let mut conditions = Vec::new();
+    let mut params: Vec<rusqlite::types::Value> = Vec::new();
+
+    if let Some(src) = source_filter {
+        if src != "all" {
+            conditions.push("s.source = ?");
+            params.push(rusqlite::types::Value::Text(src.to_string()));
+        }
+    }
+
+    if let Some(start) = start_date {
+        if !start.is_empty() {
+            conditions.push("s.created_at >= ?");
+            params.push(rusqlite::types::Value::Text(format!("{}T00:00:00", start)));
+        }
+    }
+
+    if let Some(end) = end_date {
+        if !end.is_empty() {
+            conditions.push("s.created_at <= ?");
+            params.push(rusqlite::types::Value::Text(format!("{}T23:59:59.999", end)));
+        }
+    }
+
+    let where_clause = if conditions.is_empty() {
+        "".to_string()
+    } else {
+        format!("WHERE {}", conditions.join(" AND "))
     };
 
-    // A. Totals 全局指标
+    // A. Totals 全局指标 (INNER JOIN sessions 确保过滤生效)
     let sql_totals = format!(
         "SELECT 
-            SUM(input_tokens) as total_input,
-            SUM(output_tokens) as total_output,
-            SUM(cached_input_tokens) as total_cached,
-            SUM(thinking_tokens) as total_thinking,
-            SUM(cost_usd) as total_cost
-        FROM turns
+            SUM(t.input_tokens) as total_input,
+            SUM(t.output_tokens) as total_output,
+            SUM(t.cached_input_tokens) as total_cached,
+            SUM(t.thinking_tokens) as total_thinking,
+            SUM(t.cost_usd) as total_cost
+        FROM turns t
+        INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
         {}",
         where_clause
     );
 
-    let row: Result<(Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<f64>), _> = if params.is_empty() {
-        conn.query_row(&sql_totals, [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
-    } else {
-        conn.query_row(&sql_totals, rusqlite::params![params[0]], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))
-    };
+    let row: Result<(Option<i64>, Option<i64>, Option<i64>, Option<i64>, Option<f64>), _> = 
+        conn.query_row(&sql_totals, rusqlite::params_from_iter(params.clone()), |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        });
 
     let (sum_input, sum_output, sum_cached, sum_thinking, sum_cost) = row.unwrap_or((None, None, None, None, None));
     let total_input = sum_input.unwrap_or(0);
@@ -1077,12 +1111,8 @@ pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<
     let total_thinking = sum_thinking.unwrap_or(0);
     let total_cost = sum_cost.unwrap_or(0.0);
 
-    let sql_sessions_count = format!("SELECT COUNT(*) FROM sessions {}", where_clause);
-    let total_sessions: i64 = if params.is_empty() {
-        conn.query_row(&sql_sessions_count, [], |r| r.get(0))?
-    } else {
-        conn.query_row(&sql_sessions_count, rusqlite::params![params[0]], |r| r.get(0))?
-    };
+    let sql_sessions_count = format!("SELECT COUNT(*) FROM sessions s {}", where_clause);
+    let total_sessions: i64 = conn.query_row(&sql_sessions_count, rusqlite::params_from_iter(params.clone()), |r| r.get(0))?;
 
     let cache_hit_rate = if total_input > 0 {
         total_cached as f64 / total_input as f64
@@ -1121,15 +1151,11 @@ pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<
         {}
         GROUP BY date
         ORDER BY date ASC",
-        s_where
+        where_clause
     );
 
     let mut stmt = conn.prepare(&sql_daily)?;
-    let mut rows = if params.is_empty() {
-        stmt.query([])?
-    } else {
-        stmt.query(rusqlite::params![params[0]])?
-    };
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.clone()))?;
 
     let mut daily_trends = Vec::new();
     while let Some(row) = rows.next()? {
@@ -1163,15 +1189,11 @@ pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<
         {}
         GROUP BY month
         ORDER BY month DESC",
-        s_where
+        where_clause
     );
 
     let mut stmt = conn.prepare(&sql_monthly)?;
-    let mut rows = if params.is_empty() {
-        stmt.query([])?
-    } else {
-        stmt.query(rusqlite::params![params[0]])?
-    };
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.clone()))?;
 
     let mut monthly_summary = Vec::new();
     while let Some(row) = rows.next()? {
@@ -1194,27 +1216,23 @@ pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<
     // D. 底层模型分布
     let sql_model_dist = format!(
         "SELECT 
-            CASE WHEN model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE model END as model_mapped,
-            SUM(input_tokens) as input,
-            SUM(output_tokens) as output,
-            SUM(cached_input_tokens) as cached,
-            SUM(thinking_tokens) as thinking,
-            SUM(input_tokens + output_tokens) as total_tokens
-        FROM turns
-        {}
-        {}
+            CASE WHEN t.model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE t.model END as model_mapped,
+            SUM(t.input_tokens) as input,
+            SUM(t.output_tokens) as output,
+            SUM(t.cached_input_tokens) as cached,
+            SUM(t.thinking_tokens) as thinking,
+            SUM(t.input_tokens + t.output_tokens) as total_tokens
+        FROM turns t
+        INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
+        {} {}
         GROUP BY model_mapped
         ORDER BY total_tokens DESC",
-        if where_clause.is_empty() { "WHERE" } else { "WHERE source = ?1 AND" },
-        "model IS NOT NULL AND model != 'unknown' AND model != ''"
+        where_clause,
+        if where_clause.is_empty() { "WHERE t.model IS NOT NULL AND t.model != 'unknown' AND t.model != ''" } else { "AND t.model IS NOT NULL AND t.model != 'unknown' AND t.model != ''" }
     );
 
     let mut stmt = conn.prepare(&sql_model_dist)?;
-    let mut rows = if params.is_empty() {
-        stmt.query([])?
-    } else {
-        stmt.query(rusqlite::params![params[0]])?
-    };
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.clone()))?;
 
     let mut model_distribution = Vec::new();
     while let Some(row) = rows.next()? {
@@ -1251,12 +1269,12 @@ pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<
         {}
         GROUP BY s.source, s.uuid
         ORDER BY s.created_at DESC",
-        s_where
+        where_clause
     );
 
     let mut stmt = conn.prepare(&sql_sessions)?;
-    let session_rows: Vec<(String, String, String, String, i64, i64, i64, i64, f64)> = if params.is_empty() {
-        stmt.query_map([], |r| {
+    let session_rows: Vec<(String, String, String, String, i64, i64, i64, i64, f64)> = stmt
+        .query_map(rusqlite::params_from_iter(params.clone()), |r| {
             let source: String = r.get(0)?;
             let uuid: String = r.get(1)?;
             let title: Option<String> = r.get(2)?;
@@ -1279,52 +1297,22 @@ pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<
             ))
         })?
         .flatten()
-        .collect()
-    } else {
-        stmt.query_map(rusqlite::params![params[0]], |r| {
-            let source: String = r.get(0)?;
-            let uuid: String = r.get(1)?;
-            let title: Option<String> = r.get(2)?;
-            let created_at: Option<String> = r.get(3)?;
-            let input: Option<i64> = r.get(4)?;
-            let output: Option<i64> = r.get(5)?;
-            let cached: Option<i64> = r.get(6)?;
-            let thinking: Option<i64> = r.get(7)?;
-            let cost_usd: Option<f64> = r.get(8)?;
-            Ok((
-                source,
-                uuid,
-                title.unwrap_or_default(),
-                created_at.unwrap_or_default(),
-                input.unwrap_or(0),
-                output.unwrap_or(0),
-                cached.unwrap_or(0),
-                thinking.unwrap_or(0),
-                cost_usd.unwrap_or(0.0),
-            ))
-        })?
-        .flatten()
-        .collect()
-    };
+        .collect();
 
     // 额外提取每个会话使用到的引擎去重列表
     let sql_models = format!(
-        "SELECT source, uuid, CASE WHEN model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE model END as model_mapped
-        FROM turns 
-        {}
-        {}
-        GROUP BY source, uuid, model_mapped",
-        if where_clause.is_empty() { "WHERE" } else { "WHERE source = ?1 AND" },
-        "model IS NOT NULL AND model != 'unknown' AND model != ''"
+        "SELECT t.source, t.uuid, CASE WHEN t.model = 'gemini-3-flash-a' THEN 'gemini-3.5-flash' ELSE t.model END as model_mapped
+        FROM turns t
+        INNER JOIN sessions s ON t.source = s.source AND t.uuid = s.uuid
+        {} {}
+        GROUP BY t.source, t.uuid, model_mapped",
+        where_clause,
+        if where_clause.is_empty() { "WHERE t.model IS NOT NULL AND t.model != 'unknown' AND t.model != ''" } else { "AND t.model IS NOT NULL AND t.model != 'unknown' AND t.model != ''" }
     );
 
     let mut stmt = conn.prepare(&sql_models)?;
     let mut model_map: HashMap<String, Vec<String>> = HashMap::new();
-    let mut rows = if params.is_empty() {
-        stmt.query([])?
-    } else {
-        stmt.query(rusqlite::params![params[0]])?
-    };
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.clone()))?;
 
     while let Some(row) = rows.next()? {
         let src: String = row.get(0)?;
@@ -1357,12 +1345,45 @@ pub fn get_aggregated_metrics_from_cache(source_filter: Option<&str>) -> Result<
         })
         .collect();
 
+    // F. 新增：多引擎用量每日对比走势 (SourceTrends)
+    let sql_source_trends = format!(
+        "SELECT 
+            substr(s.created_at, 1, 10) as date,
+            s.source,
+            SUM(t.input_tokens + t.output_tokens) as total_tokens,
+            SUM(t.cost_usd) as cost
+        FROM sessions s
+        LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {}
+        GROUP BY date, s.source
+        ORDER BY date ASC, s.source ASC",
+        where_clause
+    );
+
+    let mut stmt = conn.prepare(&sql_source_trends)?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(params.clone()))?;
+
+    let mut source_trends = Vec::new();
+    while let Some(row) = rows.next()? {
+        let date: Option<String> = row.get(0)?;
+        let source: String = row.get(1)?;
+        let tokens: Option<i64> = row.get(2)?;
+        let cost: Option<f64> = row.get(3)?;
+        source_trends.push(SourceTrend {
+            date: date.unwrap_or_default(),
+            source,
+            tokens: tokens.unwrap_or(0),
+            cost: cost.unwrap_or(0.0),
+        });
+    }
+
     Ok(AggregatedMetrics {
         totals,
         daily_trends,
         monthly_summary,
         model_distribution,
         sessions,
+        source_trends,
     })
 }
 
@@ -1457,17 +1478,17 @@ mod tests {
         let mut conn = rusqlite::Connection::open(&db_cache_path).unwrap();
         sync_claude_code(&mut conn, 0, 1, &|_, _| {}).unwrap();
 
-        let metrics_all = get_aggregated_metrics_from_cache(None).unwrap();
+        let metrics_all = get_aggregated_metrics_from_cache(None, None, None).unwrap();
         assert_eq!(metrics_all.totals.total_sessions, 1);
         assert_eq!(metrics_all.totals.total_input, 100);
         assert_eq!(metrics_all.totals.total_output, 50);
         assert_eq!(metrics_all.totals.total_cached, 10);
         assert!(metrics_all.totals.total_cost > 0.0);
 
-        let metrics_claude = get_aggregated_metrics_from_cache(Some("claude_code")).unwrap();
+        let metrics_claude = get_aggregated_metrics_from_cache(Some("claude_code"), None, None).unwrap();
         assert_eq!(metrics_claude.totals.total_sessions, 1);
         
-        let metrics_antigravity = get_aggregated_metrics_from_cache(Some("antigravity")).unwrap();
+        let metrics_antigravity = get_aggregated_metrics_from_cache(Some("antigravity"), None, None).unwrap();
         assert_eq!(metrics_antigravity.totals.total_sessions, 0);
 
         let mut file_append = fs::OpenOptions::new().append(true).open(&claude_log_file).unwrap();
@@ -1489,7 +1510,7 @@ mod tests {
 
         sync_claude_code(&mut conn, 0, 1, &|_, _| {}).unwrap();
 
-        let metrics_all_2 = get_aggregated_metrics_from_cache(None).unwrap();
+        let metrics_all_2 = get_aggregated_metrics_from_cache(None, None, None).unwrap();
         assert_eq!(metrics_all_2.totals.total_sessions, 1);
         assert_eq!(metrics_all_2.totals.total_input, 300);
         assert_eq!(metrics_all_2.totals.total_output, 150);
@@ -1516,7 +1537,7 @@ mod tests {
 
         sync_codex(&mut conn, 0, 1, &|_, _| {}).unwrap();
 
-        let metrics_all_3 = get_aggregated_metrics_from_cache(None).unwrap();
+        let metrics_all_3 = get_aggregated_metrics_from_cache(None, None, None).unwrap();
         assert_eq!(metrics_all_3.totals.total_sessions, 2);
         assert_eq!(metrics_all_3.totals.total_input, 800);
         assert_eq!(metrics_all_3.totals.total_output, 450);
