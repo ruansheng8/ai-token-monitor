@@ -201,51 +201,117 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
 // 3.5. 每日预聚合缓存重建助手方法 (方案二高性能预计算核心)
 
 pub fn rebuild_daily_stats_cache(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
-    // 开启事务进行高效全量重建
-    let mut stmt = conn.prepare("DELETE FROM daily_stats")?;
-    let _ = stmt.execute([])?;
-    
-    let mut stmt_insert = conn.prepare(
-        "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
-         SELECT 
-             substr(s.created_at, 1, 10) as date,
-             s.source,
-             COALESCE(SUM(t.input_tokens), 0) as input_tokens,
-             COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
-             COALESCE(SUM(t.output_tokens), 0) as output_tokens,
-             COALESCE(SUM(t.thinking_tokens), 0) as thinking_tokens,
-             COUNT(DISTINCT s.uuid) as sessions_count,
-             COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
-         FROM sessions s
-         LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
-         GROUP BY date, s.source"
-    )?;
-    let _ = stmt_insert.execute([])?;
+    // 检查缓存表是否为空
+    let is_empty: bool = conn.query_row(
+        "SELECT COUNT(1) FROM daily_stats",
+        [],
+        |row| row.get::<_, i64>(0).map(|c| c == 0)
+    ).unwrap_or(true);
+
+    if is_empty {
+        // 首次运行或缓存被清空，执行全量聚合重建以防丢失历史导入数据
+        let mut stmt = conn.prepare("DELETE FROM daily_stats")?;
+        let _ = stmt.execute([])?;
+        
+        let mut stmt_insert = conn.prepare(
+            "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
+             SELECT 
+                 substr(s.created_at, 1, 10) as date,
+                 s.source,
+                 COALESCE(SUM(t.input_tokens), 0) as input_tokens,
+                 COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
+                 COALESCE(SUM(t.output_tokens), 0) as output_tokens,
+                 COALESCE(SUM(t.thinking_tokens), 0) as thinking_tokens,
+                 COUNT(DISTINCT s.uuid) as sessions_count,
+                 COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
+             FROM sessions s
+             LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+             GROUP BY date, s.source"
+        )?;
+        let _ = stmt_insert.execute([])?;
+    } else {
+        // 日常增量同步重建：只删除并重新聚合最近 365 天的数据
+        let one_year_ago = Utc::now() - chrono::Duration::days(365);
+        let one_year_ago_str = one_year_ago.format("%Y-%m-%d").to_string();
+
+        let mut stmt_del = conn.prepare("DELETE FROM daily_stats WHERE date >= ?")?;
+        let _ = stmt_del.execute(rusqlite::params![one_year_ago_str])?;
+
+        let mut stmt_insert = conn.prepare(
+            "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
+             SELECT 
+                 substr(s.created_at, 1, 10) as date,
+                 s.source,
+                 COALESCE(SUM(t.input_tokens), 0) as input_tokens,
+                 COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
+                 COALESCE(SUM(t.output_tokens), 0) as output_tokens,
+                 COALESCE(SUM(t.thinking_tokens), 0) as thinking_tokens,
+                 COUNT(DISTINCT s.uuid) as sessions_count,
+                 COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
+             FROM sessions s
+             LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+             WHERE substr(s.created_at, 1, 10) >= ?
+             GROUP BY date, s.source"
+        )?;
+        let _ = stmt_insert.execute(rusqlite::params![one_year_ago_str])?;
+    }
     
     Ok(())
 }
 
 pub fn rebuild_pg_daily_stats_cache(client: &mut postgres::Client) -> Result<(), String> {
     let mut tx = client.transaction().map_err(|e| e.to_string())?;
-    
-    tx.execute("DELETE FROM daily_stats", &[]).map_err(|e| e.to_string())?;
-    
-    tx.execute(
-        "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
-         SELECT 
-             SUBSTR(s.created_at, 1, 10) as date,
-             s.source,
-             COALESCE(SUM(t.input_tokens), 0) as input_tokens,
-             COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
-             COALESCE(SUM(t.output_tokens), 0) as output_tokens,
-             COALESCE(SUM(t.thinking_tokens), 0) as thinking_tokens,
-             COUNT(DISTINCT s.uuid) as sessions_count,
-             COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
-         FROM sessions s
-         LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
-         GROUP BY SUBSTR(s.created_at, 1, 10), s.source",
-        &[],
-    ).map_err(|e| e.to_string())?;
+
+    // 检查缓存表是否为空
+    let is_empty: bool = tx.query_one("SELECT COUNT(1) FROM daily_stats", &[])
+        .map(|row| row.get::<_, i64>(0) == 0)
+        .map_err(|e| e.to_string())?;
+
+    if is_empty {
+        // 首次全量同步
+        tx.execute("DELETE FROM daily_stats", &[]).map_err(|e| e.to_string())?;
+        tx.execute(
+            "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
+             SELECT 
+                 SUBSTR(s.created_at, 1, 10) as date,
+                 s.source,
+                 COALESCE(SUM(t.input_tokens), 0) as input_tokens,
+                 COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
+                 COALESCE(SUM(t.output_tokens), 0) as output_tokens,
+                 COALESCE(SUM(t.thinking_tokens), 0) as thinking_tokens,
+                 COUNT(DISTINCT s.uuid) as sessions_count,
+                 COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
+             FROM sessions s
+             LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+             GROUP BY SUBSTR(s.created_at, 1, 10), s.source",
+            &[],
+        ).map_err(|e| e.to_string())?;
+    } else {
+        // 增量同步重建最近 365 天的数据
+        let one_year_ago = Utc::now() - chrono::Duration::days(365);
+        let one_year_ago_str = one_year_ago.format("%Y-%m-%d").to_string();
+
+        tx.execute("DELETE FROM daily_stats WHERE date >= $1", &[&one_year_ago_str])
+            .map_err(|e| e.to_string())?;
+
+        tx.execute(
+            "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
+             SELECT 
+                 SUBSTR(s.created_at, 1, 10) as date,
+                 s.source,
+                 COALESCE(SUM(t.input_tokens), 0) as input_tokens,
+                 COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
+                 COALESCE(SUM(t.output_tokens), 0) as output_tokens,
+                 COALESCE(SUM(t.thinking_tokens), 0) as thinking_tokens,
+                 COUNT(DISTINCT s.uuid) as sessions_count,
+                 COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
+             FROM sessions s
+             LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+             WHERE SUBSTR(s.created_at, 1, 10) >= $1
+             GROUP BY SUBSTR(s.created_at, 1, 10), s.source",
+            &[&one_year_ago_str],
+        ).map_err(|e| e.to_string())?;
+    }
     
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
