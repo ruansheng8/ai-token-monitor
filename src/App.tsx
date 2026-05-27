@@ -210,6 +210,11 @@ export default function App() {
   const [data, setData] = useState<AggregatedMetrics | null>(null);
   const [loading, setLoading] = useState(false);
   const [refreshSpin, setRefreshSpin] = useState(false);
+
+  // 大盘慢查询友好提示与 AbortController 取消机制
+  const abortControllerRef = useRef<AbortController | null>(null);
+  const loadingTimeoutRef = useRef<any>(null);
+  const [showDelayedLoading, setShowDelayedLoading] = useState(false);
   const [lastUpdate, setLastUpdate] = useState('--:--:--');
   const [searchKeyword, setSearchKeyword] = useState('');
 
@@ -439,21 +444,74 @@ export default function App() {
 
   // 获取数据逻辑
   const fetchData = async (currentSource = source, start = startDate, end = endDate) => {
+    // 1. 发起新查询前，如果先前有未完成的查询，则主动取消，保证网络竞态安全性
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+
+    // 2. 重置并开启 300ms 防闪烁延时定时器
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+    }
+    setShowDelayedLoading(false);
+
+    loadingTimeoutRef.current = setTimeout(() => {
+      setShowDelayedLoading(true);
+    }, 300);
+
+    // 3. 实例化当前查询专用控制器
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+
     setLoading(true);
     setRefreshSpin(true);
+
     try {
-      const response = await fetch(`/api/metrics?source=${currentSource}&start_date=${start}&end_date=${end}&t=${Date.now()}`);
+      const response = await fetch(
+        `/api/metrics?source=${currentSource}&start_date=${start}&end_date=${end}&t=${Date.now()}`,
+        { signal: controller.signal }
+      );
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const result: AggregatedMetrics = await response.json();
       setData(result);
       const now = new Date();
       setLastUpdate(now.toTimeString().split(' ')[0]);
-    } catch (error) {
-      console.error('Fetch data failed:', error);
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.log('Query aborted successfully by user/system.');
+      } else {
+        console.error('Fetch data failed:', error);
+      }
     } finally {
-      setLoading(false);
-      setRefreshSpin(false);
+      // 4. 清除并释放定时器句柄
+      if (loadingTimeoutRef.current) {
+        clearTimeout(loadingTimeoutRef.current);
+        loadingTimeoutRef.current = null;
+      }
+
+      // 5. 仅当本次 controller 仍然是最新的网络请求控制器时，才重置 Loading 相关的视觉状态
+      if (abortControllerRef.current === controller) {
+        setLoading(false);
+        setRefreshSpin(false);
+        setShowDelayedLoading(false);
+        abortControllerRef.current = null;
+      }
     }
+  };
+
+  // 取消查询处理器
+  const handleCancelQuery = () => {
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+    }
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
+    }
+    setShowDelayedLoading(false);
+    setLoading(false);
+    setRefreshSpin(false);
   };
 
   // 手动点击刷新同步按钮
@@ -1426,11 +1484,40 @@ export default function App() {
         </div>
       )}
 
-      {/* 全局加载遮罩 */}
-      {loading && !data && !(scanStatus && scanStatus.is_scanning) && (
-        <div className="fixed inset-0 bg-bg-app/85 backdrop-blur-md z-[9999] flex flex-col items-center justify-center gap-5">
-          <div className="w-[50px] h-[50px] border-4 border-neon-cyan/10 rounded-full border-t-neon-cyan border-b-neon-purple animate-spin"></div>
-          <p className="text-sm font-semibold text-text-secondary tracking-wide">正在拉取大盘缓存指标数据...</p>
+      {/* 全局“正在查询统计中...”及取消遮罩 */}
+      {showDelayedLoading && !(scanStatus && scanStatus.is_scanning) && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-md z-[9999] flex flex-col items-center justify-center gap-6 animate-fade-in select-none">
+          {/* 呼吸发光卡片容器 */}
+          <div className="relative flex flex-col items-center bg-bg-secondary/90 dark:bg-[#0f192b]/95 border border-card-border p-8 rounded-3xl shadow-2xl max-w-sm w-full mx-4 shadow-neon-cyan/5">
+            {/* 装饰性背景光效 */}
+            <div className="absolute -top-12 -left-12 w-24 h-24 bg-neon-cyan/15 rounded-full blur-2xl pointer-events-none"></div>
+            <div className="absolute -bottom-12 -right-12 w-24 h-24 bg-neon-purple/15 rounded-full blur-2xl pointer-events-none"></div>
+
+            {/* 渐变双向旋转 Spinner */}
+            <div className="relative mb-6">
+              <div className="w-[56px] h-[56px] border-4 border-slate-200 dark:border-white/5 rounded-full border-t-neon-cyan border-b-neon-purple animate-spin"></div>
+              <div className="absolute inset-0.5 rounded-full border border-dashed border-neon-cyan/20 animate-spin-reverse pointer-events-none"></div>
+            </div>
+
+            {/* 标题与副标题 */}
+            <h3 className="text-base font-bold text-text-primary mb-2 text-center tracking-wide">
+              正在查询统计中...
+            </h3>
+            <p className="text-xs text-text-secondary text-center mb-6 max-w-[200px] leading-relaxed">
+              系统正在努力为您计算指标数据，请稍候
+            </p>
+
+            {/* 取消查询按钮 */}
+            <button
+              onClick={handleCancelQuery}
+              className="flex items-center justify-center gap-2 border border-red-500/35 hover:border-red-500 hover:bg-red-500/10 active:scale-95 text-red-500 font-semibold text-xs px-5 py-2.5 rounded-xl transition-all duration-300 cursor-pointer shadow-sm w-full hover:shadow-[0_0_15px_rgba(239,68,68,0.25)] select-none bg-transparent outline-none"
+            >
+              <svg className="w-3.5 h-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+              <span>取消查询</span>
+            </button>
+          </div>
         </div>
       )}
 
