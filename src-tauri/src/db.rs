@@ -16,8 +16,7 @@ pub fn get_user_profile_dir() -> String {
 
 pub fn get_db_cache_path() -> PathBuf {
     Path::new(&get_user_profile_dir())
-        .join(".gemini")
-        .join("antigravity")
+        .join(".ai_token_monitor")
         .join("token_stats.db")
 }
 

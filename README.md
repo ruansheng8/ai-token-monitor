@@ -1,6 +1,6 @@
-# Antigravity Token 用量统计仪表盘 (Token Monitor)
+# AI Token 用量统计仪表盘 (AI Token Monitor)
 
-本项目是专为 **Antigravity 2.0** 打造的本地 Token 消耗用量统计大盘。通过动态解码本地 SQLite 数据库中的高度加密二进制 Protobuf 字节流，以极致美观的毛玻璃暗黑风格（Glassmorphism）网页展示您的 API 用量明细、每日/月度使用趋势 and 模型占比。
+本项目是一个本地 AI 助手 Token 消耗用量统计大盘（首发支持 Antigravity/Gemini，后续计划支持 Claude Code, Codex 等多款 AI 助手工具）。通过动态解码本地运行产生的 SQLite 数据库，以极致美观的毛玻璃暗黑风格（Glassmorphism）网页展示您的 API 用量明细、每日/月度使用趋势和模型占比。
 
 ---
 

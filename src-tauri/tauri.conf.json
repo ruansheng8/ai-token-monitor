@@ -1,7 +1,7 @@
 {
   "productName": "ai-token-monitor",
   "version": "0.1.0",
-  "identifier": "com.antigravity.tokenmonitor",
+  "identifier": "com.aitokenmonitor.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
@@ -11,7 +11,7 @@
   "app": {
     "windows": [
       {
-        "title": "Antigravity 用量统计仪表盘",
+        "title": "AI 用量统计仪表盘",
         "width": 1350,
         "height": 850
       }

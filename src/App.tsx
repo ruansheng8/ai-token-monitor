@@ -1,19 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
 import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  LineElement,
-  PointElement,
-  Tooltip,
-  Legend,
-  BarController,
-  LineController
-} from 'chart.js';
-import type { ChartOptions } from 'chart.js';
-import { Chart } from 'react-chartjs-2';
-import {
   Cpu,
   ArrowDown,
   ArrowUp,
@@ -30,18 +16,7 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react';
-
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  BarElement,
-  LineElement,
-  PointElement,
-  Tooltip,
-  Legend,
-  BarController,
-  LineController
-);
+import { DailyTrendChart } from './components/charts/DailyTrendChart';
 
 // 类型定义
 interface Totals {
@@ -288,136 +263,7 @@ export default function App() {
     return Math.max(...data.model_distribution.map(m => m.total_tokens));
   }, [data?.model_distribution]);
 
-  // Chart.js 堆叠图表配置与数据
-  const chartData = useMemo(() => {
-    const trends = data?.daily_trends || [];
-    const dates = trends.map(t => t.date);
-    const cachedData = trends.map(t => t.cached);
-    const uncachedData = trends.map(t => Math.max(0, t.input - t.cached));
-    const outputData = trends.map(t => t.output);
-    const thinkingData = trends.map(t => t.thinking);
-    const isDark = theme === 'dark';
 
-    return {
-      labels: dates,
-      datasets: [
-        {
-          label: '缓存输入 Token',
-          data: cachedData,
-          backgroundColor: isDark ? 'rgba(20, 184, 166, 0.4)' : 'rgba(13, 148, 136, 0.35)',
-          borderColor: isDark ? 'rgba(20, 184, 166, 0.8)' : 'rgba(13, 148, 136, 0.8)',
-          borderWidth: 1,
-          stack: 'stack0',
-          order: 2,
-        },
-        {
-          label: '未缓存输入 Token',
-          data: uncachedData,
-          backgroundColor: isDark ? 'rgba(6, 182, 212, 0.65)' : 'rgba(8, 145, 178, 0.6)',
-          borderColor: isDark ? 'rgba(6, 182, 212, 0.95)' : 'rgba(8, 145, 178, 0.9)',
-          borderWidth: 1,
-          stack: 'stack0',
-          order: 2,
-        },
-        {
-          label: '输出 Token',
-          data: outputData,
-          backgroundColor: isDark ? 'rgba(236, 72, 153, 0.65)' : 'rgba(219, 39, 119, 0.6)',
-          borderColor: isDark ? 'rgba(236, 72, 153, 0.95)' : 'rgba(219, 39, 119, 0.9)',
-          borderWidth: 1,
-          stack: 'stack0',
-          order: 2,
-        },
-        {
-          label: '推理 Token',
-          data: thinkingData,
-          type: 'line' as const,
-          borderColor: isDark ? '#a855f7' : '#9333ea',
-          borderWidth: 2,
-          pointBackgroundColor: isDark ? '#a855f7' : '#9333ea',
-          pointBorderColor: '#ffffff',
-          pointHoverRadius: 6,
-          tension: 0.35,
-          fill: false,
-          order: 1,
-        }
-      ]
-    };
-  }, [data?.daily_trends, theme]);
-
-  const chartOptions = useMemo<ChartOptions<'bar'>>(() => {
-    const isDark = theme === 'dark';
-    return {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: {
-          display: false
-        },
-        tooltip: {
-          mode: 'index',
-          intersect: false,
-          backgroundColor: 'rgba(15, 23, 42, 0.85)',
-          titleColor: '#fff',
-          bodyColor: '#e2e8f0',
-          borderColor: 'rgba(255,255,255,0.1)',
-          borderWidth: 1,
-          padding: 12,
-          callbacks: {
-            label: function(context) {
-              let label = context.dataset.label || '';
-              if (label) {
-                label += ': ';
-              }
-              if (context.parsed.y !== null) {
-                label += formatNum(context.parsed.y);
-              }
-              return label;
-            },
-            footer: function(tooltipItems) {
-              let sum = 0;
-              tooltipItems.forEach(function(tooltipItem) {
-                if (tooltipItem.datasetIndex >= 0 && tooltipItem.datasetIndex <= 2 && tooltipItem.parsed.y !== null) {
-                  sum += tooltipItem.parsed.y;
-                }
-              });
-              return '总消耗 TOKEN: ' + formatNum(sum);
-            }
-          },
-          footerColor: '#06b6d4',
-          footerFont: { family: 'Outfit', weight: 'bold', size: 13 },
-        }
-      },
-      scales: {
-        x: {
-          stacked: true,
-          grid: {
-            color: isDark ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.04)',
-          },
-          ticks: {
-            color: isDark ? '#9ca3af' : '#475569',
-            font: { family: 'Outfit' }
-          }
-        },
-        y: {
-          stacked: true,
-          grid: {
-            color: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.04)',
-          },
-          ticks: {
-            color: isDark ? '#9ca3af' : '#475569',
-            font: { family: 'JetBrains Mono' },
-            callback: function(value) {
-              const numVal = Number(value);
-              if (numVal >= 1000000) return (numVal / 1000000).toFixed(1) + 'M';
-              if (numVal >= 1000) return (numVal / 1000).toFixed(0) + 'K';
-              return numVal;
-            }
-          }
-        }
-      }
-    };
-  }, [theme]);
 
   const totals = data?.totals;
 
@@ -429,7 +275,7 @@ export default function App() {
 
       <div className="max-w-[1400px] mx-auto p-6 flex flex-col gap-6">
         {/* 头部导航栏 */}
-        <header className="glass-card flex flex-col md:flex-row justify-between items-center px-7 py-4 rounded-2xl gap-4">
+        <header className="dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-7 py-4 gap-4">
           <div className="flex items-center gap-4">
             <svg className="w-9 h-9" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -443,8 +289,8 @@ export default function App() {
               </defs>
             </svg>
             <div className="flex flex-col items-start">
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">Antigravity</h1>
-              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">Token Monitor 2.0</span>
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">AI Token Monitor</h1>
+              <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">Multi-Engine Dashboard</span>
             </div>
           </div>
           <div className="flex items-center gap-4">
@@ -476,7 +322,7 @@ export default function App() {
         {/* KPI 看板 */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
           {/* 总消耗 */}
-          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-orange glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">总消耗 Token</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_tokens) : 0}</h2>
@@ -488,7 +334,7 @@ export default function App() {
           </div>
 
           {/* 输入 */}
-          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">输入 Token</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_input) : 0}</h2>
@@ -500,7 +346,7 @@ export default function App() {
           </div>
 
           {/* 输出 */}
-          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">输出 Token</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_output) : 0}</h2>
@@ -512,7 +358,7 @@ export default function App() {
           </div>
 
           {/* 缓存命中率 */}
-          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-cyan glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">缓存命中率</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatPercent(totals.cache_hit_rate) : '0.0%'}</h2>
@@ -524,7 +370,7 @@ export default function App() {
           </div>
 
           {/* 推理 Token 占比 */}
-          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-cyan glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">推理 Token 占比</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatPercent(totals.thinking_ratio) : '0.0%'}</h2>
@@ -536,7 +382,7 @@ export default function App() {
           </div>
 
           {/* 缓存 Token 数 */}
-          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-cyan glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">缓存命中数</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_cached) : 0}</h2>
@@ -548,7 +394,7 @@ export default function App() {
           </div>
 
           {/* 推理 Token 数 */}
-          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-orange glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">推理消耗数</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_thinking) : 0}</h2>
@@ -560,7 +406,7 @@ export default function App() {
           </div>
 
           {/* 总会话数 */}
-          <div className="kpi-card glass-card rounded-2xl p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-slate glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">总会话数</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_sessions) : 0}</h2>
@@ -573,20 +419,15 @@ export default function App() {
         </section>
 
         {/* 每日趋势图 */}
-        <section className="chart-section glass-card rounded-2xl p-6">
+        <section className="chart-section glass-card p-6">
           <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-3 mb-5 border-b border-card-border gap-3">
             <h2 className="text-base font-semibold text-text-primary">每日用量走势 (Token 堆叠柱状图)</h2>
-            <div className="flex items-center gap-4 text-xs text-text-secondary">
-              <span className="flex items-center gap-1.5"><span className="w-3 h-3 bg-neon-cyan/70 rounded-sm"></span>输入 Token</span>
-              <span className="flex items-center gap-1.5"><span className="w-3 h-3 bg-neon-pink/70 rounded-sm"></span>输出 Token</span>
-              <span className="flex items-center gap-1.5"><span className="w-3 h-1 bg-neon-purple rounded-full"></span>推理 Token</span>
-            </div>
           </div>
-          <div className="h-[380px] w-full">
+          <div className="w-full">
             {data?.daily_trends && data.daily_trends.length > 0 ? (
-              <Chart type="bar" data={chartData as any} options={chartOptions as any} />
+              <DailyTrendChart data={data.daily_trends} theme={theme} />
             ) : (
-              <div className="h-full flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+              <div className="h-[350px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
             )}
           </div>
         </section>
@@ -594,7 +435,7 @@ export default function App() {
         {/* 分布与汇总 */}
         <section className="grid grid-cols-1 lg:grid-cols-[1fr_1.5fr] gap-6">
           {/* 底层模型排行 */}
-          <div className="glass-card rounded-2xl p-5 flex flex-col gap-4">
+          <div className="glass-card p-5 flex flex-col gap-4">
             <div className="pb-3 border-b border-card-border">
               <h2 className="text-sm font-semibold text-text-primary">底层模型消耗占比</h2>
             </div>
@@ -608,9 +449,9 @@ export default function App() {
                         <span className="font-semibold text-text-primary">{m.model}</span>
                         <span className="font-mono text-text-secondary">{formatNum(m.total_tokens)} Tokens</span>
                       </div>
-                      <div className="h-2 w-full bg-gray-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
+                      <div className="h-2 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
                         <div
-                          className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_8px_var(--color-neon-cyan)] transition-all duration-1000"
+                          className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all duration-1000"
                           style={{ width: `${pct}%` }}
                         ></div>
                       </div>
@@ -624,7 +465,7 @@ export default function App() {
           </div>
 
           {/* 按月汇总表 */}
-          <div className="glass-card rounded-2xl p-5 flex flex-col gap-4">
+          <div className="glass-card p-5 flex flex-col gap-4">
             <div className="pb-3 border-b border-card-border">
               <h2 className="text-sm font-semibold text-text-primary">按月用量汇总</h2>
             </div>
@@ -664,7 +505,7 @@ export default function App() {
         </section>
 
         {/* 会话明细 */}
-        <section className="glass-card rounded-2xl p-6">
+        <section className="glass-card p-6">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 mb-5 border-b border-card-border">
             <h2 className="text-base font-semibold text-text-primary">会话用量明细</h2>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
@@ -678,7 +519,7 @@ export default function App() {
                     onChange={(e) => setHideZero(e.target.checked)}
                     className="sr-only peer"
                   />
-                  <div className="w-10 h-5 bg-gray-200 dark:bg-white/5 border border-gray-300 dark:border-white/10 rounded-full peer peer-focus:ring-0 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[3px] after:left-[3px] after:bg-gray-400 dark:after:bg-gray-500 peer-checked:after:bg-neon-cyan after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-neon-cyan/15 peer-checked:border-neon-cyan shadow-sm"></div>
+                  <div className="w-9 h-5 bg-slate-200 dark:bg-slate-800 rounded-full peer peer-checked:after:translate-x-4 after:content-[''] after:absolute after:top-[3px] after:left-[3px] after:bg-white dark:after:bg-slate-400 peer-checked:after:bg-white after:rounded-full after:h-3.5 after:w-3.5 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-blue-600 peer-checked:to-cyan-500 shadow-sm border border-slate-300 dark:border-slate-700"></div>
                 </div>
               </label>
               {/* 搜索框 */}
@@ -689,7 +530,7 @@ export default function App() {
                   placeholder="输入关键字搜索会话..."
                   value={searchKeyword}
                   onChange={(e) => setSearchKeyword(e.target.value)}
-                  className="w-full bg-bg-secondary/40 dark:bg-white/3 border border-card-border rounded-lg pl-9 pr-4 py-2 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] dark:focus:bg-white/5 transition-all duration-300"
+                  className="w-full bg-bg-secondary/40 dark:bg-white/3 border border-card-border rounded-xl pl-9 pr-4 py-2 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] dark:focus:bg-white/5 hover:border-neon-cyan/50 transition-all duration-300"
                 />
               </div>
             </div>
@@ -740,12 +581,12 @@ export default function App() {
                           <div className="flex flex-wrap gap-1.5">
                              {s.models && s.models.length > 0 ? (
                               s.models.map((m) => (
-                                <span key={m} className="text-[10px] px-2 py-0.5 bg-bg-secondary/40 dark:bg-white/5 border border-card-border text-text-secondary rounded">
+                                <span key={m} className="text-[10px] px-2 py-0.5 bg-bg-secondary/40 dark:bg-white/5 border border-card-border text-text-secondary rounded-lg">
                                   {m}
                                 </span>
                               ))
                             ) : (
-                              <span className="text-[10px] px-2 py-0.5 bg-bg-secondary/40 dark:bg-white/5 border border-card-border text-text-secondary rounded">
+                              <span className="text-[10px] px-2 py-0.5 bg-bg-secondary/40 dark:bg-white/5 border border-card-border text-text-secondary rounded-lg">
                                 unknown
                               </span>
                             )}
@@ -804,7 +645,7 @@ export default function App() {
                       onClick={() => setCurrentPage(pageNum as number)}
                       className={`w-8 h-8 rounded-lg flex items-center justify-center font-mono text-xs font-semibold border hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
                         isActive
-                          ? 'bg-gradient-to-r from-neon-cyan/15 to-neon-purple/15 border-neon-cyan text-neon-cyan shadow-[0_0_8px_rgba(6,182,212,0.15)] font-bold'
+                          ? 'bg-gradient-to-r from-blue-600 to-cyan-500 text-white border-transparent shadow-[0_4px_12px_rgba(37,99,235,0.25)] font-bold'
                           : 'bg-bg-secondary/40 dark:bg-white/3 border-card-border text-text-secondary hover:border-neon-cyan/40 hover:text-neon-cyan'
                       }`}
                     >
@@ -829,7 +670,7 @@ export default function App() {
                 <select
                   value={pageSize}
                   onChange={(e) => setPageSize(Number(e.target.value))}
-                  className="bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-lg px-2.5 py-1 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300 cursor-pointer"
+                  className="bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-2.5 py-1 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer"
                 >
                   <option value={10}>10 条/页</option>
                   <option value={20}>20 条/页</option>
