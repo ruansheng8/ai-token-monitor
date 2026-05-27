@@ -192,14 +192,14 @@ export function DailyTrendChart({ data = [], theme }: DailyTrendChartProps) {
           symbolSize: 6,
           itemStyle: {
             borderWidth: 2,
-            borderColor: '#ffffff',
+            borderColor: borderColor,
           },
           areaStyle: {
             color: {
               type: 'linear',
               x: 0, y: 0, x2: 0, y2: 1,
               colorStops: [
-                { offset: 0, color: hexToRgba(PALETTE_COLORS[3], 0.15) },
+                { offset: 0, color: hexToRgba(PALETTE_COLORS[3], 0.16) },
                 { offset: 1, color: hexToRgba(PALETTE_COLORS[3], 0.01) },
               ],
             },
@@ -210,7 +210,7 @@ export function DailyTrendChart({ data = [], theme }: DailyTrendChartProps) {
   }, [data, isDark]);
 
   return (
-    <div style={{ height: '350px', width: '100%' }}>
+    <div style={{ height: '300px', width: '100%' }}>
       <ECharts option={chartOption as any} />
     </div>
   );

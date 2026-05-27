@@ -491,9 +491,9 @@ export default function App() {
       <div className="background-decor-1 bg-decor-cyan animate-pulse-glow fixed -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
       <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse fixed -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
 
-      <div className="max-w-[1400px] mx-auto p-6 flex flex-col gap-6">
+      <div className="max-w-[1400px] mx-auto p-4 sm:p-5 flex flex-col gap-4">
         {/* 头部导航栏 */}
-        <header className="relative z-30 dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-7 py-4 gap-4">
+        <header className="relative z-30 dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-5 py-3 gap-3">
           <div className="flex items-center gap-4">
             <svg className="w-9 h-9" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -507,7 +507,7 @@ export default function App() {
               </defs>
             </svg>
             <div className="flex flex-col items-start">
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">AI Token Monitor</h1>
+              <h1 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">AI Token Monitor</h1>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">Multi-Engine Dashboard</span>
             </div>
           </div>
@@ -603,30 +603,41 @@ export default function App() {
         </header>
 
         {/* 时间筛选控制栏 */}
-        <section className="glass-card p-4 flex flex-col md:flex-row justify-between items-center gap-4 border border-card-border bg-bg-secondary/20 shadow-sm backdrop-blur-md rounded-[20px]">
-          <div className="flex flex-wrap items-center gap-2">
+        <section className="glass-card p-3 flex flex-col md:flex-row justify-between items-center gap-3 border border-card-border bg-bg-secondary/20 shadow-sm backdrop-blur-md rounded-[24px]">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs font-semibold text-text-secondary mr-2">🕒 时间区间：</span>
-            {[
-              { key: 'all', label: '全部时间' },
-              { key: 'today', label: '今日' },
-              { key: 'week', label: '最近7天' },
-              { key: '30days', label: '最近30天' },
-              { key: 'month', label: '本月' },
-              { key: 'quarter', label: '本季度' },
-              { key: 'custom', label: '自定义' },
-            ].map((item) => (
-              <button
-                key={item.key}
-                onClick={() => setTimeRange(item.key as any)}
-                className={`px-4 py-1.5 rounded-xl text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
-                  timeRange === item.key
-                    ? 'bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_12px_rgba(6,182,212,0.2)]'
-                    : 'bg-bg-secondary/40 dark:bg-white/3 border border-card-border text-text-secondary hover:text-text-primary hover:border-neon-cyan/40'
-                }`}
-              >
-                {item.label}
-              </button>
-            ))}
+            <div className="pill-container">
+              {[
+                { key: 'all', label: '全部时间' },
+                { key: 'today', label: '今日' },
+                { key: 'week', label: '最近7天' },
+                { key: '30days', label: '最近30天' },
+                { key: 'month', label: '本月' },
+                { key: 'quarter', label: '本季度' },
+                { key: 'custom', label: '自定义' },
+              ].map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => setTimeRange(item.key as any)}
+                  style={
+                    timeRange === item.key
+                      ? {
+                          background: "linear-gradient(to right, #3b82f6, #06b6d4)",
+                          color: "#ffffff",
+                          boxShadow: "0 10px 24px rgba(37, 99, 235, 0.22)",
+                        }
+                      : undefined
+                  }
+                  className={`px-3.5 py-1.5 rounded-full text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
+                    timeRange === item.key
+                      ? 'text-white'
+                      : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100/50 dark:hover:bg-white/5'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
           </div>
 
           {timeRange === 'custom' && (
@@ -650,7 +661,7 @@ export default function App() {
 
         {/* 扫描进度条展示 */}
         {scanStatus && scanStatus.is_scanning && (
-          <div className="glass-card rounded-[24px] p-5 flex flex-col gap-3 border border-neon-cyan/20 bg-neon-cyan/5 shadow-[0_8px_32px_rgba(6,182,212,0.08)]">
+          <div className="glass-card rounded-[24px] p-5 flex flex-col gap-3">
             <div className="flex justify-between items-center text-sm">
               <div className="flex items-center gap-2">
                 <RefreshCw className="w-4 h-4 text-neon-cyan animate-spin" />
@@ -660,9 +671,9 @@ export default function App() {
                 {scanStatus.scanned_files} / {scanStatus.total_files} ({scanStatus.total_files > 0 ? Math.round((scanStatus.scanned_files / scanStatus.total_files) * 100) : 0}%)
               </span>
             </div>
-            <div className="h-2 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
+            <div className="h-1.5 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all duration-300"
+                className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple transition-all duration-300"
                 style={{ width: `${scanStatus.total_files > 0 ? (scanStatus.scanned_files / scanStatus.total_files) * 100 : 0}%` }}
               ></div>
             </div>
@@ -710,108 +721,108 @@ export default function App() {
         )}
 
         {/* KPI 看板 */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
+        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
 
           {/* 总消耗 */}
-          <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-blue glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">总消耗 Token</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_tokens) : '0'}>{totals ? formatNum(totals.total_tokens) : 0}</h2>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">总消耗 Token</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_tokens) : '0'}>{totals ? formatNum(totals.total_tokens) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Tokens</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
-              <Compass className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
+              <Compass className="w-5 h-5" />
             </div>
           </div>
 
           {/* 输入 */}
-          <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-blue glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">输入 Token</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_input) : '0'}>{totals ? formatNum(totals.total_input) : 0}</h2>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">输入 Token</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_input) : '0'}>{totals ? formatNum(totals.total_input) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Prompt</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/30 group-hover:scale-110 transition-transform duration-300">
-              <ArrowDown className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/30 group-hover:scale-110 transition-transform duration-300">
+              <ArrowDown className="w-5 h-5" />
             </div>
           </div>
 
           {/* 输出 */}
-          <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-blue glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">输出 Token</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_output) : '0'}>{totals ? formatNum(totals.total_output) : 0}</h2>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">输出 Token</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_output) : '0'}>{totals ? formatNum(totals.total_output) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Candidates</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-pink/15 text-neon-pink border border-neon-pink/30 group-hover:scale-110 transition-transform duration-300">
-              <ArrowUp className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-pink/15 text-neon-pink border border-neon-pink/30 group-hover:scale-110 transition-transform duration-300">
+              <ArrowUp className="w-5 h-5" />
             </div>
           </div>
 
           {/* 缓存命中率 */}
-          <div className="kpi-card kpi-cyan glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-cyan glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">缓存命中率</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatPercent(totals.cache_hit_rate) : '0.0%'}</h2>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">缓存命中率</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatPercent(totals.cache_hit_rate) : '0.0%'}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Cache Hit Rate</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-blue/15 text-neon-blue border border-neon-blue/30 group-hover:scale-110 transition-transform duration-300">
-              <Database className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-blue/15 text-neon-blue border border-neon-blue/30 group-hover:scale-110 transition-transform duration-300">
+              <Database className="w-5 h-5" />
             </div>
           </div>
 
           {/* 推理 Token 占比 */}
-          <div className="kpi-card kpi-cyan glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-cyan glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">推理 Token 占比</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatPercent(totals.thinking_ratio) : '0.0%'}</h2>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">推理 Token 占比</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatPercent(totals.thinking_ratio) : '0.0%'}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Thinking Ratio</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
-              <Brain className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
+              <Brain className="w-5 h-5" />
             </div>
           </div>
 
           {/* 缓存 Token 数 */}
-          <div className="kpi-card kpi-cyan glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-cyan glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">缓存命中数</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_cached) : '0'}>{totals ? formatNum(totals.total_cached) : 0}</h2>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">缓存命中数</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_cached) : '0'}>{totals ? formatNum(totals.total_cached) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Cached Tokens</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-green/15 text-neon-green border border-neon-green/30 group-hover:scale-110 transition-transform duration-300">
-              <Cpu className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-green/15 text-neon-green border border-neon-green/30 group-hover:scale-110 transition-transform duration-300">
+              <Cpu className="w-5 h-5" />
             </div>
           </div>
 
           {/* 推理 Token 数 */}
-          <div className="kpi-card kpi-purple glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-purple glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">推理消耗数</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_thinking) : '0'}>{totals ? formatNum(totals.total_thinking) : 0}</h2>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">推理消耗数</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_thinking) : '0'}>{totals ? formatNum(totals.total_thinking) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Thinking Tokens</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
-              <Hash className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
+              <Hash className="w-5 h-5" />
             </div>
           </div>
 
           {/* 总会话数 */}
-          <div className="kpi-card kpi-slate glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-slate glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">总会话数</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_sessions) : '0'}>{totals ? formatNum(totals.total_sessions) : 0}</h2>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">总会话数</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_sessions) : '0'}>{totals ? formatNum(totals.total_sessions) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Sessions</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-teal/15 text-neon-teal border border-neon-teal/30 group-hover:scale-110 transition-transform duration-300">
-              <MessageSquare className="w-6 h-6" />
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-teal/15 text-neon-teal border border-neon-teal/30 group-hover:scale-110 transition-transform duration-300">
+              <MessageSquare className="w-5 h-5" />
             </div>
           </div>
         </section>
 
         {/* 每日趋势图 */}
-        <section className="chart-section glass-card p-6">
-          <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-3 mb-5 border-b border-card-border gap-3">
+        <section className="chart-section glass-card p-4 sm:p-5">
+          <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-2 mb-3.5 border-b border-card-border gap-2">
             <h2 className="text-base font-semibold text-text-primary">
               {source === 'all' && chartDimension === 'source' ? '各引擎每日用量对比走势 (Token 堆叠柱状图)' : '每日用量走势 (Token 堆叠柱状图)'}
             </h2>
@@ -846,13 +857,13 @@ export default function App() {
               data?.source_trends && data.source_trends.length > 0 ? (
                 <SourceTrendChart data={data.source_trends} theme={theme} />
               ) : (
-                <div className="h-[350px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+                <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
               )
             ) : (
               data?.daily_trends && data.daily_trends.length > 0 ? (
                 <DailyTrendChart data={data.daily_trends} theme={theme} />
               ) : (
-                <div className="h-[350px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+                <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
               )
             )}
           </div>

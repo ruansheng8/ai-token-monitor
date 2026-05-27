@@ -160,7 +160,7 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
   }, [data, isDark]);
 
   return (
-    <div style={{ height: '350px', width: '100%' }}>
+    <div style={{ height: '300px', width: '100%' }}>
       <ECharts option={chartOption as any} />
     </div>
   );
