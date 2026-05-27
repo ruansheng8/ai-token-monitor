@@ -1,7 +1,7 @@
-# 📊 AI Token Monitor — 个人本地 AI 助手 Token 用量统计仪表盘
+# 📊 AI Token Monitor — 多终端 AI IDE Token 用量统计仪表盘
 
 <p align="center">
-  <strong>监控本地 AI 助手的 Token 消耗，让 AI 治理与用量一目了然。</strong>
+  <strong>监控本地 AI IDE 的 Token 消耗，支持多个本地终端合并统计，让 AI 治理与用量一目了然。</strong>
 </p>
 
 <p align="center">
@@ -16,9 +16,9 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**AI Token 用量统计仪表盘 (AI Token Monitor)** 是一款专为本地 AI 助手打造的 *Token 消耗用量统计仪表盘*（首发完美适配 Antigravity/Gemini，后续计划支持 Claude Code, Codex 等多款助手）。
+**AI Token 用量统计仪表盘 (AI Token Monitor)** 是一款专为本地 AI 助手打造的 *Token 消耗用量统计仪表盘*（完美适配 Antigravity/Gemini、Claude Code、Codex、Cursor 等主流 AI 编程工具）。
 
-它通过动态解码本地运行产生的 SQLite 数据库，以极致美观的毛玻璃暗黑风格（Glassmorphism）网页及桌面端，直观呈现您的 API 用量明细、每日/月度使用趋势以及模型用量占比。
+它通过动态解码本地用量文件，直观呈现 API 用量明细、每日/月度使用趋势以及模型用量占比。
 
 如果您需要一个**完全本地化运行、零外部依赖分发、执行极速且视觉 Premium** 的 AI 治理统计看板，这正是您所寻找的工具。
 
