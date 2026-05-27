@@ -412,7 +412,7 @@ export default function App() {
         {/* KPI 看板 */}
         <section className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5">
           {/* 总消耗 */}
-          <div className="kpi-card kpi-orange glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">总消耗 Token</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_tokens) : 0}</h2>
@@ -466,7 +466,7 @@ export default function App() {
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatPercent(totals.thinking_ratio) : '0.0%'}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Thinking Ratio</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-orange/15 text-neon-orange border border-neon-orange/30 group-hover:scale-110 transition-transform duration-300">
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
               <Brain className="w-6 h-6" />
             </div>
           </div>
@@ -484,13 +484,13 @@ export default function App() {
           </div>
 
           {/* 推理 Token 数 */}
-          <div className="kpi-card kpi-orange glass-card p-5 flex justify-between items-center group">
+          <div className="kpi-card kpi-purple glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">推理消耗数</span>
               <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_thinking) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Thinking Tokens</span>
             </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-gold/15 text-neon-gold border border-neon-gold/30 group-hover:scale-110 transition-transform duration-300">
+            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
               <Hash className="w-6 h-6" />
             </div>
           </div>
