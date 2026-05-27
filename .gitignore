@@ -1,0 +1,6 @@
+/target
+ai-token-monitor
+ai-token-monitor.exe
+*.db
+*.log
+.DS_Store
