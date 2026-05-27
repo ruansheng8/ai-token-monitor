@@ -1,77 +1,193 @@
-# AI Token 用量统计仪表盘 (AI Token Monitor)
+# 📊 AI Token Monitor — 个人本地 AI 助手 Token 用量统计仪表盘
 
-本项目是一个本地 AI 助手 Token 消耗用量统计大盘（首发支持 Antigravity/Gemini，后续计划支持 Claude Code, Codex 等多款 AI 助手工具）。通过动态解码本地运行产生的 SQLite 数据库，以极致美观的毛玻璃暗黑风格（Glassmorphism）网页展示您的 API 用量明细、每日/月度使用趋势和模型占比。
+<p align="center">
+  <strong>监控本地 AI 助手的 Token 消耗，让 AI 治理与用量一目了然。</strong>
+</p>
+
+<p align="center">
+  <strong>看清每一次对话的 Token 消耗，打造极致流畅的本地用量统计大盘。</strong>
+</p>
+
+<p align="center">
+  <a href="#"><img src="https://img.shields.io/badge/Rust-2021-orange.svg?style=for-the-badge&logo=rust" alt="Rust Version"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tauri-v2-blue.svg?style=for-the-badge&logo=tauri" alt="Tauri Version"></a>
+  <a href="#"><img src="https://img.shields.io/badge/React-v19-61dafb.svg?style=for-the-badge&logo=react" alt="React Version"></a>
+  <a href="#"><img src="https://img.shields.io/badge/Tailwind-CSS%20v4-38bdf8.svg?style=for-the-badge&logo=tailwindcss" alt="Tailwind CSS"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License"></a>
+</p>
+
+**AI Token 用量统计仪表盘 (AI Token Monitor)** 是一款专为本地 AI 助手打造的 *Token 消耗用量统计仪表盘*（首发完美适配 Antigravity/Gemini，后续计划支持 Claude Code, Codex 等多款助手）。
+
+它通过动态解码本地运行产生的 SQLite 数据库，以极致美观的毛玻璃暗黑风格（Glassmorphism）网页及桌面端，直观呈现您的 API 用量明细、每日/月度使用趋势以及模型用量占比。
+
+如果您需要一个**完全本地化运行、零外部依赖分发、执行极速且视觉 Premium** 的 AI 治理统计看板，这正是您所寻找的工具。
+
+[快速开始](#-快速开始) · [技术亮点](#-核心优势与技术亮点) · [项目结构](#-项目结构) · [分发与打包](#-打包与分发) · [仪表盘说明](#-仪表盘使用说明) · [配置指南](#-配置指南) · [开源协议](#-开源协议)
 
 ---
 
-## 🌟 核心优势与技术亮点 (Rust 重构版)
+### 适配的 AI 助手 & 数据库支持
 
-1. **真正零依赖分发**：后端已使用 **Rust** 语言重构。SQLite 驱动在编译时以静态方式链接进二进制文件中，**目标电脑无需安装 Python、Rust 或任何 DLL 动态库**，实现纯粹的免安装体验。
-2. **动态多用户适配**：程序在运行时会自动读取 Windows 系统的 `%USERPROFILE%` 环境变量，动态适配当前登录用户的应用数据目录。在不同的 Windows 电脑上无需修改任何代码或路径。
-3. **极致的性能体验**：在本地建立 `token_stats.db` 缓存库。每次刷新时，通过监控 `.db` 文件的修改时间（mtime），若无变动则直接跳过文件读写与 Protobuf 解密。得益于 Rust 的原生机器码执行效率，**增量扫描和 SQL 聚合耗时降至几毫秒**。
-4. **并发同步保护**：后端 API 引入了线程锁，并在独立的线程池中执行 SQLite 阻塞任务，高频重复刷新也绝不会发生数据库锁争抢和请求死锁，且完全不阻塞 Web 服务主循环。
-5. **Premium 暗黑视觉交互**：前端使用流体渐变背景与微动效，支持多维度 KPI 看板、Chart.js 输入/输出/缓存三层堆叠柱状图和推理折线混合走势图，且支持会话列表的实时搜索和动态表头排序。
+<table>
+  <tr>
+    <td align="center" width="50%">
+      <strong>🎯 适配的 AI 助手</strong>
+      <br/>
+      <sub>Antigravity / Gemini (完美支持)</sub>
+      <br/>
+      <sub>Claude Code / Codex 等 (后续计划)</sub>
+    </td>
+    <td align="center" width="50%">
+      <strong>💾 支持的数据库</strong>
+      <br/>
+      <sub>内置 SQLite (本地无缝解析)</sub>
+      <br/>
+      <sub>企业级 PostgreSQL (高性能与集中化)</sub>
+    </td>
+  </tr>
+</table>
+
+---
+
+## 🌟 核心优势与技术亮点
+
+- **零依赖单文件分发** — 后端已基于 Rust 重构，SQLite/PostgreSQL 驱动在编译时以静态方式链接入二进制文件中，目标电脑无需安装 Python、Rust 运行时或任何 DLL，双击即用。
+- **双模运行机制 (Tauri v2 + Axum)** — 既是一个原生 Tauri 桌面端应用，也同时在后台启动轻量级 Axum Web 服务，支持在浏览器中远程访问与多设备协同查看。
+- **动态多用户适配** — 运行时自动读取 Windows 系统的 `%USERPROFILE%` 环境变量，自动加载当前登录用户的应用数据目录，无需手动修改任何路径。
+- **极致的高并发性能** — 建立本地 SQLite 缓存库并结合 `mtime`（修改时间）监测机制进行增量同步。对于复杂的 SQLite 阻塞任务引入线程锁并在独立线程池中执行，避免高频刷新导致的锁争抢，增量扫描与 SQL 聚合耗时降至几毫秒。
+- **数据库源热重载** — 前端提供直观的配置界面，支持 SQLite 路径及 PostgreSQL 数据库的分项/完整连接串配置，支持一键连接性测试。保存后自动写入后台 `.env` 配置文件，并触发连接池热重载生效，无需重启服务。
+- **Premium 玻璃拟态视觉** — 采用流体渐变暗黑风格，包含多维度 KPI 看板、ECharts 输入/输出/缓存三层堆叠柱状图和推理折线混合走势图，支持会话列表实时搜索与动态表头排序。
+
+---
+
+## 🚀 快速开始
+
+### 环境要求
+- **Rust (Cargo) 1.75+** （用于编译 Rust 后端与 Tauri 壳）
+- **Node.js 20+** 与 **pnpm / npm** （用于前端依赖安装与 Vite 编译）
+
+### 从源码开发与运行 (Development)
+
+```bash
+# 克隆仓库
+git clone https://github.com/your-username/ai-token-monitor.git
+cd ai-token-monitor
+
+# 安装前端依赖
+pnpm install  # 或 npm install
+
+# 在开发环境下启动服务
+# 此命令会以开发模式运行 Vite 前端并启动 Tauri
+pnpm tauri dev
+```
+
+### 独立 Web 服务启动 (Server Run)
+
+如果您想脱离 Tauri 窗口，将其作为独立的后台 Web 服务运行：
+
+```bash
+# 1. 编译前端静态资源
+pnpm build
+
+# 2. 运行 Rust 后端 Web 服务
+cd src-tauri
+cargo run --release
+```
+
+服务默认在 `19362` 端口启动，您可以在浏览器中直接访问：
+👉 **[http://localhost:19362](http://localhost:19362)**
+
+*💡 **自定义端口**：如果需要指定端口启动，只需在运行命令后追加端口参数即可（例如使用 8080 端口）：*
+```bash
+cargo run --release -- 8080
+```
 
 ---
 
 ## 📂 项目结构
 
-*   `static/`：前端静态资源目录，包含 HTML、CSS 和 JS 文件。
-    *   `index.html`：前端仪表盘结构框架。
-    *   `style.css`：符合现代审美标准的 Premium 玻璃拟态暗黑样式文件。
-    *   `app.js`：前端数据交互、表格搜索/排序以及 Chart.js 渲染逻辑。
-*   `src/`：后端核心代码。
-    *   `main.rs`：主程序入口，配置端口并启动服务器。
-    *   `proto.rs`：Protobuf 字节流反序列化与信息解析。
-    *   `db.rs`：本地 SQLite 缓存管理，增量会话同步算法和数据聚合查询。
-    *   `server.rs`：Axum Web 路由设置、API 请求处理器和静态资源嵌入式服务。
-*   `Cargo.toml`：Rust 项目配置文件与依赖管理。
+```
+ai-token-monitor/
+├── src/                  # 前端核心代码 (React + TS + Tailwind CSS)
+│   ├── components/       # 前端复用组件 (如 ECharts 图表组件)
+│   ├── App.tsx           # 前端数据交互、图表渲染、会话搜索/排序主页面
+│   ├── main.tsx          # 前端入口
+│   └── index.css         # 玻璃拟态暗黑风格的全局样式规范
+├── src-tauri/            # 后端核心代码 (Rust + Tauri v2 + Axum)
+│   ├── src/
+│   │   ├── main.rs       # 程序主入口，配置端口，启动后台服务及 Tauri 窗口
+│   │   ├── server.rs     # Axum Web 路由设置、嵌入式静态资源分发与配置 API
+│   │   ├── db.rs         # 本地 SQLite 缓存管理，增量会话同步算法和数据聚合查询
+│   │   ├── db_adapter.rs # 多数据库连接适配器（SQLite / PostgreSQL 自动路由）
+│   │   └── proto.rs      # Protobuf 字节流反序列化与信息解析
+│   ├── migrations/       # Refinery 数据库版本迁移脚本
+│   ├── Cargo.toml        # Rust 项目依赖配置文件
+│   ├── tauri.conf.json   # Tauri 应用配置文件
+│   └── .env.example      # 环境配置模板文件
+├── vite.config.ts        # Vite 构建配置文件
+└── package.json          # Node.js 项目依赖与构建脚本
+```
 
 ---
 
-## 🚀 如何运行使用
+## 📦 打包与分发
 
-### 步骤 1：运行服务
-进入当前项目文件夹目录，执行以下命令启动服务：
-```bash
-cargo run --release
-```
-
-*注：服务默认在 `19362` 端口启动。如果您需要自定义端口（如 8080），只需在启动命令后追加端口号：*
-```bash
-cargo run --release -- 8080
-```
-
-### 步骤 2：在浏览器中访问
-保持终端窗口处于运行状态，打开您的浏览器，在地址栏中输入：
-
-👉 **[http://localhost:19362](http://localhost:19362)** (若使用了自定义端口请替换为相应端口)
-
----
-
-## 📦 如何分发给其他 Windows 用户
-
-由于前端静态资源在编译时已自动嵌入至二进制程序中，所以整个应用已打包为完全自包含的单文件，分发极其简单：
+由于前端编译后的静态资源已使用 `rust-embed` 在编译时自动打包嵌入到 Rust 二进制程序中，因此打包后不需要携带任何静态资源文件：
 
 1. **本地编译可执行文件**：
    在项目根目录下，运行以下命令编译 Release 版本：
    ```bash
-   cargo build --release
+   pnpm build && cd src-tauri && cargo build --release
    ```
-   编译成功后，在 `target/release/` 目录下会生成一个名为 `ai-token-monitor.exe` 的可执行文件（体积仅约 4.5MB 左右）。
+   编译成功后，在 `src-tauri/target/release/` 目录下会生成一个名为 `ai-token-monitor.exe` 的可执行文件（体积仅约 4.5MB 左右）。
 
-2. **直接分发**：
-   您只需将这单个 `ai-token-monitor.exe` 文件发送给其他 Windows 用户。
-   目标用户直接双击运行即可立即使用，不需要携带或解压任何其他 `.html`、`.css` 或 `.js` 文件。
+2. **双击即用分发**：
+   您只需将单个 `ai-token-monitor.exe` 文件发送给其他 Windows 用户，对方直接双击运行即可，不需要附带任何 `.html`、`.css` 或 `.js` 文件。
+
+---
+
+## ⚙️ 配置指南
+
+系统支持两种数据库源类型：**SQLite** 与 **PostgreSQL**。配置文件存放在 `src-tauri/.env`。
+
+### 环境变量说明 (`.env.example`)
+
+```ini
+# 数据库类型配置 (支持 sqlite / postgres)
+DATABASE_TYPE=sqlite
+
+# SQLite 本地数据库路径 (DATABASE_TYPE=sqlite 时有效)
+# 留空则默认使用路径: C:\Users\<Username>\.ai_token_monitor\token_stats.db
+DB_SQLITE_PATH=
+
+# PostgreSQL 分项配置 (DATABASE_TYPE=postgres 时有效)
+DB_PG_HOST=127.0.0.1
+DB_PG_PORT=5432
+DB_PG_USER=postgres
+DB_PG_PASSWORD=your_password_here
+DB_PG_DATABASE=token_monitor
+```
+
+*💡 **提示**：除了手动配置 `.env` 之外，您也可以直接在运行后的仪表盘配置界面（点击右上角齿轮）进行图形化配置，点击连接测试并一键保存，后端将自动热重载，无需重启服务。*
 
 ---
 
 ## 📊 仪表盘使用说明
 
-1.  **KPI 核心看板**：展现总消耗 Token、未缓存输入、输出、总缓存命中数、缓存率（Context Caching 减免比例）、推理 Token 数及推理占比。
-2.  **每日趋势图**：柱形图直观展现每天的总 Token 消耗，柱子细分为 **已缓存输入**（亮绿）、**未缓存输入**（亮蓝）、**输出**（亮粉）三层堆叠，并叠有 **推理 Token 走势**（亮紫）折线，可将鼠标悬停在上方查看每一天的精确用量。
-3.  **模型分布与月度汇总**：展示每个底层模型消耗的总 Token 排行进度条，以及按月份聚合的会话 and Token 统计表。
-4.  **会话用量明细**：列出了您所有的交互会话（包含空会话）。
-    *   **排序**：点击表头（如“总计 Token”、“创建时间”）可在升序和降序之间重排。
-    *   **搜索**：在输入框内输入关键字（标题、UUID、模型名），表格会秒级过滤出匹配的数据。
-5.  **同步刷新**：点击右上角 **“同步刷新”** 按钮，后端会立刻扫描自上次刷新以来有修改或新增的会话数据入库，并在极短时间内（毫秒级）向前端提供最新大盘数据。
+1. **KPI 核心看板**：实时展现总消耗 Token、未缓存输入、输出、总缓存命中数、缓存率（Context Caching 减免比例）、推理 Token 数及推理占比等关键指标。
+2. **每日用量走势图**：由 **ECharts** 驱动的三层堆叠柱状图，直观展示每天的 **已缓存输入**（亮绿）、**未缓存输入**（亮蓝）、**输出**（亮粉）用量，并叠加 **推理 Token 走势**（亮紫）折线，悬停即可查看当天精确数据。
+3. **模型分布与排行**：展示每个底层模型消耗的总 Token 排行进度条。
+4. **会话用量明细**：详细列出所有交互会话。
+   - **排序**：点击表头（如“总计 Token”、“创建时间”）支持升序与降序切换。
+   - **搜索**：支持输入会话标题、UUID、模型名称，实现秒级过滤。
+5. **同步刷新**：点击右上角 **“同步刷新”** 按钮，后端会立刻扫描自上次刷新以来有修改或新增的会话数据入库，并在毫秒级内重构渲染最新大盘数据。
+
+---
+
+## 🤝 参与贡献
+
+欢迎提出 Issue 或提交 Pull Request 来帮助完善此项目！
+
+## 📄 开源协议
+
+本项目采用 [MIT License](LICENSE) 许可协议。
