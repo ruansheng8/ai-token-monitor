@@ -6,12 +6,11 @@ use axum::{
 };
 
 use crate::db::{
-    init_cache_db, get_aggregated_metrics_from_cache, start_background_scan, get_scan_status,
+    get_aggregated_metrics_from_cache, start_background_scan, get_scan_status,
 };
 
 pub async fn handle_metrics() -> Response<Body> {
     match tokio::task::spawn_blocking(|| {
-        let _ = init_cache_db();
         get_aggregated_metrics_from_cache()
     })
     .await
@@ -50,7 +49,6 @@ pub async fn handle_metrics() -> Response<Body> {
 
 pub async fn handle_scan_start() -> Response<Body> {
     match tokio::task::spawn_blocking(|| {
-        let _ = init_cache_db();
         start_background_scan();
         
         let status = get_scan_status().lock().unwrap().clone();

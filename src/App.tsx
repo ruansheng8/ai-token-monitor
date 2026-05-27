@@ -773,11 +773,58 @@ export default function App() {
         </section>
       </div>
 
+      {/* 首次初始化时的全屏扫描进度遮罩 */}
+      {(!data || (data.totals.total_sessions === 0 && data.sessions.length === 0)) && scanStatus && scanStatus.is_scanning && (
+        <div className="fixed inset-0 bg-bg-app dark:bg-[#0b1528] z-[9999] flex flex-col items-center justify-center p-6 gap-6 select-none animate-fade-in">
+          {/* 背景光效 */}
+          <div className="background-decor-1 bg-decor-cyan animate-pulse-glow absolute -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
+          <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse absolute -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
+
+          <div className="glass-card rounded-[32px] max-w-[500px] w-full p-8 flex flex-col items-center text-center gap-6 border border-white/10 dark:border-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.3)]">
+            <svg className="w-16 h-16 animate-spin text-neon-cyan mb-2" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12" stroke="url(#spinner-grad-main)" strokeWidth="3" strokeLinecap="round"/>
+              <defs>
+                <linearGradient id="spinner-grad-main" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                  <stop stopColor="#06b6d4" />
+                  <stop offset="1" stopColor="#a855f7" />
+                </linearGradient>
+              </defs>
+            </svg>
+
+            <div className="flex flex-col gap-2">
+              <h2 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">
+                正在初始化仪表盘
+              </h2>
+              <p className="text-xs text-text-secondary max-w-[360px] leading-relaxed">
+                正在进行首次数据同步，系统正在扫描并解码历史会话中的 Token 消耗明细，请稍候...
+              </p>
+            </div>
+
+            <div className="w-full flex flex-col gap-2 mt-2">
+              <div className="flex justify-between items-center text-xs text-text-secondary font-medium">
+                <span>同步进度</span>
+                <span className="font-mono text-neon-cyan font-bold">
+                  {scanStatus.scanned_files} / {scanStatus.total_files} ({scanStatus.total_files > 0 ? Math.round((scanStatus.scanned_files / scanStatus.total_files) * 100) : 0}%)
+                </span>
+              </div>
+              <div className="h-2.5 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_12px_rgba(6,182,212,0.5)] transition-all duration-300"
+                  style={{ width: `${scanStatus.total_files > 0 ? (scanStatus.scanned_files / scanStatus.total_files) * 100 : 0}%` }}
+                ></div>
+              </div>
+            </div>
+            
+            <span className="text-[10px] text-text-muted italic">这通常仅在首次启动或有大量新会话时需要较长时间</span>
+          </div>
+        </div>
+      )}
+
       {/* 全局加载遮罩 */}
-      {loading && (
+      {loading && !data && !(scanStatus && scanStatus.is_scanning) && (
         <div className="fixed inset-0 bg-bg-app/85 backdrop-blur-md z-[9999] flex flex-col items-center justify-center gap-5">
           <div className="w-[50px] h-[50px] border-4 border-neon-cyan/10 rounded-full border-t-neon-cyan border-b-neon-purple animate-spin"></div>
-          <p className="text-sm font-semibold text-text-secondary tracking-wide">正在抓取并解码 Token 消耗数据...</p>
+          <p className="text-sm font-semibold text-text-secondary tracking-wide">正在拉取大盘缓存指标数据...</p>
         </div>
       )}
     </div>

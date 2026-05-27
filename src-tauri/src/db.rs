@@ -414,11 +414,6 @@ where
     Ok(())
 }
 
-pub fn sync_and_collect_metrics() -> Result<AggregatedMetrics, rusqlite::Error> {
-    sync_cache_db_with_progress(|_, _| {})?;
-    get_aggregated_metrics_from_cache()
-}
-
 // 5. 从缓存数据库获取大盘聚合统计数据
 
 #[derive(Serialize)]

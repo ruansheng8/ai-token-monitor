@@ -4,10 +4,13 @@ mod proto;
 mod db;
 mod server;
 
-use axum::{routing::{get, post}, Router};
+use axum::{routing::get, Router};
 use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback};
 
 fn main() {
+    // 启动时初始化本地缓存数据库，确保表结构完备，避免多请求并发竞争初始化导致的数据库锁死
+    let _ = db::init_cache_db();
+
     let mut port = 19362;
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
