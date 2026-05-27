@@ -243,7 +243,7 @@ export default function App() {
   // 精确数字格式化（带千分位）
   const formatPreciseNum = (num: number) => new Intl.NumberFormat('zh-CN').format(num || 0);
 
-  // 数字格式化，支持中文大数单位（万、百万、千万、亿、十亿、百亿、千亿）
+  // 数字格式化，支持中文大数单位（万、亿），保留最多1位有效小数
   const formatNum = (num: number) => {
     if (num === 0) return '0';
     if (!num) return '0';
@@ -251,32 +251,16 @@ export default function App() {
     let unit = '';
     let formatted = absNum;
 
-    if (absNum >= 1e11) {
-      formatted = absNum / 1e11;
-      unit = '千亿';
-    } else if (absNum >= 1e10) {
-      formatted = absNum / 1e10;
-      unit = '百亿';
-    } else if (absNum >= 1e9) {
-      formatted = absNum / 1e9;
-      unit = '十亿';
-    } else if (absNum >= 1e8) {
+    if (absNum >= 1e8) {
       formatted = absNum / 1e8;
       unit = '亿';
-    } else if (absNum >= 1e7) {
-      formatted = absNum / 1e7;
-      unit = '千万';
-    } else if (absNum >= 1e6) {
-      formatted = absNum / 1e6;
-      unit = '百万';
     } else if (absNum >= 1e4) {
       formatted = absNum / 1e4;
       unit = '万';
     }
 
     if (unit) {
-      const str = formatted.toFixed(2);
-      const trimmed = parseFloat(str).toString();
+      const trimmed = parseFloat(formatted.toFixed(1)).toString();
       return (num < 0 ? '-' : '') + trimmed + unit;
     }
 
@@ -726,24 +710,13 @@ export default function App() {
         )}
 
         {/* KPI 看板 */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-5 gap-5">
-          {/* 估计总消费 */}
-          <div className="kpi-card kpi-pink glass-card p-5 flex justify-between items-center group bg-gradient-to-br from-neon-pink/10 to-neon-purple/5 border-neon-pink/20 hover:border-neon-pink/40 shadow-[0_8px_30px_rgba(236,72,153,0.04)]">
-            <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-1">估算总费用</span>
-              <h2 className="text-2xl font-bold font-mono tracking-tight text-neon-pink mb-0.5">${totals ? totals.total_cost.toFixed(3) : '0.000'}</h2>
-              <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Est. Total Cost</span>
-            </div>
-            <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-pink/15 text-neon-pink border border-neon-pink/30 group-hover:scale-110 transition-transform duration-300">
-              <span className="text-lg font-bold font-mono">$</span>
-            </div>
-          </div>
+        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-5">
 
           {/* 总消耗 */}
           <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">总消耗 Token</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_tokens) : 0}</h2>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_tokens) : '0'}>{totals ? formatNum(totals.total_tokens) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Tokens</span>
             </div>
             <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
@@ -755,7 +728,7 @@ export default function App() {
           <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">输入 Token</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_input) : 0}</h2>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_input) : '0'}>{totals ? formatNum(totals.total_input) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Prompt</span>
             </div>
             <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-cyan/15 text-neon-cyan border border-neon-cyan/30 group-hover:scale-110 transition-transform duration-300">
@@ -767,7 +740,7 @@ export default function App() {
           <div className="kpi-card kpi-blue glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">输出 Token</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_output) : 0}</h2>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_output) : '0'}>{totals ? formatNum(totals.total_output) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Candidates</span>
             </div>
             <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-pink/15 text-neon-pink border border-neon-pink/30 group-hover:scale-110 transition-transform duration-300">
@@ -803,7 +776,7 @@ export default function App() {
           <div className="kpi-card kpi-cyan glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">缓存命中数</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_cached) : 0}</h2>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_cached) : '0'}>{totals ? formatNum(totals.total_cached) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Cached Tokens</span>
             </div>
             <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-green/15 text-neon-green border border-neon-green/30 group-hover:scale-110 transition-transform duration-300">
@@ -815,7 +788,7 @@ export default function App() {
           <div className="kpi-card kpi-purple glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">推理消耗数</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_thinking) : 0}</h2>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_thinking) : '0'}>{totals ? formatNum(totals.total_thinking) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Thinking Tokens</span>
             </div>
             <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/30 group-hover:scale-110 transition-transform duration-300">
@@ -827,7 +800,7 @@ export default function App() {
           <div className="kpi-card kpi-slate glass-card p-5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-1">总会话数</span>
-              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5">{totals ? formatNum(totals.total_sessions) : 0}</h2>
+              <h2 className="text-2xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_sessions) : '0'}>{totals ? formatNum(totals.total_sessions) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Sessions</span>
             </div>
             <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-neon-teal/15 text-neon-teal border border-neon-teal/30 group-hover:scale-110 transition-transform duration-300">
@@ -900,11 +873,11 @@ export default function App() {
                      <div key={m.model} className="flex flex-col gap-1.5">
                       <div className="flex justify-between items-center text-xs">
                         <span className="font-semibold text-text-primary">{m.model}</span>
-                        <span className="font-mono text-text-secondary">{formatNum(m.total_tokens)} Tokens</span>
+                        <span className="font-mono text-text-secondary" title={`${formatPreciseNum(m.total_tokens)} Tokens`}>{formatNum(m.total_tokens)} Tokens</span>
                       </div>
                       <div className="h-2 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
                         <div
-                          className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all duration-1000"
+                           className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all duration-1000"
                           style={{ width: `${pct}%` }}
                         ></div>
                       </div>
@@ -939,11 +912,11 @@ export default function App() {
                     data.monthly_summary.map((row) => (
                       <tr key={row.month} className="hover:bg-table-row-hover transition-colors duration-150">
                         <td className="font-mono text-text-primary py-2.5">{row.month}</td>
-                        <td className="font-mono text-right py-2.5">{formatNum(row.sessions)}</td>
-                        <td className="font-mono text-right py-2.5">{formatNum(row.input)}</td>
-                        <td className="font-mono text-right py-2.5">{formatNum(row.output)}</td>
-                        <td className="font-mono text-right py-2.5">{formatNum(row.cached)}</td>
-                        <td className="font-mono text-right py-2.5">{formatNum(row.thinking)}</td>
+                        <td className="font-mono text-right py-2.5" title={formatPreciseNum(row.sessions)}>{formatNum(row.sessions)}</td>
+                        <td className="font-mono text-right py-2.5" title={formatPreciseNum(row.input)}>{formatNum(row.input)}</td>
+                        <td className="font-mono text-right py-2.5" title={formatPreciseNum(row.output)}>{formatNum(row.output)}</td>
+                        <td className="font-mono text-right py-2.5" title={formatPreciseNum(row.cached)}>{formatNum(row.cached)}</td>
+                        <td className="font-mono text-right py-2.5" title={formatPreciseNum(row.thinking)}>{formatNum(row.thinking)}</td>
                       </tr>
                     ))
                   ) : (
@@ -1017,9 +990,7 @@ export default function App() {
                   <th onClick={() => handleSort('thinking')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
                     <span className="flex items-center justify-end gap-1">推理 Token <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
                   </th>
-                  <th onClick={() => handleSort('cost_usd')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
-                    <span className="flex items-center justify-end gap-1">估算费用 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
-                  </th>
+
                   <th onClick={() => handleSort('total')} className="sortable text-right py-3 cursor-pointer hover:text-neon-cyan transition-colors">
                     <span className="flex items-center justify-end gap-1">总计 Token <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
                   </th>
@@ -1071,18 +1042,17 @@ export default function App() {
                             )}
                           </div>
                         </td>
-                        <td className="font-mono text-right py-3">{formatNum(s.input)}</td>
-                        <td className="font-mono text-right py-3">{formatNum(s.output)}</td>
-                        <td className="font-mono text-right py-3">{formatNum(s.cached)}</td>
-                        <td className="font-mono text-right py-3">{formatNum(s.thinking)}</td>
-                        <td className="font-mono text-right text-xs text-text-secondary py-3">${s.cost_usd.toFixed(3)}</td>
-                        <td className="font-mono text-right font-bold text-neon-cyan py-3">{formatNum(totalTokens)}</td>
+                        <td className="font-mono text-right py-3" title={formatPreciseNum(s.input)}>{formatNum(s.input)}</td>
+                        <td className="font-mono text-right py-3" title={formatPreciseNum(s.output)}>{formatNum(s.output)}</td>
+                        <td className="font-mono text-right py-3" title={formatPreciseNum(s.cached)}>{formatNum(s.cached)}</td>
+                        <td className="font-mono text-right py-3" title={formatPreciseNum(s.thinking)}>{formatNum(s.thinking)}</td>
+                        <td className="font-mono text-right font-bold text-neon-cyan py-3" title={formatPreciseNum(totalTokens)}>{formatNum(totalTokens)}</td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={10} className="text-center py-10 text-text-muted italic">
+                    <td colSpan={9} className="text-center py-10 text-text-muted italic">
                       没有符合条件的会话记录
                     </td>
                   </tr>

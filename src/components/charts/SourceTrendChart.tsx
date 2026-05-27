@@ -26,6 +26,24 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 
+// 格式化数字，带中文大数单位（万、亿），避免小数点
+const formatValueWithUnit = (val: number) => {
+  const precise = val.toLocaleString('zh-CN');
+  if (val >= 10000) {
+    let unit = '';
+    let formatted = val;
+    if (val >= 1e8) {
+      formatted = Math.round(val / 1e8);
+      unit = '亿';
+    } else if (val >= 1e4) {
+      formatted = Math.round(val / 1e4);
+      unit = '万';
+    }
+    return `${precise} (${formatted}${unit})`;
+  }
+  return precise;
+};
+
 export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
   const isDark = theme === 'dark';
 
@@ -77,7 +95,7 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
                 ${item.marker} ${item.seriesName}
               </span>
               <span style="font-weight:600;color:${isDark ? '#f3f4f6' : '#0f172a'};font-family:'JetBrains Mono', monospace;margin-left:auto;">
-                ${val.toLocaleString('zh-CN')} Tokens
+                ${formatValueWithUnit(val)} Tokens
               </span>
             </div>`;
           });
@@ -86,7 +104,7 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
           html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid ${isDark ? 'rgba(255,255,255,0.08)' : '#e2e8f0'};display:flex;align-items:center;justify-content:space-between;gap:20px;font-size:11px;">
             <span style="font-weight:600;color:${isDark ? '#06b6d4' : '#0891b2'};">总消耗 TOKEN</span>
             <span style="font-weight:700;color:${isDark ? '#06b6d4' : '#0891b2'};font-family:'JetBrains Mono', monospace;margin-left:auto;">
-              ${totalTokens.toLocaleString('zh-CN')} Tokens
+              ${formatValueWithUnit(totalTokens)} Tokens
             </span>
           </div>`;
           
@@ -116,9 +134,23 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
           fontSize: 10,
           fontFamily: 'JetBrains Mono',
           formatter: (value: number) => {
-            if (value >= 1000000) return (value / 1000000).toFixed(1) + 'M';
-            if (value >= 1000) return (value / 1000).toFixed(0) + 'K';
-            return value.toString();
+            if (value === 0) return '0';
+            const absNum = Math.abs(value);
+            let unit = '';
+            let formatted = absNum;
+
+            if (absNum >= 1e8) {
+              formatted = Math.round(absNum / 1e8);
+              unit = '亿';
+            } else if (absNum >= 1e4) {
+              formatted = Math.round(absNum / 1e4);
+              unit = '万';
+            }
+
+            if (unit) {
+              return (value < 0 ? '-' : '') + formatted + unit;
+            }
+            return (value < 0 ? '-' : '') + absNum.toString();
           }
         },
         splitLine: { lineStyle: { color: isDark ? 'rgba(255,255,255,0.04)' : '#f1f5f9' } },

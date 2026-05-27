@@ -29,6 +29,25 @@ function hexToRgba(hex: string, alpha: number) {
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
+// 格式化数字，带中文大数单位（万、亿），保留最多1位有效小数
+const formatValueWithUnit = (val: number) => {
+  const precise = val.toLocaleString('zh-CN');
+  if (val >= 10000) {
+    let unit = '';
+    let formatted = val;
+    if (val >= 1e8) {
+      formatted = val / 1e8;
+      unit = '亿';
+    } else if (val >= 1e4) {
+      formatted = val / 1e4;
+      unit = '万';
+    }
+    const trimmed = parseFloat(formatted.toFixed(1)).toString();
+    return `${precise} (${trimmed}${unit})`;
+  }
+  return precise;
+};
+
 export function DailyTrendChart({ data = [], theme }: DailyTrendChartProps) {
   const isDark = theme === 'dark';
 
@@ -68,7 +87,7 @@ export function DailyTrendChart({ data = [], theme }: DailyTrendChartProps) {
                 ${item.marker} ${item.seriesName}
               </span>
               <span style="font-weight:600;color:${isDark ? '#f3f4f6' : '#0f172a'};font-family:'JetBrains Mono', monospace;margin-left:auto;">
-                ${val.toLocaleString('zh-CN')}
+                ${formatValueWithUnit(val)}
               </span>
             </div>`;
           });
@@ -77,7 +96,7 @@ export function DailyTrendChart({ data = [], theme }: DailyTrendChartProps) {
           html += `<div style="margin-top:6px;padding-top:6px;border-top:1px solid ${isDark ? 'rgba(255,255,255,0.08)' : '#e2e8f0'};display:flex;align-items:center;justify-content:space-between;gap:20px;font-size:11px;">
             <span style="font-weight:600;color:${isDark ? '#06b6d4' : '#0891b2'};">总消耗 TOKEN</span>
             <span style="font-weight:700;color:${isDark ? '#06b6d4' : '#0891b2'};font-family:'JetBrains Mono', monospace;margin-left:auto;">
-              ${totalBar.toLocaleString('zh-CN')}
+              ${formatValueWithUnit(totalBar)}
             </span>
           </div>`;
           
@@ -107,9 +126,24 @@ export function DailyTrendChart({ data = [], theme }: DailyTrendChartProps) {
           fontSize: 10,
           fontFamily: 'JetBrains Mono',
           formatter: (value: number) => {
-            if (value >= 1000000) return (value / 1000000).toFixed(1) + 'M';
-            if (value >= 1000) return (value / 1000).toFixed(0) + 'K';
-            return value.toString();
+            if (value === 0) return '0';
+            const absNum = Math.abs(value);
+            let unit = '';
+            let formatted = absNum;
+
+            if (absNum >= 1e8) {
+              formatted = absNum / 1e8;
+              unit = '亿';
+            } else if (absNum >= 1e4) {
+              formatted = absNum / 1e4;
+              unit = '万';
+            }
+
+            if (unit) {
+              const trimmed = parseFloat(formatted.toFixed(1)).toString();
+              return (value < 0 ? '-' : '') + trimmed + unit;
+            }
+            return (value < 0 ? '-' : '') + absNum.toString();
           }
         },
         splitLine: { lineStyle: { color: isDark ? 'rgba(255,255,255,0.04)' : '#f1f5f9' } },
