@@ -273,6 +273,8 @@ pub struct ScanStatus {
     pub total_files: usize,
     pub scanned_files: usize,
     pub error: Option<String>,
+    pub logs: Vec<String>,
+    pub status_msg: String,
 }
 
 pub static DB_LOCK: Mutex<()> = Mutex::new(());
@@ -285,8 +287,21 @@ pub fn get_scan_status() -> &'static Mutex<ScanStatus> {
             total_files: 0,
             scanned_files: 0,
             error: None,
+            logs: Vec::new(),
+            status_msg: "未开始同步".to_string(),
         })
     })
+}
+
+pub fn log_progress(msg: &str) {
+    println!("{}", msg);
+    if let Ok(mut status) = get_scan_status().lock() {
+        status.status_msg = msg.to_string();
+        status.logs.push(msg.to_string());
+        if status.logs.len() > 1000 {
+            status.logs.remove(0);
+        }
+    }
 }
 
 pub fn start_background_scan() {
@@ -300,6 +315,8 @@ pub fn start_background_scan() {
         status.total_files = 0;
         status.scanned_files = 0;
         status.error = None;
+        status.logs = Vec::new();
+        status.status_msg = "正在初始化扫描...".to_string();
     }
 
     std::thread::spawn(move || {
@@ -535,6 +552,8 @@ pub fn sync_claude_code(
         return Ok(());
     }
 
+    log_progress("正在扫描并增量同步 Claude Code 历史会话数据...");
+
     let mut jsonl_files = Vec::new();
     find_jsonl_files(&projects_dir, &mut jsonl_files);
 
@@ -624,6 +643,10 @@ pub fn sync_claude_code(
                 }
             }
 
+            if !new_turns.is_empty() {
+                log_progress(&format!("发现 Claude Code 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+            }
+
             let tx = conn_cache.transaction()?;
             {
                 let title = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -668,6 +691,8 @@ pub fn sync_codex(
     if !codex_dir.exists() {
         return Ok(());
     }
+
+    log_progress("正在扫描并增量同步 Codex CLI 历史会话数据...");
 
     let default_model = get_codex_config_model();
 
@@ -755,6 +780,10 @@ pub fn sync_codex(
                 }
             }
 
+            if !new_turns.is_empty() {
+                log_progress(&format!("发现 Codex 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+            }
+
             let tx = conn_cache.transaction()?;
             {
                 let title = file_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
@@ -833,6 +862,10 @@ where
     let total_files = db_files.len() + claude_files.len() + codex_files.len();
     progress_cb(0, total_files);
 
+    let msg = format!("发现待同步物理文件共 {} 个（Antigravity: {}, Claude Code: {}, Codex: {}）", 
+        total_files, db_files.len(), claude_files.len(), codex_files.len());
+    log_progress(&msg);
+
     let cache_path = get_db_cache_path();
     let mut conn_cache = rusqlite::Connection::open(&cache_path)?;
 
@@ -881,6 +914,8 @@ where
     }
 
     let db_files_len = db_files.len();
+
+    log_progress("正在扫描并增量同步 Antigravity 历史会话数据...");
 
     // C. 增量同步 Antigravity 数据
     for (i, db_path) in db_files.into_iter().enumerate() {
@@ -969,6 +1004,10 @@ where
             }
         }
 
+        if !new_turns.is_empty() {
+            log_progress(&format!("发现 Antigravity 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+        }
+
         // 写入增量数据并更新修改时间
         let tx = conn_cache.transaction()?;
         {
@@ -1020,7 +1059,9 @@ where
     let _ = sync_codex(&mut conn_cache, db_files_len + claude_files.len(), total_files, &progress_cb);
 
     // F. 如果配置了 PostgreSQL 模式，自动将本地 SQLite 增量好的最新数据一键同步至 PostgreSQL
-    let _ = sync_local_to_postgres();
+    if let Err(e) = sync_local_to_postgres() {
+        log_progress(&format!("同步到 PostgreSQL 失败: {}", e));
+    }
 
     Ok(())
 }
@@ -1724,16 +1765,25 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
     }
 
     if sessions_to_sync.is_empty() {
-        println!("所有本地数据与远程 PostgreSQL 保持一致，无需增量同步。");
+        log_progress("所有本地数据与远程 PostgreSQL 保持一致，无需增量同步。");
         return Ok(());
     }
 
-    println!("检测到有 {} 个会话存在更新，正在进行增量差分同步...", sessions_to_sync.len());
+    let total_sessions = sessions_to_sync.len();
+    log_progress(&format!("检测到有 {} 个会话存在更新，正在进行增量分批同步...", total_sessions));
 
-    // 5. 开启 PG 事务，批量/增量镜像同步变动部分
+    // 5. 开启 PG 事务，分批（每 50 个会话）镜像同步变动部分
     let mut pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
+    let mut count = 0;
 
-    for (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx) in sessions_to_sync {
+    for (idx, (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx)) in sessions_to_sync.into_iter().enumerate() {
+        if count == 0 {
+            log_progress(&format!(
+                "正在同步数据至远程 PostgreSQL ({}/{}) ...",
+                idx, total_sessions
+            ));
+        }
+
         // A. 同步会话表状态
         pg_tx.execute(
             "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
@@ -1789,10 +1839,20 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 &[&src, &uid, &idx, &model, &input_tokens, &cached_input_tokens, &output_tokens, &thinking_tokens, &cost_usd, &message_id, &request_id, &timestamp],
             ).map_err(|e| format!("同步轮次记录失败: {}", e))?;
         }
+
+        count += 1;
+        if count >= 50 {
+            pg_tx.commit().map_err(|e| format!("提交 PostgreSQL 同步事务失败: {}", e))?;
+            pg_tx = pg_client.transaction().map_err(|e| e.to_string())?;
+            count = 0;
+        }
     }
 
-    pg_tx.commit().map_err(|e| format!("提交 PostgreSQL 同步事务失败: {}", e))?;
-    println!("SQLite 本地增量数据镜像成功同步到远程 PostgreSQL 数据库！");
+    if count > 0 {
+        pg_tx.commit().map_err(|e| format!("提交 PostgreSQL 同步事务失败: {}", e))?;
+    }
+
+    log_progress("SQLite 本地增量数据镜像成功同步到远程 PostgreSQL 数据库！");
     Ok(())
 }
 

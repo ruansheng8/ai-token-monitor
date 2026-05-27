@@ -220,79 +220,32 @@ impl DbConn {
 }
 
 // 5. 自动 Schema DDL 创表迁移脚本
+mod sqlite_migrations {
+    refinery::embed_migrations!("migrations/sqlite");
+}
+mod postgres_migrations {
+    refinery::embed_migrations!("migrations/postgres");
+}
+
 pub fn init_tables(conn: &DbConn) -> Result<(), String> {
     match conn {
         DbConn::Sqlite(conn_lock) => {
-            let conn = conn_lock.lock().unwrap();
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS sessions (
-                    source TEXT NOT NULL,
-                    uuid TEXT NOT NULL,
-                    title TEXT,
-                    created_at TEXT,
-                    last_parsed_idx INTEGER DEFAULT -1,
-                    last_mtime REAL DEFAULT 0.0,
-                    project_path TEXT,
-                    PRIMARY KEY (source, uuid)
-                )",
-                [],
-            ).map_err(|e| e.to_string())?;
-
-            conn.execute(
-                "CREATE TABLE IF NOT EXISTS turns (
-                    source TEXT NOT NULL,
-                    uuid TEXT NOT NULL,
-                    idx INTEGER NOT NULL,
-                    model TEXT,
-                    input_tokens INTEGER DEFAULT 0,
-                    cached_input_tokens INTEGER DEFAULT 0,
-                    output_tokens INTEGER DEFAULT 0,
-                    thinking_tokens INTEGER DEFAULT 0,
-                    cost_usd REAL DEFAULT 0.0,
-                    message_id TEXT,
-                    request_id TEXT,
-                    timestamp TEXT,
-                    PRIMARY KEY (source, uuid, idx),
-                    FOREIGN KEY(source, uuid) REFERENCES sessions(source, uuid) ON DELETE CASCADE
-                )",
-                [],
-            ).map_err(|e| e.to_string())?;
+            let mut conn = conn_lock.lock().unwrap();
+            let report = sqlite_migrations::migrations::runner()
+                .run(&mut *conn)
+                .map_err(|e| format!("Refinery SQLite migration failed: {}", e))?;
+            for migration in report.applied_migrations() {
+                println!("[数据库迁移] 应用 SQLite 表结构变更: {} (版本 {})", migration.name(), migration.version());
+            }
         }
         DbConn::Postgres(client_lock) => {
             let mut client = client_lock.lock().unwrap();
-            client.execute(
-                "CREATE TABLE IF NOT EXISTS sessions (
-                    source VARCHAR(50) NOT NULL,
-                    uuid VARCHAR(255) NOT NULL,
-                    title TEXT,
-                    created_at VARCHAR(100),
-                    last_parsed_idx BIGINT DEFAULT -1,
-                    last_mtime DOUBLE PRECISION DEFAULT 0.0,
-                    project_path TEXT,
-                    PRIMARY KEY (source, uuid)
-                )",
-                &[],
-            ).map_err(|e| e.to_string())?;
-
-            client.execute(
-                "CREATE TABLE IF NOT EXISTS turns (
-                    source VARCHAR(50) NOT NULL,
-                    uuid VARCHAR(255) NOT NULL,
-                    idx BIGINT NOT NULL,
-                    model VARCHAR(255),
-                    input_tokens BIGINT DEFAULT 0,
-                    cached_input_tokens BIGINT DEFAULT 0,
-                    output_tokens BIGINT DEFAULT 0,
-                    thinking_tokens BIGINT DEFAULT 0,
-                    cost_usd DOUBLE PRECISION DEFAULT 0.0,
-                    message_id VARCHAR(255),
-                    request_id VARCHAR(255),
-                    timestamp VARCHAR(100),
-                    PRIMARY KEY (source, uuid, idx),
-                    FOREIGN KEY(source, uuid) REFERENCES sessions(source, uuid) ON DELETE CASCADE
-                )",
-                &[],
-            ).map_err(|e| e.to_string())?;
+            let report = postgres_migrations::migrations::runner()
+                .run(&mut *client)
+                .map_err(|e| format!("Refinery Postgres migration failed: {}", e))?;
+            for migration in report.applied_migrations() {
+                println!("[数据库迁移] 应用 Postgres 表结构变更: {} (版本 {})", migration.name(), migration.version());
+            }
         }
     }
     Ok(())
@@ -315,6 +268,9 @@ pub fn get_default_sqlite_path() -> PathBuf {
 // 根据配置创建全新物理连接，并静默初始化表结构
 pub fn init_new_conn() -> Result<DbConn, String> {
     // 强制加载项目目录下的 .env
+    #[cfg(not(test))]
+    let _ = dotenvy::dotenv_override();
+    #[cfg(test)]
     let _ = dotenvy::dotenv();
 
     let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
@@ -336,6 +292,9 @@ pub fn init_new_conn() -> Result<DbConn, String> {
                 .unwrap_or_else(|_| "postgresql://postgres:password@localhost:5432/token_monitor".to_string())
         };
         
+        // 自动检测并创建数据库
+        let _ = ensure_pg_database_exists(&db_url);
+
         let client = postgres::Client::connect(&db_url, postgres::NoTls)
             .map_err(|e| format!("Failed to connect Postgres: {}", e))?;
         
@@ -416,4 +375,37 @@ pub fn parse_pg_url(url: &str) -> Option<(String, String, String, String, String
     let port = hp_parts.get(1).cloned().unwrap_or("5432").to_string();
 
     Some((host, port, user, pass, database))
+}
+
+pub fn ensure_pg_database_exists(url: &str) -> Result<(), String> {
+    if let Some((host, port, user, pass, database)) = parse_pg_url(url) {
+        if database.trim().is_empty() || database == "postgres" {
+            return Ok(());
+        }
+        
+        let admin_url = format!(
+            "postgresql://{}:{}@{}:{}/postgres",
+            user, pass, host, port
+        );
+
+        let mut client = postgres::Client::connect(&admin_url, postgres::NoTls)
+            .map_err(|e| format!("无法连接到 PostgreSQL 默认管理库 (postgres) 进行数据库校验: {}", e))?;
+
+        let row = client.query_one(
+            "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)",
+            &[&database],
+        ).map_err(|e| format!("查询 pg_database 失败: {}", e))?;
+
+        let exists: bool = row.get(0);
+        if !exists {
+            println!("[数据库创建] 检测到目标 PostgreSQL 数据库 '{}' 不存在，正在创建...", database);
+            if !database.chars().all(|c| c.is_alphanumeric() || c == '_' || c == '-') {
+                return Err(format!("非法的数据库名称 '{}'，拒绝自动创建以防 SQL 注入", database));
+            }
+            client.execute(&format!("CREATE DATABASE \"{}\"", database), &[])
+                .map_err(|e| format!("创建数据库 '{}' 失败: {}", database, e))?;
+            println!("[数据库创建] 目标 PostgreSQL 数据库 '{}' 创建成功！", database);
+        }
+    }
+    Ok(())
 }

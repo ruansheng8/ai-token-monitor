@@ -14,6 +14,13 @@ fn main() {
     // 启动时初始化本地缓存数据库，确保表结构完备，避免多请求并发竞争初始化导致的数据库锁死
     let _ = db::init_cache_db();
 
+    // 启动时根据 DATABASE_TYPE 初始化数据库连接并执行最新结构迁移 (Refinery)
+    println!("正在执行数据库结构迁移及连接校验...");
+    match db_adapter::get_active_conn() {
+        Ok(_) => println!("数据库结构迁移及连接校验完成。"),
+        Err(e) => eprintln!("数据库结构迁移及连接检测失败: {}", e),
+    }
+
     let mut port = 19362;
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {

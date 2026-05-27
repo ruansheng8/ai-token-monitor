@@ -20,5 +20,7 @@ chrono = { version = "0.4", features = ["serde"] }
 regex = "1"
 percent-encoding = "2"
 rust-embed = "8.3"
+refinery = { version = "0.8.14", features = ["rusqlite", "postgres"] }
+
 
 

@@ -194,6 +194,9 @@ pub struct ConfigReq {
 pub async fn handle_config_get() -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
         // 强制加载项目目录下的 .env
+        #[cfg(not(test))]
+        let _ = dotenvy::dotenv_override();
+        #[cfg(test)]
         let _ = dotenvy::dotenv();
 
         let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
@@ -275,14 +278,13 @@ pub async fn handle_config_test(
                 user, password, host, port, database
             );
 
-            let client = postgres::Client::connect(&url, postgres::NoTls)
+            let mut client = postgres::Client::connect(&url, postgres::NoTls)
                 .map_err(|e| format!("PostgreSQL 连接失败: {}", e))?;
             
-            let conn = crate::db_adapter::DbConn::Postgres(std::sync::Mutex::new(client));
-            crate::db_adapter::init_tables(&conn)
-                .map_err(|e| format!("表结构校验/初始化失败: {}", e))?;
+            client.execute("SELECT 1", &[])
+                .map_err(|e| format!("PostgreSQL 活性测试 (SELECT 1) 失败: {}", e))?;
             
-            Ok("PostgreSQL 连接测试成功，且空库表结构已校验/初始化完毕！".to_string())
+            Ok("PostgreSQL 连接测试成功！".to_string())
         } else {
             let path_str = req.sqlite_path.unwrap_or_default();
             let path = if path_str.trim().is_empty() {
@@ -298,11 +300,10 @@ pub async fn handle_config_test(
             let conn_sqlite = rusqlite::Connection::open(&path)
                 .map_err(|e| format!("SQLite 连接失败: {}", e))?;
             
-            let conn = crate::db_adapter::DbConn::Sqlite(std::sync::Mutex::new(conn_sqlite));
-            crate::db_adapter::init_tables(&conn)
-                .map_err(|e| format!("表结构校验/初始化失败: {}", e))?;
+            conn_sqlite.execute("SELECT 1", [])
+                .map_err(|e| format!("SQLite 活性测试 (SELECT 1) 失败: {}", e))?;
             
-            Ok(format!("SQLite 连接测试成功，且表结构已校验/初始化完毕！\n路径: {}", path.to_string_lossy()))
+            Ok(format!("SQLite 连接测试成功！\n路径: {}", path.to_string_lossy()))
         }
     }).await;
 

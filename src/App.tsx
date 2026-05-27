@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import {
   Cpu,
   ArrowDown,
@@ -17,7 +17,8 @@ import {
   ChevronRight,
   Globe,
   ChevronDown,
-  Settings
+  Settings,
+  Terminal
 } from 'lucide-react';
 import { DailyTrendChart } from './components/charts/DailyTrendChart';
 import { SourceTrendChart } from './components/charts/SourceTrendChart';
@@ -267,7 +268,18 @@ export default function App() {
     total_files: number;
     scanned_files: number;
     error: string | null;
+    logs?: string[];
+    status_msg?: string;
   } | null>(null);
+
+  const [showLogConsole, setShowLogConsole] = useState(false);
+  const logEndRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (showLogConsole && logEndRef.current) {
+      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [scanStatus?.logs, showLogConsole]);
 
   // 轮询扫描状态
   const pollScanStatus = async () => {
@@ -630,6 +642,30 @@ export default function App() {
                 style={{ width: `${scanStatus.total_files > 0 ? (scanStatus.scanned_files / scanStatus.total_files) * 100 : 0}%` }}
               ></div>
             </div>
+            <div className="flex justify-between items-center text-xs mt-1 border-t border-neon-cyan/10 pt-2 gap-4">
+              <span className="text-text-secondary truncate text-[11px]" title={scanStatus.status_msg}>
+                {scanStatus.status_msg || "正在同步..."}
+              </span>
+              <button
+                onClick={() => setShowLogConsole(!showLogConsole)}
+                className="flex items-center gap-1 text-neon-cyan hover:text-neon-purple active:scale-95 transition-all duration-200 cursor-pointer font-semibold shrink-0"
+              >
+                <Terminal className="w-3.5 h-3.5" />
+                {showLogConsole ? '隐藏细节' : '查看同步细节'}
+              </button>
+            </div>
+
+            {showLogConsole && scanStatus.logs && (
+              <div className="bg-black/85 dark:bg-[#050b14] rounded-xl p-3 border border-slate-800 shadow-inner max-h-[220px] overflow-y-auto font-mono text-[10px] text-green-400 select-text leading-relaxed scrollbar-thin">
+                {scanStatus.logs.map((log, i) => (
+                  <div key={i} className="whitespace-pre-wrap py-0.5 border-b border-white/5 last:border-b-0">
+                    <span className="text-neon-cyan mr-1.5 font-bold">&gt;</span>
+                    {log}
+                  </div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
+            )}
           </div>
         )}
 
@@ -1119,7 +1155,7 @@ export default function App() {
                 正在初始化仪表盘
               </h2>
               <p className="text-xs text-text-secondary max-w-[360px] leading-relaxed">
-                正在进行首次数据同步，系统正在扫描并解码历史会话中的 Token 消耗明细，请稍候...
+                {scanStatus.status_msg || "正在进行首次数据同步，系统正在扫描并解码历史会话中的 Token 消耗明细，请稍候..."}
               </p>
             </div>
 
@@ -1137,6 +1173,31 @@ export default function App() {
                 ></div>
               </div>
             </div>
+
+            <div className="flex justify-between items-center text-xs w-full border-t border-card-border/50 pt-3 gap-4">
+              <span className="text-text-muted truncate text-[10px] text-left" title={scanStatus.status_msg}>
+                {scanStatus.status_msg || "正在初始化..."}
+              </span>
+              <button
+                onClick={() => setShowLogConsole(!showLogConsole)}
+                className="flex items-center gap-1 text-neon-cyan hover:text-neon-purple active:scale-95 transition-all duration-200 cursor-pointer font-semibold shrink-0"
+              >
+                <Terminal className="w-3.5 h-3.5" />
+                {showLogConsole ? '隐藏日志' : '查看同步日志'}
+              </button>
+            </div>
+
+            {showLogConsole && scanStatus.logs && (
+              <div className="w-full bg-black/85 dark:bg-[#050b14] rounded-xl p-3 border border-slate-800 shadow-inner max-h-[160px] overflow-y-auto font-mono text-[9px] text-green-400 text-left select-text leading-relaxed scrollbar-thin">
+                {scanStatus.logs.map((log, i) => (
+                  <div key={i} className="whitespace-pre-wrap py-0.5 border-b border-white/5 last:border-b-0">
+                    <span className="text-neon-cyan mr-1.5 font-bold">&gt;</span>
+                    {log}
+                  </div>
+                ))}
+                <div ref={logEndRef} />
+              </div>
+            )}
             
             <span className="text-[10px] text-text-muted italic">这通常仅在首次启动或有大量新会话时需要较长时间</span>
           </div>
