@@ -20,7 +20,11 @@ fn start_folder_watcher() {
         loop {
             tokio::select! {
                 _ = rx.recv() => {
-                    debounce_timer = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(500));
+                    let debounce_ms = std::env::var("HOTSYNC_DEBOUNCE_MS")
+                        .ok()
+                        .and_then(|s| s.parse::<u64>().ok())
+                        .unwrap_or(5000); // 默认调整为 5 秒
+                    debounce_timer = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(debounce_ms));
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
                     if let Some(deadline) = debounce_timer {
