@@ -101,6 +101,7 @@ export function CalendarHeatmap({ data = [], theme }: CalendarHeatmapProps) {
     return {
       tooltip: {
         position: 'top',
+        confine: true,
         backgroundColor: isDark ? 'rgba(11, 21, 40, 0.94)' : 'rgba(255, 255, 255, 0.96)',
         borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#e2e8f0',
         borderWidth: 1,

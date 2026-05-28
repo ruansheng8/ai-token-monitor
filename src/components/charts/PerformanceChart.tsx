@@ -38,6 +38,7 @@ export function PerformanceChart({ data = [], theme }: PerformanceChartProps) {
       color: PALETTE_COLORS,
       tooltip: {
         trigger: 'axis',
+        confine: true,
         backgroundColor: isDark ? 'rgba(11, 21, 40, 0.94)' : 'rgba(255, 255, 255, 0.96)',
         borderColor: isDark ? 'rgba(255, 255, 255, 0.08)' : '#e2e8f0',
         borderWidth: 1,
