@@ -30,8 +30,7 @@ fn start_folder_watcher() {
                     if let Some(deadline) = debounce_timer {
                         if tokio::time::Instant::now() >= deadline {
                             debounce_timer = None;
-                            println!("[热同步] 检测到物理文件写入变动，防抖结束，开始执行增量更新...");
-                            db::start_background_scan();
+                            db::start_background_scan(true);
                         }
                     }
                 }

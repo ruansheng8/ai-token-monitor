@@ -3,11 +3,18 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+use std::cell::RefCell;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Serialize;
 
 use crate::proto::{parse_protobuf_orig, try_parse_sub_messages, extract_metrics_from_proto};
+
+thread_local! {
+    static IS_HOT_SYNC: RefCell<bool> = RefCell::new(false);
+    static SCAN_LOGS: RefCell<Vec<String>> = RefCell::new(Vec::new());
+    static SCAN_HAS_CHANGES: RefCell<bool> = RefCell::new(false);
+}
 
 // 1. 动态路径获取逻辑（适配不同 Windows 用户目录）
 
@@ -386,7 +393,14 @@ pub fn get_scan_status() -> &'static Mutex<ScanStatus> {
 }
 
 pub fn log_progress(msg: &str) {
-    println!("{}", msg);
+    let is_hot = IS_HOT_SYNC.with(|h| *h.borrow());
+    if is_hot {
+        SCAN_LOGS.with(|logs| {
+            logs.borrow_mut().push(msg.to_string());
+        });
+    } else {
+        println!("{}", msg);
+    }
     if let Ok(mut status) = get_scan_status().lock() {
         status.status_msg = msg.to_string();
         status.logs.push(msg.to_string());
@@ -396,7 +410,7 @@ pub fn log_progress(msg: &str) {
     }
 }
 
-pub fn start_background_scan() {
+pub fn start_background_scan(is_hot_sync: bool) {
     let status_lock = get_scan_status();
     {
         let mut status = status_lock.lock().unwrap();
@@ -412,6 +426,14 @@ pub fn start_background_scan() {
     }
 
     std::thread::spawn(move || {
+        IS_HOT_SYNC.with(|h| *h.borrow_mut() = is_hot_sync);
+        SCAN_LOGS.with(|l| l.borrow_mut().clear());
+        SCAN_HAS_CHANGES.with(|c| *c.borrow_mut() = false);
+
+        if is_hot_sync {
+            log_progress("[热同步] 检测到物理文件写入变动，防抖结束，开始执行增量更新...");
+        }
+
         let result = sync_cache_db_with_progress(|scanned, total| {
             let status_lock = get_scan_status();
             if let Ok(mut status) = status_lock.lock() {
@@ -419,6 +441,20 @@ pub fn start_background_scan() {
                 status.total_files = total;
             }
         });
+
+        let has_changes = SCAN_HAS_CHANGES.with(|c| *c.borrow());
+        let has_error = result.is_err();
+
+        if is_hot_sync && (has_changes || has_error) {
+            SCAN_LOGS.with(|logs| {
+                for log in logs.borrow().iter() {
+                    println!("{}", log);
+                }
+            });
+            if let Err(ref e) = result {
+                println!("[热同步] 增量更新失败: {}", e);
+            }
+        }
 
         let status_lock = get_scan_status();
         if let Ok(mut status) = status_lock.lock() {
@@ -493,13 +529,10 @@ fn extract_codex_tokens_and_model(val: &serde_json::Value, default_model: &str) 
     }
 
     // 2. Fallback to Claude format for backwards compatibility/existing tests
-    let (input, _cache_creation, cache_read, output) = extract_claude_tokens(val);
+    let (input, _cache_creation, cache_read, output, thinking) = extract_claude_tokens(val);
     if input > 0 || output > 0 {
         let model = extract_claude_model(val);
         let model_name = if model == "unknown" { default_model.to_string() } else { model };
-        let thinking = val.get("thinking_tokens")
-            .or_else(|| val.get("thinking"))
-            .and_then(|v| v.as_i64()).unwrap_or(0);
         return Some((input, cache_read, output, thinking, model_name));
     }
 
@@ -557,11 +590,44 @@ pub fn estimate_cost(model: &str, input: i64, cached: i64, output: i64) -> f64 {
     }
 }
 
-fn extract_claude_tokens(val: &serde_json::Value) -> (i64, i64, i64, i64) {
+fn find_json_field_recursive(val: &serde_json::Value, target_keys: &[&str]) -> Option<i64> {
+    match val {
+        serde_json::Value::Object(map) => {
+            // 优先检查当前层级是否有匹配的键
+            for &key in target_keys {
+                if let Some(v) = map.get(key) {
+                    if let Some(num) = v.as_i64() {
+                        return Some(num);
+                    }
+                }
+            }
+            // 递归检查子对象
+            for v in map.values() {
+                if let Some(res) = find_json_field_recursive(v, target_keys) {
+                    return Some(res);
+                }
+            }
+            None
+        }
+        serde_json::Value::Array(arr) => {
+            // 遍历数组
+            for v in arr {
+                if let Some(res) = find_json_field_recursive(v, target_keys) {
+                    return Some(res);
+                }
+            }
+            None
+        }
+        _ => None,
+    }
+}
+
+fn extract_claude_tokens(val: &serde_json::Value) -> (i64, i64, i64, i64, i64) {
     let mut input = 0;
     let mut cache_creation = 0;
     let mut cache_read = 0;
     let mut output = 0;
+    let mut thinking = 0;
 
     let sources = vec![
         val,
@@ -598,16 +664,47 @@ fn extract_claude_tokens(val: &serde_json::Value) -> (i64, i64, i64, i64) {
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
 
+        let think_t = src.get("thinking_tokens")
+            .or_else(|| src.get("thinkingTokens"))
+            .or_else(|| src.get("reasoning_output_tokens"))
+            .or_else(|| src.get("reasoningOutputTokens"))
+            .or_else(|| src.get("thinking"))
+            .and_then(|v| v.as_i64())
+            .unwrap_or(0);
+
         if in_t > 0 || out_t > 0 {
             input = in_t;
             output = out_t;
             cache_creation = c_create;
             cache_read = c_read;
+            thinking = think_t;
             break;
         }
     }
 
-    (input, cache_creation, cache_read, output)
+    // 软解析/版本兼容兜底层：如果上面的直接字段没有匹配成功，我们使用递归检索
+    if input == 0 && output == 0 {
+        if let Some(in_t) = find_json_field_recursive(val, &["input_tokens", "inputTokens", "prompt_tokens", "promptTokens"]) {
+            input = in_t;
+        }
+        if let Some(out_t) = find_json_field_recursive(val, &["output_tokens", "outputTokens", "completion_tokens", "completionTokens"]) {
+            output = out_t;
+        }
+        if let Some(c_create) = find_json_field_recursive(val, &["cache_creation_tokens", "cache_creation_input_tokens", "cacheCreationInputTokens"]) {
+            cache_creation = c_create;
+        }
+        if let Some(c_read) = find_json_field_recursive(val, &["cache_read_input_tokens", "cache_read_tokens", "cacheReadInputTokens"]) {
+            cache_read = c_read;
+        }
+    }
+
+    if thinking == 0 {
+        if let Some(think_t) = find_json_field_recursive(val, &["thinking_tokens", "thinkingTokens", "reasoning_output_tokens", "reasoningOutputTokens", "thinking"]) {
+            thinking = think_t;
+        }
+    }
+
+    (input, cache_creation, cache_read, output, thinking)
 }
 
 fn extract_claude_model(val: &serde_json::Value) -> String {
@@ -732,7 +829,7 @@ pub fn sync_claude_code(
                         }
 
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
-                            let (input, _cache_creation, cache_read, output) = extract_claude_tokens(&val);
+                            let (input, _cache_creation, cache_read, output, thinking) = extract_claude_tokens(&val);
                             if input > 0 || output > 0 {
                                 let model = extract_claude_model(&val);
                                 let timestamp = extract_claude_timestamp(&val);
@@ -746,7 +843,7 @@ pub fn sync_claude_code(
                                     total_input,
                                     cache_read,
                                     output,
-                                    0,
+                                    thinking,
                                     cost,
                                     message_id,
                                     request_id,
@@ -759,6 +856,7 @@ pub fn sync_claude_code(
 
                 if !new_turns.is_empty() {
                     log_progress(&format!("发现 Claude Code 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+                    SCAN_HAS_CHANGES.with(|c| *c.borrow_mut() = true);
                 }
 
                 let title = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
@@ -899,6 +997,7 @@ pub fn sync_codex(
 
                 if !new_turns.is_empty() {
                     log_progress(&format!("发现 Codex 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+                    SCAN_HAS_CHANGES.with(|c| *c.borrow_mut() = true);
                 }
 
                 let title = file_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
@@ -1019,8 +1118,16 @@ fn sync_trae_common(
     let tx = conn_cache.transaction()?;
     {
         for (ws_idx, db_path) in ws_dbs.iter().enumerate() {
+            let temp_db_path = db_path.with_extension("vscdb.tmp");
+            let _guard = if std::fs::copy(db_path, &temp_db_path).is_ok() {
+                Some(TempFileGuard { path: temp_db_path.clone() })
+            } else {
+                None
+            };
+            let target_db = if _guard.is_some() { &temp_db_path } else { db_path };
+
             let conn_ws = match rusqlite::Connection::open_with_flags(
-                db_path,
+                target_db,
                 rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
                     | rusqlite::OpenFlags::SQLITE_OPEN_URI
                     | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -1228,9 +1335,22 @@ fn sync_trae_common(
 
     if session_count > 0 {
         log_progress(&format!("成功增量同步了 {} 的 {} 个会话记录。", if source == "trae" { "Trae" } else { "Trae CN" }, session_count));
+        SCAN_HAS_CHANGES.with(|c| *c.borrow_mut() = true);
     }
 
     Ok(())
+}
+
+struct TempFileGuard {
+    path: PathBuf,
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if self.path.exists() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 pub fn get_cursor_db_path() -> PathBuf {
@@ -1256,9 +1376,18 @@ pub fn sync_cursor(
 
     log_progress("正在扫描并增量同步 Cursor 编辑器历史会话数据...");
 
+    let temp_db_path = cursor_db.with_extension("vscdb.tmp");
+    let _guard = if std::fs::copy(&cursor_db, &temp_db_path).is_ok() {
+        Some(TempFileGuard { path: temp_db_path.clone() })
+    } else {
+        None
+    };
+
+    let target_db = if _guard.is_some() { &temp_db_path } else { &cursor_db };
+
     // 使用只读标志打开 Cursor 的 SQLite 数据库，避免占用文件锁
     let conn_cursor = match rusqlite::Connection::open_with_flags(
-        &cursor_db,
+        target_db,
         rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
             | rusqlite::OpenFlags::SQLITE_OPEN_URI
             | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -1513,6 +1642,10 @@ pub fn sync_cursor(
                     ],
                 )?;
             }
+
+            if !new_turns.is_empty() {
+                SCAN_HAS_CHANGES.with(|c| *c.borrow_mut() = true);
+            }
         }
     }
     tx.commit()?;
@@ -1626,6 +1759,7 @@ where
             }
         }
         tx.commit()?;
+        SCAN_HAS_CHANGES.with(|c| *c.borrow_mut() = true);
     }
 
     // B. 预载 Antigravity 会话缓存
@@ -1708,7 +1842,7 @@ where
 
                                 let mut pos = 0;
                                 let len = blob.len();
-                                if let Ok(raw_parsed) = parse_protobuf_orig(&blob, &mut pos, len) {
+                                if let Ok(raw_parsed) = parse_protobuf_orig(&blob, &mut pos, len, false) {
                                     let deep_parsed = try_parse_sub_messages(raw_parsed);
                                     let metrics = extract_metrics_from_proto(&deep_parsed);
                                     if !metrics.is_empty() {
@@ -1743,6 +1877,7 @@ where
             if read_success {
                 if !new_turns.is_empty() {
                     log_progress(&format!("发现 Antigravity 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+                    SCAN_HAS_CHANGES.with(|c| *c.borrow_mut() = true);
                 }
 
                 if is_new_session || existing_title.starts_with("Unknown Session") {
@@ -2716,11 +2851,27 @@ mod tests {
             "requestId": "req_abc123"
         });
 
-        let (in_t, c_create, c_read, out_t) = extract_claude_tokens(&sample_json);
+        let (in_t, c_create, c_read, out_t, think_t) = extract_claude_tokens(&sample_json);
         assert_eq!(in_t, 120);
         assert_eq!(c_create, 0);
         assert_eq!(c_read, 20);
         assert_eq!(out_t, 80);
+        assert_eq!(think_t, 0);
+
+        // Test thinking token and nested recursion
+        let nested_json = serde_json::json!({
+            "deep": {
+                "payload": {
+                    "inputTokens": 300,
+                    "output_tokens": 150,
+                    "reasoning_output_tokens": 50
+                }
+            }
+        });
+        let (in_nest, _, _, out_nest, think_nest) = extract_claude_tokens(&nested_json);
+        assert_eq!(in_nest, 300);
+        assert_eq!(out_nest, 150);
+        assert_eq!(think_nest, 50);
 
         let model = extract_claude_model(&sample_json);
         assert_eq!(model, "claude-3-5-sonnet-20241022");
@@ -2873,7 +3024,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
         return Ok(());
     }
 
-    println!("检测到远程 PostgreSQL 模式，正在触发增量同步...");
+    log_progress("检测到远程 PostgreSQL 模式，正在触发增量同步...");
     
     // 1. 统一提取 PostgreSQL 配置，合成正确的连接 URL，支持拆分字段，与 db_adapter.rs 一致
     let pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();

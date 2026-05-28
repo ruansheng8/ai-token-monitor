@@ -137,7 +137,7 @@ pub async fn handle_metrics(
 
 pub async fn handle_scan_start() -> Response<Body> {
     match tokio::task::spawn_blocking(|| {
-        start_background_scan();
+        start_background_scan(false);
         
         let status = get_scan_status().lock().unwrap().clone();
         serde_json::to_vec(&status)
