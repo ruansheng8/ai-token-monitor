@@ -429,6 +429,35 @@ pub fn rebuild_daily_stats_cache(conn: &rusqlite::Connection) -> Result<(), rusq
     Ok(())
 }
 
+pub fn rebuild_sessions_fts(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM sessions_fts", [])?;
+    conn.execute(
+        "INSERT INTO sessions_fts (source, uuid, title, project_name)
+         SELECT source, uuid, COALESCE(title, ''), COALESCE(project_name, 'unknown-project')
+         FROM sessions",
+        [],
+    )?;
+    Ok(())
+}
+
+pub fn rebuild_project_daily_stats_cache(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    conn.execute("DELETE FROM project_daily_stats", [])?;
+    conn.execute(
+        "INSERT INTO project_daily_stats (date, project_name, total_tokens, total_cost_usd, sessions_count)
+         SELECT
+            SUBSTR(s.created_at, 1, 10) AS date,
+            COALESCE(NULLIF(s.project_name, ''), 'unknown-project') AS project_name,
+            COALESCE(SUM(t.input_tokens + t.output_tokens), 0) AS total_tokens,
+            COALESCE(SUM(t.cost_usd), 0.0) AS total_cost_usd,
+            COUNT(DISTINCT s.source || ':' || s.uuid) AS sessions_count
+         FROM sessions s
+         LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+         GROUP BY SUBSTR(s.created_at, 1, 10), COALESCE(NULLIF(s.project_name, ''), 'unknown-project')",
+        [],
+    )?;
+    Ok(())
+}
+
 pub fn rebuild_pg_daily_stats_cache(client: &mut postgres::Client) -> Result<(), String> {
     let mut tx = client.transaction().map_err(|e| e.to_string())?;
 
@@ -994,15 +1023,19 @@ pub fn sync_claude_code(
                 };
 
                 let dev_name = get_device_name();
+                let proj_path = file_path.to_string_lossy().to_string();
+                let proj_name = detect_project_name(Some(&proj_path));
                 tx.execute(
-                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
-                     VALUES ('claude_code', ?, ?, ?, ?, ?, ?, ?)
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, project_name, device_name)
+                     VALUES ('claude_code', ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(source, uuid) DO UPDATE SET
                         last_parsed_idx = excluded.last_parsed_idx,
                         last_mtime = excluded.last_mtime,
                         title = excluded.title,
+                        project_path = excluded.project_path,
+                        project_name = excluded.project_name,
                         device_name = excluded.device_name",
-                    rusqlite::params![uuid, title, created_at, line_idx, mtime, file_path.to_string_lossy().to_string(), dev_name],
+                    rusqlite::params![uuid, title, created_at, line_idx, mtime, proj_path, proj_name, dev_name],
                 )?;
 
                 for turn in &new_turns {
@@ -1135,15 +1168,19 @@ pub fn sync_codex(
                 };
 
                 let dev_name = get_device_name();
+                let proj_path = file_path.to_string_lossy().to_string();
+                let proj_name = detect_project_name(Some(&proj_path));
                 tx.execute(
-                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
-                     VALUES ('codex', ?, ?, ?, ?, ?, ?, ?)
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, project_name, device_name)
+                     VALUES ('codex', ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(source, uuid) DO UPDATE SET
                         last_parsed_idx = excluded.last_parsed_idx,
                         last_mtime = excluded.last_mtime,
                         title = excluded.title,
+                        project_path = excluded.project_path,
+                        project_name = excluded.project_name,
                         device_name = excluded.device_name",
-                    rusqlite::params![uuid, title, created_at, line_idx, mtime, file_path.to_string_lossy().to_string(), dev_name],
+                    rusqlite::params![uuid, title, created_at, line_idx, mtime, proj_path, proj_name, dev_name],
                 )?;
 
                 for turn in &new_turns {
@@ -1403,13 +1440,17 @@ fn sync_trae_common(
                 )?;
 
                 let dev_name = get_device_name();
+                let proj_path = db_path.to_string_lossy().to_string();
+                let proj_name = detect_project_name(Some(&proj_path));
                 tx.execute(
-                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
-                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, project_name, device_name)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(source, uuid) DO UPDATE SET
                         last_parsed_idx = excluded.last_parsed_idx,
                         last_mtime = excluded.last_mtime,
                         title = excluded.title,
+                        project_path = excluded.project_path,
+                        project_name = excluded.project_name,
                         device_name = excluded.device_name",
                     rusqlite::params![
                         source,
@@ -1418,7 +1459,8 @@ fn sync_trae_common(
                         created_at,
                         turns as i64,
                         mtime,
-                        db_path.to_string_lossy().to_string(),
+                        proj_path,
+                        proj_name,
                         dev_name,
                     ],
                 )?;
@@ -1729,13 +1771,17 @@ pub fn sync_cursor(
             };
 
             let dev_name = get_device_name();
+            let proj_path = cursor_db.to_string_lossy().to_string();
+            let proj_name = detect_project_name(Some(&proj_path));
             tx.execute(
-                "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
-                 VALUES ('cursor', ?, ?, ?, ?, ?, ?, ?)
+                "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, project_name, device_name)
+                 VALUES ('cursor', ?, ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(source, uuid) DO UPDATE SET
                     last_parsed_idx = excluded.last_parsed_idx,
                     last_mtime = excluded.last_mtime,
                     title = excluded.title,
+                    project_path = excluded.project_path,
+                    project_name = excluded.project_name,
                     device_name = excluded.device_name",
                 rusqlite::params![
                     composer_id,
@@ -1743,7 +1789,8 @@ pub fn sync_cursor(
                     created_at,
                     idx as i64,
                     last_updated,
-                    cursor_db.to_string_lossy().to_string(),
+                    proj_path,
+                    proj_name,
                     dev_name,
                 ],
             )?;
@@ -2073,6 +2120,12 @@ where
     log_progress("正在重建本地大盘预计算聚合缓存...");
     if let Err(e) = rebuild_daily_stats_cache(&conn_cache) {
         log_progress(&format!("重建本地大盘缓存失败: {}", e));
+    }
+    if let Err(e) = rebuild_project_daily_stats_cache(&conn_cache) {
+        log_progress(&format!("重建项目大盘缓存失败: {}", e));
+    }
+    if let Err(e) = rebuild_sessions_fts(&conn_cache) {
+        log_progress(&format!("重建 FTS 缓存失败: {}", e));
     }
 
     // G. 如果配置了 PostgreSQL 模式，自动将本地 SQLite 增量好的最新数据一键同步至 PostgreSQL
@@ -2997,6 +3050,68 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_populates_project_name_fts_and_project_daily_stats() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_project_cache_test_{}", test_id));
+        std::fs::create_dir_all(&temp_path).unwrap();
+
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+        std::env::set_var("DATABASE_TYPE", "sqlite");
+
+        init_cache_db().unwrap();
+
+        let claude_proj_dir = get_claude_projects_dir().join("demo-repo");
+        std::fs::create_dir_all(&claude_proj_dir).unwrap();
+        let log_file = claude_proj_dir.join("history.jsonl");
+        let mut file = std::fs::File::create(&log_file).unwrap();
+
+        let line = serde_json::json!({
+            "timestamp": "2026-05-28T09:00:00.000Z",
+            "model": "claude-3-5-sonnet",
+            "message": {
+                "id": "msg_project_1",
+                "usage": {
+                    "input_tokens": 120,
+                    "output_tokens": 60,
+                    "cache_read_input_tokens": 20
+                }
+            },
+            "requestId": "req_project_1"
+        });
+        writeln!(file, "{}", line).unwrap();
+        drop(file);
+
+        let mut conn = rusqlite::Connection::open(get_db_cache_path()).unwrap();
+        sync_claude_code(&mut conn, 0, 1, &|_, _| {}).unwrap();
+        rebuild_daily_stats_cache(&conn).unwrap();
+        rebuild_project_daily_stats_cache(&conn).unwrap();
+        rebuild_sessions_fts(&conn).unwrap();
+
+        let project_name: String = conn.query_row(
+            "SELECT project_name FROM sessions WHERE source = 'claude_code' LIMIT 1",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(project_name, "demo-repo");
+
+        let fts_hits: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM sessions_fts WHERE sessions_fts MATCH '\"demo-repo\"'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(fts_hits, 1);
+
+        let project_tokens: i64 = conn.query_row(
+            "SELECT total_tokens FROM project_daily_stats WHERE project_name = 'demo-repo' LIMIT 1",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(project_tokens, 180);
+
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[test]
     fn test_estimate_cost() {
         let cost_opus = estimate_cost("claude-3-opus", 1000, 200, 500);
         assert!((cost_opus - 0.0498).abs() < 1e-6);
@@ -3244,7 +3359,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
 
     // 4. 遍历本地 SQLite sessions 表，决定哪些 session 以及哪些 turns 需要被增量同步
     let mut sqlite_sessions_stmt = sqlite_conn
-        .prepare("SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name FROM sessions")
+        .prepare("SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, project_name, device_name FROM sessions")
         .map_err(|e| e.to_string())?;
     let mut sqlite_sessions_rows = sqlite_sessions_stmt.query([]).map_err(|e| e.to_string())?;
 
@@ -3258,7 +3373,8 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
         let last_parsed_idx: i64 = row.get(4).map_err(|e| e.to_string())?;
         let last_mtime: f64 = row.get(5).map_err(|e| e.to_string())?;
         let project_path: Option<String> = row.get(6).map_err(|e| e.to_string())?;
-        let device_name: Option<String> = row.get(7).map_err(|e| e.to_string())?;
+        let project_name: Option<String> = row.get(7).map_err(|e| e.to_string())?;
+        let device_name: Option<String> = row.get(8).map_err(|e| e.to_string())?;
 
         let mut need_sync = false;
         let mut pg_last_parsed_idx = -1i64;
@@ -3283,6 +3399,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 last_parsed_idx,
                 last_mtime,
                 project_path,
+                project_name,
                 pg_last_parsed_idx,
                 device_name,
             ));
@@ -3355,6 +3472,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 last_parsed_idx BIGINT,
                 last_mtime DOUBLE PRECISION,
                 project_path TEXT,
+                project_name TEXT,
                 device_name TEXT
             ) ON COMMIT DROP",
             &[],
@@ -3383,7 +3501,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
         let mut session_copy_data = String::new();
         let mut turns_copy_data = String::new();
 
-        for (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx, device_name) in session_chunk {
+        for (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, project_name, pg_last_parsed_idx, device_name) in session_chunk {
             scanned_count += 1;
             if let Ok(mut status) = get_scan_status().lock() {
                 status.scanned_files = scanned_count;
@@ -3391,7 +3509,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
 
             // 构造 sessions COPY 行
             session_copy_data.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 pg_copy_string_raw(source),
                 pg_copy_string_raw(uuid),
                 pg_copy_string(title),
@@ -3399,6 +3517,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 last_parsed_idx,
                 last_mtime,
                 pg_copy_string(project_path),
+                pg_copy_string(project_name),
                 pg_copy_string(device_name)
             ));
 
@@ -3465,14 +3584,15 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
 
         // D. 批量 Merge (将临时表的数据高速同步到正式表，处理冲突)
         pg_tx.execute(
-            "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
-             SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name FROM temp_sessions
+            "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, project_name, device_name)
+             SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, project_name, device_name FROM temp_sessions
              ON CONFLICT (source, uuid) DO UPDATE SET
                 title = EXCLUDED.title,
                 created_at = EXCLUDED.created_at,
                 last_parsed_idx = EXCLUDED.last_parsed_idx,
                 last_mtime = EXCLUDED.last_mtime,
                 project_path = EXCLUDED.project_path,
+                project_name = EXCLUDED.project_name,
                 device_name = EXCLUDED.device_name",
             &[],
         ).map_err(|e| format!("批量合并会话记录失败: {}", e))?;
@@ -4027,6 +4147,8 @@ pub fn update_device_name_in_db(old_name: &str, new_name: &str) -> Result<(), St
 
             // 重新计算 SQLite 的 daily_stats
             let _ = rebuild_daily_stats_cache(&conn);
+            let _ = rebuild_project_daily_stats_cache(&conn);
+            let _ = rebuild_sessions_fts(&conn);
         }
     }
 
