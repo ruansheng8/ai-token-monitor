@@ -24,6 +24,7 @@ import {
 import { DailyTrendChart } from './components/charts/DailyTrendChart';
 import { SourceTrendChart } from './components/charts/SourceTrendChart';
 import { PerformanceChart } from './components/charts/PerformanceChart';
+import { CalendarHeatmap } from './components/charts/CalendarHeatmap';
 
 // 官方 SVG 图标组件
 const GeminiIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
@@ -1054,6 +1055,13 @@ export default function App() {
           </div>
         </section>
 
+        {/* 日历热力图 */}
+        {data?.daily_trends && data.daily_trends.length > 0 && (
+          <section className="chart-section glass-card p-4 sm:p-5 hover:-translate-y-0.5 hover:shadow-[0_22px_56px_rgba(15,23,42,0.10)] transition-all duration-200 no-print">
+            <CalendarHeatmap data={data.daily_trends} theme={theme} />
+          </section>
+        )}
+
         {/* 分布与汇总 */}
         <section className="grid grid-cols-1 lg:grid-cols-[1fr_1.5fr] gap-6">
           {/* 底层模型排行 */}
@@ -1266,7 +1274,7 @@ export default function App() {
                   </th>
                 </tr>
               </thead>
-              <tbody>
+              <tbody className={`transition-opacity duration-200 ${sessionsLoading ? 'opacity-40 pointer-events-none' : ''}`}>
                 {paginatedSessions.length > 0 ? (
                   paginatedSessions.map((s) => {
                      const totalTokens = s.input + s.output;
