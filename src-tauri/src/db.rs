@@ -2711,6 +2711,23 @@ pub fn get_pg_sessions_paginated(
 }
 
 #[derive(Serialize)]
+pub struct ProjectTrend {
+    pub date: String,
+    pub project_name: String,
+    pub tokens: i64,
+    pub cost_usd: f64,
+}
+
+#[derive(Serialize)]
+pub struct ProjectRanking {
+    pub project_name: String,
+    pub project_path: String,
+    pub total_tokens: i64,
+    pub total_cost_usd: f64,
+    pub sessions_count: i64,
+}
+
+#[derive(Serialize)]
 pub struct AggregatedMetrics {
     pub totals: Totals,
     pub daily_trends: Vec<DailyTrend>,
@@ -2719,8 +2736,33 @@ pub struct AggregatedMetrics {
     pub sessions: Vec<SessionItem>,
     pub source_trends: Vec<SourceTrend>,
     pub device_trends: Vec<DeviceTrend>,
+    pub project_trends: Vec<ProjectTrend>,
+    pub project_rankings: Vec<ProjectRanking>,
     pub model_performance: Vec<ModelPerformance>,
     pub performance_trends: Vec<PerformanceTrend>,
+    pub display_currency: String,
+    pub usd_exchange_rate: f64,
+    pub exchange_rate_updated_at: String,
+}
+
+fn get_display_currency() -> String {
+    std::env::var("DISPLAY_CURRENCY")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| "USD".to_string())
+        .to_uppercase()
+}
+
+fn get_exchange_rate(conn: &rusqlite::Connection, currency: &str) -> Result<(f64, String), rusqlite::Error> {
+    if currency.eq_ignore_ascii_case("USD") {
+        return Ok((1.0, "system-default".to_string()));
+    }
+
+    let mut stmt = conn.prepare(
+        "SELECT rate_from_usd, updated_at FROM exchange_rates WHERE currency_code = ?"
+    )?;
+    let result = stmt.query_row([currency], |row| Ok((row.get(0)?, row.get(1)?)));
+    Ok(result.unwrap_or((1.0, "missing-rate".to_string())))
 }
 
 pub fn get_aggregated_metrics_from_cache(
@@ -3098,6 +3140,76 @@ pub fn get_aggregated_metrics_from_cache(
         });
     }
 
+    // F3. 项目每日走势 (ProjectTrends - 查缓存表)
+    let sql_project_trends = format!(
+        "SELECT 
+            date,
+            project_name,
+            SUM(total_tokens) as tokens,
+            SUM(total_cost_usd) as cost
+        FROM project_daily_stats
+        {}
+        GROUP BY date, project_name
+        ORDER BY date ASC, project_name ASC",
+        where_clause_cache
+    );
+
+    let mut stmt_proj = conn.prepare(&sql_project_trends)?;
+    let mut rows_proj = stmt_proj.query(rusqlite::params_from_iter(params_cache.clone()))?;
+
+    let mut project_trends = Vec::new();
+    while let Some(row) = rows_proj.next()? {
+        let date: Option<String> = row.get(0)?;
+        let project_name: String = row.get(1)?;
+        let tokens: Option<i64> = row.get(2)?;
+        let cost_usd: Option<f64> = row.get(3)?;
+        project_trends.push(ProjectTrend {
+            date: date.unwrap_or_default(),
+            project_name,
+            tokens: tokens.unwrap_or(0),
+            cost_usd: cost_usd.unwrap_or(0.0),
+        });
+    }
+
+    // F4. 项目排行 (ProjectRankings - 从 sessions + turns)
+    let sql_project_rankings = format!(
+        "SELECT 
+            COALESCE(NULLIF(s.project_name, ''), 'unknown-project') AS name_proj,
+            COALESCE(MAX(s.project_path), '') AS path_proj,
+            COALESCE(SUM(t.input_tokens + t.output_tokens), 0) AS total_tokens,
+            COALESCE(SUM(t.cost_usd), 0.0) AS total_cost_usd,
+            COUNT(DISTINCT s.source || ':' || s.uuid) AS sessions_count
+         FROM sessions s
+         LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+         {}
+         GROUP BY name_proj
+         ORDER BY total_tokens DESC, total_cost_usd DESC
+         LIMIT 10",
+        where_clause_raw
+    );
+
+    let mut stmt_rank = conn.prepare(&sql_project_rankings)?;
+    let mut rows_rank = stmt_rank.query(rusqlite::params_from_iter(params_raw.clone()))?;
+
+    let mut project_rankings = Vec::new();
+    while let Some(row) = rows_rank.next()? {
+        let project_name: String = row.get(0)?;
+        let project_path: String = row.get(1)?;
+        let total_tokens: i64 = row.get(2)?;
+        let total_cost_usd: f64 = row.get(3)?;
+        let sessions_count: i64 = row.get(4)?;
+        project_rankings.push(ProjectRanking {
+            project_name,
+            project_path,
+            total_tokens,
+            total_cost_usd,
+            sessions_count,
+        });
+    }
+
+    let display_currency = get_display_currency();
+    let (usd_exchange_rate, exchange_rate_updated_at) = get_exchange_rate(&conn, &display_currency)?;
+
     Ok(AggregatedMetrics {
         totals,
         daily_trends,
@@ -3106,8 +3218,13 @@ pub fn get_aggregated_metrics_from_cache(
         sessions,
         source_trends,
         device_trends,
+        project_trends,
+        project_rankings,
         model_performance,
         performance_trends,
+        display_currency,
+        usd_exchange_rate,
+        exchange_rate_updated_at,
     })
 }
 
@@ -3264,6 +3381,40 @@ mod tests {
 
         let cost = estimate_cost("custom-sonnet-2026", 1_000_000, 200_000, 500_000).unwrap();
         assert!((cost - 16.38).abs() < 1e-6);
+
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[test]
+    fn test_aggregated_metrics_include_project_rankings_and_trends() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_metrics_project_test_{}", test_id));
+        std::fs::create_dir_all(&temp_path).unwrap();
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+        std::env::set_var("DATABASE_TYPE", "sqlite");
+
+        init_cache_db().unwrap();
+        let conn = rusqlite::Connection::open(get_db_cache_path()).unwrap();
+
+        conn.execute(
+            "INSERT INTO sessions (source, uuid, title, created_at, project_path, project_name, device_name)
+             VALUES ('claude_code', 's1', 'A', '2026-05-28T10:00:00.000Z', 'D:/code/repo-a', 'repo-a', 'devbox')",
+            [],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, cost_usd)
+             VALUES ('claude_code', 's1', 0, 'claude-3-5-sonnet', 100, 20, 50, 0.01)",
+            [],
+        ).unwrap();
+
+        rebuild_daily_stats_cache(&conn).unwrap();
+        rebuild_project_daily_stats_cache(&conn).unwrap();
+
+        let metrics = get_aggregated_metrics_from_cache(None, None, None).unwrap();
+        assert_eq!(metrics.project_rankings.len(), 1);
+        assert_eq!(metrics.project_rankings[0].project_name, "repo-a");
+        assert_eq!(metrics.project_trends.len(), 1);
+        assert_eq!(metrics.project_trends[0].project_name, "repo-a");
 
         let _ = std::fs::remove_dir_all(&temp_path);
     }
@@ -4180,8 +4331,13 @@ pub fn get_pg_aggregated_metrics(
         sessions,
         source_trends,
         device_trends,
+        project_trends: Vec::new(),
+        project_rankings: Vec::new(),
         model_performance,
         performance_trends,
+        display_currency: "USD".to_string(),
+        usd_exchange_rate: 1.0,
+        exchange_rate_updated_at: "system-default".to_string(),
     })
 }
 
