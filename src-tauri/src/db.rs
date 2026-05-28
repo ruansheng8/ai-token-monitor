@@ -156,22 +156,7 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
         [],
     )?;
 
-    // 检查 turns 表是否已升级包含 latency 列，如果没有则添加
-    let has_latency: Result<i32, _> = conn.query_row(
-        "SELECT 1 FROM pragma_table_info('turns') WHERE name='latency'",
-        [],
-        |_| Ok(1),
-    );
-    if has_latency.is_err() {
-        println!("正在平滑迁移本地 cache 数据库表结构：在 turns 表中新增 latency 和 tps 列...");
-        let _ = conn.execute("ALTER TABLE turns ADD COLUMN latency REAL DEFAULT 0.0;", []);
-        let _ = conn.execute("ALTER TABLE turns ADD COLUMN tps REAL DEFAULT 0.0;", []);
-    }
 
-    conn.execute(
-        "UPDATE turns SET model = 'gemini-3.5-flash' WHERE model = 'gemini-3-flash-a'",
-        [],
-    )?;
 
     // 直接创建基于联合主键的最新 daily_stats 缓存表结构
     conn.execute(
@@ -2467,58 +2452,16 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
         std::env::var("DATABASE_URL").map_err(|e| format!("未配置 PostgreSQL 数据库 URL: {}", e))?
     };
 
-    // 2. 使用 Config 配置超时时间并进行连接，快速失败防止无限卡死
+    // 2. 自动检测并创建数据库
+    let _ = crate::db_adapter::ensure_pg_database_exists(&db_url);
+
+    // 3. 使用 Config 配置超时时间并进行连接，快速失败防止无限卡死
     let mut config: postgres::config::Config = db_url.parse().map_err(|e: postgres::Error| format!("解析 PostgreSQL 连接 URL 失败: {}", e))?;
     config.connect_timeout(std::time::Duration::from_secs(5));
     let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
 
     // 运行 Postgres 数据库迁移以保证表结构最新 (包含新列如 latency 和 tps)
-    {
-        let db_conn = crate::db_adapter::DbConn::Postgres(std::sync::Mutex::new(pg_client));
-        crate::db_adapter::init_tables(&db_conn).map_err(|e| format!("执行 PostgreSQL 数据库迁移失败: {}", e))?;
-        pg_client = match db_conn {
-            crate::db_adapter::DbConn::Postgres(mutex) => mutex.into_inner().map_err(|_| "无法重新获取 PostgreSQL 客户端".to_string())?,
-            _ => unreachable!(),
-        };
-    }
-
-    // ===== PostgreSQL 数据清洗迁移，防 claude_code / codex 历史会话 input_tokens 偏小 (v1) =====
-    let pg_meta_exists = pg_client.query_one(
-        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'db_meta')",
-        &[],
-    );
-    if let Ok(row) = pg_meta_exists {
-        let exists: bool = row.get(0);
-        if !exists {
-            // 只有当 turns 表存在，且其中包含 claude_code 或 codex 的老旧数据时，才进行清洗和日志打印
-            let has_old_data = pg_client.query_one(
-                "SELECT EXISTS (
-                    SELECT 1 FROM information_schema.tables WHERE table_name = 'turns'
-                )",
-                &[],
-            ).map(|r| r.get::<_, bool>(0)).unwrap_or(false) && 
-            pg_client.query_one(
-                "SELECT EXISTS (
-                    SELECT 1 FROM turns WHERE source IN ('claude_code', 'codex')
-                )",
-                &[],
-            ).map(|r| r.get::<_, bool>(0)).unwrap_or(false);
-
-            if has_old_data {
-                println!("检测到远程 PostgreSQL 老数据库版本，执行一键数据清洗并记录 db_meta 表...");
-                let _ = pg_client.execute("DELETE FROM turns WHERE source IN ('claude_code', 'codex')", &[]);
-                let _ = pg_client.execute("DELETE FROM sessions WHERE source IN ('claude_code', 'codex')", &[]);
-            }
-            let _ = pg_client.execute(
-                "CREATE TABLE db_meta (
-                    key TEXT PRIMARY KEY,
-                    value TEXT
-                )",
-                &[],
-            );
-            let _ = pg_client.execute("INSERT INTO db_meta (key, value) VALUES ('version', '1')", &[]);
-        }
-    }
+    crate::db_adapter::init_postgres_tables(&mut pg_client).map_err(|e| format!("执行 PostgreSQL 数据库迁移失败: {}", e))?;
 
     let cache_path = get_db_cache_path();
     let sqlite_conn = rusqlite::Connection::open(&cache_path).map_err(|e| format!("无法打开本地 SQLite 缓存: {}", e))?;
@@ -2819,20 +2762,16 @@ pub fn get_pg_aggregated_metrics(
         std::env::var("DATABASE_URL").map_err(|e| format!("未配置 PostgreSQL 数据库 URL: {}", e))?
     };
 
-    // 2. 使用 Config 配置超时时间并进行连接，快速失败防止大盘加载挂起
+    // 2. 自动检测并创建数据库
+    let _ = crate::db_adapter::ensure_pg_database_exists(&db_url);
+
+    // 3. 使用 Config 配置超时时间并进行连接，快速失败防止大盘加载挂起
     let mut config: postgres::config::Config = db_url.parse().map_err(|e: postgres::Error| format!("解析 PostgreSQL 连接 URL 失败: {}", e))?;
     config.connect_timeout(std::time::Duration::from_secs(5));
     let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
 
-    // 运行 Postgres 数据库迁移以保证表结构最新 (包含新列如 latency 和 tps)
-    {
-        let db_conn = crate::db_adapter::DbConn::Postgres(std::sync::Mutex::new(pg_client));
-        crate::db_adapter::init_tables(&db_conn).map_err(|e| format!("执行 PostgreSQL 数据库迁移失败: {}", e))?;
-        pg_client = match db_conn {
-            crate::db_adapter::DbConn::Postgres(mutex) => mutex.into_inner().map_err(|_| "无法重新获取 PostgreSQL 客户端".to_string())?,
-            _ => unreachable!(),
-        };
-    }
+    // 运行 Postgres 数据库迁移以保证表结构最新
+    crate::db_adapter::init_postgres_tables(&mut pg_client).map_err(|e| format!("执行 PostgreSQL 数据库迁移失败: {}", e))?;
 
     let mut conditions_cache = Vec::new();
     let mut params_cache: Vec<String> = Vec::new();
