@@ -10,8 +10,17 @@ interface DailyTrend {
   sessions: number;
 }
 
+interface DeviceTrendItem {
+  date: string;
+  device_name: string;
+  tokens: number;
+  cost: number;
+}
+
 interface DailyTrendChartProps {
   data: DailyTrend[];
+  deviceTrends?: DeviceTrendItem[];
+  dimension?: 'type' | 'device';
   theme: 'light' | 'dark';
 }
 
@@ -20,6 +29,17 @@ const PALETTE_COLORS = [
   '#06b6d4', // 2. 未缓存输入 Token -> 明亮青
   '#ec4899', // 3. 输出 Token -> 柔和粉
   '#8b5cf6', // 4. 推理 Token -> 科技紫
+];
+
+const DEVICE_COLORS = [
+  '#14b8a6', // 薄荷绿
+  '#8b5cf6', // 科技紫
+  '#06b6d4', // 明亮青
+  '#ec4899', // 柔和粉
+  '#f59e0b', // 琥珀黄
+  '#10b981', // 祖母绿
+  '#3b82f6', // 皇家蓝
+  '#ef4444', // 珊瑚红
 ];
 
 function hexToRgba(hex: string, alpha: number) {
@@ -48,20 +68,117 @@ const formatValueWithUnit = (val: number) => {
   return precise;
 };
 
-export function DailyTrendChart({ data = [], theme }: DailyTrendChartProps) {
+export function DailyTrendChart({ data = [], deviceTrends = [], dimension = 'type', theme }: DailyTrendChartProps) {
   const isDark = theme === 'dark';
 
   const chartOption = useMemo(() => {
     const dates = data.map(t => t.date);
-    const cachedData = data.map(t => t.cached);
-    const uncachedData = data.map(t => Math.max(0, t.input - t.cached));
-    const outputData = data.map(t => t.output);
-    const thinkingData = data.map(t => t.thinking);
-
     const borderColor = isDark ? '#0b1528' : '#ffffff';
 
+    let series: any[] = [];
+    let colors: string[] = [];
+
+    if (dimension === 'device' && deviceTrends && deviceTrends.length > 0) {
+      // 提取所有不重复的设备名（若为空则回退为未知设备）
+      const devices = Array.from(new Set(deviceTrends.map(t => t.device_name || 'unknown-device')));
+      
+      // 构建映射以提高数据检索性能：device_name -> Map<date, tokens>
+      const deviceDataMap = new Map<string, Map<string, number>>();
+      deviceTrends.forEach(t => {
+        const dName = t.device_name || 'unknown-device';
+        if (!deviceDataMap.has(dName)) {
+          deviceDataMap.set(dName, new Map<string, number>());
+        }
+        deviceDataMap.get(dName)!.set(t.date, t.tokens);
+      });
+
+      colors = devices.map((_, idx) => DEVICE_COLORS[idx % DEVICE_COLORS.length]);
+
+      series = devices.map((device) => {
+        const seriesData = dates.map(date => deviceDataMap.get(device)?.get(date) || 0);
+        return {
+          name: device,
+          type: 'bar',
+          stack: 'total',
+          data: seriesData,
+          itemStyle: {
+            borderRadius: 4,
+            borderColor: borderColor,
+            borderWidth: 1.5,
+          },
+        };
+      });
+    } else {
+      // 类型维度
+      const cachedData = data.map(t => t.cached);
+      const uncachedData = data.map(t => Math.max(0, t.input - t.cached));
+      const outputData = data.map(t => t.output);
+      const thinkingData = data.map(t => t.thinking);
+
+      colors = PALETTE_COLORS;
+
+      series = [
+        {
+          name: '缓存输入 Token',
+          type: 'bar',
+          stack: 'total',
+          data: cachedData,
+          itemStyle: {
+            borderRadius: 4,
+            borderColor: borderColor,
+            borderWidth: 1.5,
+          },
+        },
+        {
+          name: '未缓存输入 Token',
+          type: 'bar',
+          stack: 'total',
+          data: uncachedData,
+          itemStyle: {
+            borderRadius: 4,
+            borderColor: borderColor,
+            borderWidth: 1.5,
+          },
+        },
+        {
+          name: '输出 Token',
+          type: 'bar',
+          stack: 'total',
+          data: outputData,
+          itemStyle: {
+            borderRadius: 4,
+            borderColor: borderColor,
+            borderWidth: 1.5,
+          },
+        },
+        {
+          name: '推理 Token',
+          type: 'line',
+          data: thinkingData,
+          smooth: true,
+          showSymbol: true,
+          symbol: 'circle',
+          symbolSize: 6,
+          itemStyle: {
+            borderWidth: 2,
+            borderColor: borderColor,
+          },
+          areaStyle: {
+            color: {
+              type: 'linear',
+              x: 0, y: 0, x2: 0, y2: 1,
+              colorStops: [
+                { offset: 0, color: hexToRgba(PALETTE_COLORS[3], 0.16) },
+                { offset: 1, color: hexToRgba(PALETTE_COLORS[3], 0.01) },
+              ],
+            },
+          },
+        }
+      ];
+    }
+
     return {
-      color: PALETTE_COLORS,
+      color: colors,
       tooltip: {
         trigger: 'axis',
         confine: true,
@@ -149,66 +266,9 @@ export function DailyTrendChart({ data = [], theme }: DailyTrendChartProps) {
         },
         splitLine: { lineStyle: { color: isDark ? 'rgba(255,255,255,0.04)' : '#f1f5f9' } },
       },
-      series: [
-        {
-          name: '缓存输入 Token',
-          type: 'bar',
-          stack: 'total',
-          data: cachedData,
-          itemStyle: {
-            borderRadius: 4,
-            borderColor: borderColor,
-            borderWidth: 1.5,
-          },
-        },
-        {
-          name: '未缓存输入 Token',
-          type: 'bar',
-          stack: 'total',
-          data: uncachedData,
-          itemStyle: {
-            borderRadius: 4,
-            borderColor: borderColor,
-            borderWidth: 1.5,
-          },
-        },
-        {
-          name: '输出 Token',
-          type: 'bar',
-          stack: 'total',
-          data: outputData,
-          itemStyle: {
-            borderRadius: 4,
-            borderColor: borderColor,
-            borderWidth: 1.5,
-          },
-        },
-        {
-          name: '推理 Token',
-          type: 'line',
-          data: thinkingData,
-          smooth: true,
-          showSymbol: true,
-          symbol: 'circle',
-          symbolSize: 6,
-          itemStyle: {
-            borderWidth: 2,
-            borderColor: borderColor,
-          },
-          areaStyle: {
-            color: {
-              type: 'linear',
-              x: 0, y: 0, x2: 0, y2: 1,
-              colorStops: [
-                { offset: 0, color: hexToRgba(PALETTE_COLORS[3], 0.16) },
-                { offset: 1, color: hexToRgba(PALETTE_COLORS[3], 0.01) },
-              ],
-            },
-          },
-        }
-      ]
+      series: series
     };
-  }, [data, isDark]);
+  }, [data, deviceTrends, dimension, isDark]);
 
   return (
     <div style={{ height: '300px', width: '100%' }}>

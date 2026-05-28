@@ -19,7 +19,8 @@ import {
   Globe,
   ChevronDown,
   Settings,
-  Terminal
+  Terminal,
+  Monitor
 } from 'lucide-react';
 import { DailyTrendChart } from './components/charts/DailyTrendChart';
 import { SourceTrendChart } from './components/charts/SourceTrendChart';
@@ -48,6 +49,14 @@ const OpenAIIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
 const CursorIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
   <svg className={className} fill="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
     <path d="M10.3 22.8a1 1 0 01-.8-.4l-3.3-5.7-3.8 3.7c-.5.4-1.2.3-1.4-.2A1 1 0 011 20V2a1 1 0 011.7-.7l13.6 13.6c.4.4.4 1 0 1.4l-4.2 1.3 3.3 5.7c.2.5 0 1.1-.4 1.3l-3.8 1c-.3.2-.6.3-.9.3z" />
+  </svg>
+);
+
+const TraeIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
+  <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" xmlns="http://www.w3.org/2000/svg">
+    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
+    <line x1="12" y1="22.08" x2="12" y2="12" />
   </svg>
 );
 
@@ -111,6 +120,13 @@ interface SourceTrendItem {
   cost: number;
 }
 
+interface DeviceTrendItem {
+  date: string;
+  device_name: string;
+  tokens: number;
+  cost: number;
+}
+
 interface ModelPerformance {
   model: string;
   avg_latency: number;
@@ -131,6 +147,7 @@ interface AggregatedMetrics {
   model_distribution: ModelDistribution[];
   sessions: SessionItem[];
   source_trends: SourceTrendItem[];
+  device_trends: DeviceTrendItem[];
   model_performance: ModelPerformance[];
   performance_trends: PerformanceTrend[];
 }
@@ -214,6 +231,10 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [refreshSpin, setRefreshSpin] = useState(false);
 
+  // 应用初始化与后台握手状态
+  const [appInitializing, setAppInitializing] = useState(true);
+  const [initError, setInitError] = useState<string | null>(null);
+
   // 大盘慢查询友好提示与 AbortController 取消机制
   const abortControllerRef = useRef<AbortController | null>(null);
   const loadingTimeoutRef = useRef<any>(null);
@@ -241,12 +262,12 @@ export default function App() {
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(5);
-  const [source, setSource] = useState<'all' | 'antigravity' | 'claude_code' | 'codex' | 'cursor'>('all');
+  const [source, setSource] = useState<'all' | 'antigravity' | 'claude_code' | 'codex' | 'cursor' | 'trae' | 'trae_cn'>('all');
   const [isSourceDropdownOpen, setIsSourceDropdownOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<'all' | 'today' | 'week' | '30days' | 'month' | 'quarter' | 'custom'>('30days');
   const [startDate, setStartDate] = useState<string>(getDateBounds('30days').start);
   const [endDate, setEndDate] = useState<string>(getDateBounds('30days').end);
-  const [chartDimension, setChartDimension] = useState<'type' | 'source'>('type');
+  const [chartDimension, setChartDimension] = useState<'type' | 'source' | 'device'>('type');
 
   // 数据库数据源配置状态
   const [isConfigOpen, setIsConfigOpen] = useState(false);
@@ -261,6 +282,11 @@ export default function App() {
   const [testLoading, setTestLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [configMessage, setConfigMessage] = useState<{ success: boolean; text: string } | null>(null);
+
+  // 设备名称配置状态
+  const [showDeviceModal, setShowDeviceModal] = useState(false);
+  const [deviceName, setDeviceName] = useState('');
+  const [defaultDeviceName, setDefaultDeviceName] = useState('');
 
   // 数据库清理与优化瘦身状态
   const [cleanLoading, setCleanLoading] = useState(false);
@@ -305,6 +331,9 @@ export default function App() {
             setPgUser(data.pg_user || '');
             setPgPassword(data.pg_password || '');
             setPgDatabase(data.pg_database || '');
+            // 加载设备名配置
+            setDeviceName(data.device_name || '');
+            setDefaultDeviceName(data.default_device_name || '');
           }
         } catch (e) {
           console.error("加载数据源配置失败", e);
@@ -447,6 +476,7 @@ export default function App() {
 
   // 获取数据逻辑
   const fetchData = async (currentSource = source, start = startDate, end = endDate) => {
+    if (appInitializing) return;
     // 1. 发起新查询前，如果先前有未完成的查询，则主动取消，保证网络竞态安全性
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -529,6 +559,7 @@ export default function App() {
     end = endDate,
     hideZeroVal = hideZero
   ) => {
+    if (appInitializing) return;
     setSessionsLoading(true);
     try {
       const query = new URLSearchParams({
@@ -555,6 +586,91 @@ export default function App() {
     }
   };
 
+  // 首次启动后台数据初始化同步与握手
+  const performInitialSync = async (skipDeviceCheck = false) => {
+    setInitError(null);
+    setAppInitializing(true);
+    try {
+      // 1. 先检查设备名称是否配置
+      if (!skipDeviceCheck) {
+        const configRes = await fetch(`/api/config?t=${Date.now()}`);
+        if (configRes.ok) {
+          const configData = await configRes.json();
+          // 如果没有配置设备名 (即为 null 或空字符串)
+          if (!configData.device_name) {
+            setDefaultDeviceName(configData.default_device_name || '');
+            setDeviceName(configData.default_device_name || '');
+            // 填充已有的数据库配置，以便保存时不会丢失其他配置
+            if (configData.db_type) {
+              setDbType(configData.db_type.toLowerCase() === 'postgres' ? 'postgres' : 'sqlite');
+            }
+            if (configData.sqlite_path) {
+              setSqlitePath(configData.sqlite_path);
+            }
+            setPgHost(configData.pg_host || '');
+            setPgPort(configData.pg_port || '5432');
+            setPgUser(configData.pg_user || '');
+            setPgPassword(configData.pg_password || '');
+            setPgDatabase(configData.pg_database || '');
+
+            setShowDeviceModal(true);
+            setAppInitializing(false);
+            return; // 拦截，等配置完再继续
+          }
+        }
+      }
+
+      // 2. 启动后端扫描
+      const scanPromise = fetch(`/api/scan/start?t=${Date.now()}`);
+      // 3. 并行获取大盘指标
+      const metricsPromise = fetch(`/api/metrics?source=${source}&start_date=${startDate}&end_date=${endDate}&t=${Date.now()}`);
+      // 3. 并行获取会话列表第一页数据
+      const query = new URLSearchParams({
+        page: '1',
+        page_size: String(pageSize),
+        search: searchKeyword.trim(),
+        source,
+        sort_by: String(sortField),
+        sort_order: sortOrder,
+        start_date: startDate,
+        end_date: endDate,
+        hide_zero: hideZero ? 'true' : 'false',
+        t: String(Date.now())
+      });
+      const sessionsPromise = fetch(`/api/sessions?${query.toString()}`);
+
+      const [scanRes, metricsRes, sessionsRes] = await Promise.all([
+        scanPromise,
+        metricsPromise,
+        sessionsPromise
+      ]);
+
+      if (!scanRes.ok || !metricsRes.ok || !sessionsRes.ok) {
+        throw new Error(`后台服务连接异常 (Scan: ${scanRes.status}, Metrics: ${metricsRes.status}, Sessions: ${sessionsRes.status})`);
+      }
+
+      const scanStatusVal = await scanRes.json();
+      const metricsVal = await metricsRes.json();
+      const sessionsVal = await sessionsRes.json();
+
+      setScanStatus(scanStatusVal);
+      setData(metricsVal);
+      setSessionsData(sessionsVal);
+
+      if (scanStatusVal.is_scanning) {
+        pollScanStatus();
+      }
+
+      const now = new Date();
+      setLastUpdate(now.toTimeString().split(' ')[0]);
+    } catch (e: any) {
+      console.error("首屏初始化同步失败:", e);
+      setInitError(e.message || String(e));
+    } finally {
+      setAppInitializing(false);
+    }
+  };
+
   // 手动点击刷新同步按钮
   const handleSyncClick = async () => {
     if (scanStatus?.is_scanning) return;
@@ -563,8 +679,8 @@ export default function App() {
   };
 
   useEffect(() => {
-    // 自动启动后台扫描
-    startScan();
+    // 自动启动后台同步初始化
+    performInitialSync();
   }, []);
 
   // 1. 仅当分页列表相关参数发生变化时，增量拉取会话明细，不触发大盘加载
@@ -674,7 +790,8 @@ export default function App() {
       <div className="background-decor-1 bg-decor-cyan animate-pulse-glow fixed -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
       <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse fixed -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
 
-      <div className="max-w-[1400px] mx-auto p-4 sm:p-5 flex flex-col gap-4">
+      {!appInitializing && !initError && (
+        <div className="max-w-[1400px] mx-auto p-4 sm:p-5 flex flex-col gap-4">
         {/* 头部导航栏 */}
         <header className="relative z-30 dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-5 py-3 gap-3">
           <div className="flex items-center gap-4">
@@ -712,12 +829,16 @@ export default function App() {
                   {source === 'claude_code' && <ClaudeIcon className="w-4 h-4 text-[#d97757]" />}
                   {source === 'codex' && <OpenAIIcon className="w-4 h-4 text-[#10a37f]" />}
                   {source === 'cursor' && <CursorIcon className="w-4 h-4 text-[#00bcd4]" />}
+                  {source === 'trae' && <TraeIcon className="w-4 h-4 text-[#3b82f6]" />}
+                  {source === 'trae_cn' && <TraeIcon className="w-4 h-4 text-[#10b981]" />}
                   <span>
                     {source === 'all' && '全部来源 (All)'}
                     {source === 'antigravity' && 'Antigravity'}
                     {source === 'claude_code' && 'Claude Code'}
                     {source === 'codex' && 'Codex CLI'}
                     {source === 'cursor' && 'Cursor'}
+                    {source === 'trae' && 'Trae'}
+                    {source === 'trae_cn' && 'Trae CN'}
                   </span>
                 </div>
                 <ChevronDown className={`w-3.5 h-3.5 text-text-secondary transition-transform duration-300 ${isSourceDropdownOpen ? 'rotate-180' : ''}`} />
@@ -736,6 +857,8 @@ export default function App() {
                       { value: 'claude_code', label: 'Claude Code', icon: <ClaudeIcon className="w-3.5 h-3.5 text-[#d97757]" /> },
                       { value: 'codex', label: 'Codex CLI', icon: <OpenAIIcon className="w-3.5 h-3.5 text-[#10a37f]" /> },
                       { value: 'cursor', label: 'Cursor', icon: <CursorIcon className="w-3.5 h-3.5 text-[#00bcd4]" /> },
+                      { value: 'trae', label: 'Trae', icon: <TraeIcon className="w-3.5 h-3.5 text-[#3b82f6]" /> },
+                      { value: 'trae_cn', label: 'Trae CN', icon: <TraeIcon className="w-3.5 h-3.5 text-[#10b981]" /> },
                     ].map((opt) => (
                       <button
                         key={opt.value}
@@ -1010,21 +1133,25 @@ export default function App() {
         <section className="chart-section glass-card p-4 sm:p-5">
           <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-2 mb-3.5 border-b border-card-border gap-2">
             <h2 className="text-base font-semibold text-text-primary">
-              {source === 'all' && chartDimension === 'source' ? '各引擎每日用量对比走势 (Token 堆叠柱状图)' : '每日用量走势 (Token 堆叠柱状图)'}
+              {source === 'all' && chartDimension === 'source' 
+                ? '各引擎每日用量对比走势 (Token 堆叠柱状图)' 
+                : chartDimension === 'device' 
+                ? '各设备每日用量对比走势 (Token 堆叠柱状图)' 
+                : '每日用量走势 (Token 堆叠柱状图)'}
             </h2>
             
-            {source === 'all' && (
-              <div className="rounded-xl border border-card-border bg-bg-secondary/40 dark:bg-white/3 p-0.5 flex items-center gap-0.5 shadow-sm">
-                <button
-                  onClick={() => setChartDimension('type')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
-                    chartDimension === 'type'
-                      ? 'bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_10px_rgba(6,182,212,0.15)]'
-                      : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
-                  }`}
-                >
-                  📊 类型维度
-                </button>
+            <div className="rounded-xl border border-card-border bg-bg-secondary/40 dark:bg-white/3 p-0.5 flex items-center gap-0.5 shadow-sm">
+              <button
+                onClick={() => setChartDimension('type')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
+                  chartDimension === 'type'
+                    ? 'bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_10px_rgba(6,182,212,0.15)]'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
+                }`}
+              >
+                📊 类型维度
+              </button>
+              {source === 'all' && (
                 <button
                   onClick={() => setChartDimension('source')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
@@ -1035,8 +1162,18 @@ export default function App() {
                 >
                   🤖 来源维度
                 </button>
-              </div>
-            )}
+              )}
+              <button
+                onClick={() => setChartDimension('device')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
+                  chartDimension === 'device'
+                    ? 'bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_10px_rgba(6,182,212,0.15)]'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
+                }`}
+              >
+                💻 设备维度
+              </button>
+            </div>
           </div>
           <div className="w-full">
             {source === 'all' && chartDimension === 'source' ? (
@@ -1045,9 +1182,15 @@ export default function App() {
               ) : (
                 <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
               )
+            ) : chartDimension === 'device' ? (
+              data?.device_trends && data.device_trends.length > 0 ? (
+                <DailyTrendChart data={data.daily_trends} deviceTrends={data.device_trends} dimension="device" theme={theme} />
+              ) : (
+                <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+              )
             ) : (
               data?.daily_trends && data.daily_trends.length > 0 ? (
-                <DailyTrendChart data={data.daily_trends} theme={theme} />
+                <DailyTrendChart data={data.daily_trends} dimension="type" theme={theme} />
               ) : (
                 <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
               )
@@ -1298,8 +1441,20 @@ export default function App() {
                           )}
                           {s.source === 'cursor' && (
                             <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/35 text-blue-500 leading-none">
-                              <CursorIcon className="w-3 h-3 text-[#00bcd4]" />
+                              <CursorIcon className="w-3.5 h-3.5 text-[#00bcd4]" />
                               Cursor
+                            </span>
+                          )}
+                          {s.source === 'trae' && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-500/15 border border-blue-500/35 text-blue-500 leading-none">
+                              <TraeIcon className="w-3.5 h-3.5 text-[#3b82f6]" />
+                              Trae
+                            </span>
+                          )}
+                          {s.source === 'trae_cn' && (
+                            <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/35 text-emerald-600 dark:text-emerald-500 leading-none">
+                              <TraeIcon className="w-3.5 h-3.5 text-[#10b981]" />
+                              Trae CN
                             </span>
                           )}
                         </td>
@@ -1417,6 +1572,82 @@ export default function App() {
           </section>
         )}
       </div>
+      )}
+
+      {/* 启动连接错误闪屏 */}
+      {initError && (
+        <div className="fixed inset-0 bg-bg-app dark:bg-[#030712] z-[9999] flex flex-col items-center justify-center p-6 gap-6 select-none animate-fade-in">
+          {/* 背景光效 */}
+          <div className="background-decor-1 bg-decor-cyan animate-pulse-glow absolute -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
+          <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse absolute -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
+
+          <div className="glass-card rounded-[32px] max-w-[500px] w-full p-8 flex flex-col items-center text-center gap-6 border border-white/10 dark:border-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.3)] relative animate-fade-in">
+            {/* 配置源按钮 */}
+            <button
+              onClick={() => setIsConfigOpen(true)}
+              className="absolute top-5 right-5 w-8 h-8 rounded-xl flex items-center justify-center bg-bg-secondary/60 dark:bg-white/5 hover:bg-bg-secondary dark:hover:bg-white/10 text-text-secondary hover:text-neon-cyan transition-all duration-300 hover:rotate-45 active:scale-95 cursor-pointer border border-card-border shadow-sm group"
+              title="配置数据源"
+            >
+              <Settings className="w-4 h-4 text-text-secondary group-hover:text-neon-cyan transition-colors" />
+            </button>
+
+            {/* 警告图标 */}
+            <div className="w-16 h-16 rounded-2xl flex items-center justify-center bg-red-500/10 text-red-500 border border-red-500/30 shadow-[0_0_20px_rgba(239,68,68,0.2)] animate-pulse mb-2">
+              <Settings className="w-8 h-8 text-red-500" />
+            </div>
+
+            <div className="flex flex-col gap-2">
+              <h2 className="text-xl font-bold bg-gradient-to-r from-red-500 to-orange-500 bg-clip-text text-transparent tracking-tight">
+                后台服务连接失败
+              </h2>
+              <p className="text-xs text-text-secondary max-w-[360px] leading-relaxed">
+                无法与本地数据监控服务建立连接，这通常是因为服务尚未启动完毕或数据库配置错误。
+              </p>
+            </div>
+
+            <div className="w-full bg-black/10 dark:bg-black/40 border border-red-500/15 rounded-2xl p-4 text-left font-mono text-[11px] text-red-400/90 whitespace-pre-wrap max-h-[120px] overflow-y-auto scrollbar-thin">
+              {initError}
+            </div>
+
+            <button
+              onClick={() => performInitialSync()}
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple text-xs font-bold text-white hover:shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-[1.02] active:scale-95 transition-all duration-200 cursor-pointer flex items-center justify-center gap-2"
+            >
+              <RefreshCw className="w-4 h-4" />
+              <span>重新尝试连接</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* 启动加载闪屏 */}
+      {appInitializing && !initError && (
+        <div className="fixed inset-0 bg-bg-app dark:bg-[#030712] z-[9999] flex flex-col items-center justify-center p-6 gap-6 select-none animate-fade-in">
+          {/* 背景光效 */}
+          <div className="background-decor-1 bg-decor-cyan animate-pulse-glow absolute -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
+          <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse absolute -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
+
+          <div className="glass-card rounded-[32px] max-w-[400px] w-full p-8 flex flex-col items-center text-center gap-6 border border-white/10 dark:border-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.3)] animate-fade-in">
+            <svg className="w-16 h-16 animate-spin text-neon-cyan mb-2" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12" stroke="url(#spinner-grad-splash)" strokeWidth="3" strokeLinecap="round"/>
+              <defs>
+                <linearGradient id="spinner-grad-splash" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                  <stop stopColor="#06b6d4" />
+                  <stop offset="1" stopColor="#a855f7" />
+                </linearGradient>
+              </defs>
+            </svg>
+            <div className="flex flex-col gap-2">
+              <h2 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">
+                AI Token Monitor
+              </h2>
+              <p className="text-xs text-text-secondary leading-relaxed">
+                正在初始化后台服务并同步数据，请稍候...
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 首次初始化时的全屏扫描进度遮罩 */}
       {(!data || (data.totals.total_sessions === 0 && data.sessions.length === 0)) && scanStatus && scanStatus.is_scanning && (
@@ -1561,6 +1792,30 @@ export default function App() {
             </div>
 
             <div className="space-y-5 relative z-10">
+              {/* 设备名称配置 */}
+              <div className="flex flex-col gap-2 animate-fade-in">
+                <label className="text-xs font-semibold text-text-secondary">💻 当前设备名称 (Device Name)</label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={deviceName}
+                    onChange={(e) => setDeviceName(e.target.value)}
+                    placeholder={`例如: Work-Laptop (建议值: ${defaultDeviceName})`}
+                    className="flex-1 bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setDeviceName(defaultDeviceName)}
+                    className="px-3 rounded-xl border border-card-border text-[11px] font-semibold text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 bg-bg-secondary/40 dark:bg-white/5 transition-all cursor-pointer"
+                  >
+                    填入建议值
+                  </button>
+                </div>
+                <p className="text-[10px] text-text-muted leading-relaxed">
+                  * 用于多设备数据同步时区分用量。如果留空，系统启动时将拦截大盘并提示配置。
+                </p>
+              </div>
+
               <div className="flex flex-col gap-2">
                 <label className="text-xs font-semibold text-text-secondary">🔌 数据库类型 (Database Engine)</label>
                 <div className="grid grid-cols-2 gap-3">
@@ -1757,21 +2012,29 @@ export default function App() {
                           pg_user: pgUser,
                           pg_password: pgPassword,
                           pg_database: pgDatabase,
+                          device_name: deviceName,
                         })
                       });
                       if (response.ok) {
                         const res = await response.json();
                         if (res.success) {
                           setIsConfigOpen(false);
-                          if (confirm(`${res.message}\n\n为了使新的数据库配置生效并避免数据冲突，软件需要重新启动。是否立即自动重启软件？`)) {
-                            try {
-                              await fetch('/api/app/restart', { method: 'POST' });
-                            } catch (e) {
-                              console.error('重启请求失败:', e);
-                              alert('自动重启失败，请手动关闭并重新打开软件。');
+                          if (res.need_restart) {
+                            if (confirm(`${res.message}\n\n为了使新的数据库配置生效并避免数据冲突，软件需要重新启动。是否立即自动重启软件？`)) {
+                              try {
+                                await fetch('/api/app/restart', { method: 'POST' });
+                              } catch (e) {
+                                console.error('重启请求失败:', e);
+                                alert('自动重启失败，请手动关闭并重新打开软件。');
+                              }
+                            } else {
+                              alert('配置已保存！新配置将在下次启动软件时生效。');
                             }
                           } else {
-                            alert('配置已保存！新配置将在下次启动软件时生效。');
+                            alert('配置已保存，设备名称修改立即生效，无需重启！');
+                            // 静默重新加载大盘数据
+                            fetchData(source, startDate, endDate);
+                            fetchSessions(1, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
                           }
                         } else {
                           setConfigMessage({ success: false, text: res.message });
@@ -1836,6 +2099,128 @@ export default function App() {
                     {cleanMessage}
                   </div>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 设备名称未配置时的拦截强制配置弹窗 */}
+      {showDeviceModal && (
+        <div className="fixed inset-0 z-[20000] flex items-center justify-center bg-black/70 dark:bg-black/90 backdrop-blur-md p-4 animate-fade-in">
+          <div className="relative w-full max-w-md rounded-3xl border border-neon-cyan/30 bg-bg-secondary/95 dark:bg-[#080f1e]/95 backdrop-blur-2xl p-6 text-text-primary shadow-[0_0_50px_rgba(6,182,212,0.15)] overflow-hidden">
+            {/* 装饰性背景光效 */}
+            <div className="absolute -top-20 -left-20 w-44 h-44 bg-neon-cyan/25 rounded-full blur-3xl pointer-events-none"></div>
+            <div className="absolute -bottom-20 -right-20 w-44 h-44 bg-neon-purple/25 rounded-full blur-3xl pointer-events-none"></div>
+
+            <div className="text-center pb-3 border-b border-card-border mb-5 relative z-10">
+              <h2 className="text-base font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent flex items-center justify-center gap-2">
+                <Monitor className="w-5 h-5 text-neon-cyan animate-pulse" />
+                <span>初始化设备配置</span>
+              </h2>
+              <p className="text-xs text-text-secondary mt-2">首次使用或多设备同步需要为当前物理设备设置唯一标识</p>
+            </div>
+
+            <div className="space-y-5 relative z-10">
+              <div className="flex flex-col gap-2 text-left">
+                <label className="text-xs font-semibold text-text-secondary">💻 设备名称 (Device Name)</label>
+                <input
+                  type="text"
+                  value={deviceName}
+                  onChange={(e) => setDeviceName(e.target.value)}
+                  placeholder={`自动识别建议值: ${defaultDeviceName}`}
+                  className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-3 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
+                />
+                <div className="flex gap-2 justify-end mt-1">
+                  <button
+                    type="button"
+                    onClick={() => setDeviceName(defaultDeviceName)}
+                    className="text-[10px] text-neon-cyan hover:underline bg-transparent border-none cursor-pointer"
+                  >
+                    使用系统建议名称: {defaultDeviceName}
+                  </button>
+                </div>
+              </div>
+
+              {configMessage && (
+                <div
+                  className={`p-3 rounded-xl border text-xs leading-relaxed flex gap-2 items-start animate-fade-in ${
+                    configMessage.success
+                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                      : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                  }`}
+                >
+                  <span className="text-sm">{configMessage.success ? '✅' : '❌'}</span>
+                  <div className="whitespace-pre-wrap font-medium">{configMessage.text}</div>
+                </div>
+              )}
+
+              <div className="pt-2">
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (!deviceName.trim()) {
+                      setConfigMessage({ success: false, text: '设备名称不能为空，请填入名称后再保存。' });
+                      return;
+                    }
+                    setSaveLoading(true);
+                    setConfigMessage(null);
+                    try {
+                      const response = await fetch('/api/config/save', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          db_type: dbType,
+                          sqlite_path: sqlitePath,
+                          pg_host: pgHost,
+                          pg_port: pgPort,
+                          pg_user: pgUser,
+                          pg_password: pgPassword,
+                          pg_database: pgDatabase,
+                          device_name: deviceName.trim(),
+                        })
+                      });
+                      if (response.ok) {
+                        const res = await response.json();
+                        if (res.success) {
+                          if (res.need_restart) {
+                            setConfigMessage({ success: true, text: '配置保存成功！系统正在自动重启以使配置生效...' });
+                            setTimeout(async () => {
+                              try {
+                                await fetch('/api/app/restart', { method: 'POST' });
+                              } catch (e) {
+                                console.error('重启请求失败:', e);
+                                setConfigMessage({ success: false, text: '保存成功，但自动重启失败。请手动关闭并重新启动程序。' });
+                              }
+                            }, 1500);
+                          } else {
+                            setConfigMessage({ success: true, text: '设备名称配置成功！正在载入系统数据...' });
+                            setTimeout(() => {
+                              setShowDeviceModal(false);
+                              performInitialSync(true); // 跳过设备名检查，直接加载
+                            }, 1000);
+                          }
+                        } else {
+                          setConfigMessage({ success: false, text: res.message });
+                        }
+                      } else {
+                        setConfigMessage({ success: false, text: '服务器保存失败，接口错误。' });
+                      }
+                    } catch (e: any) {
+                      setConfigMessage({ success: false, text: `保存异常：${e.message}` });
+                    } finally {
+                      setSaveLoading(false);
+                    }
+                  }}
+                  disabled={saveLoading}
+                  className="w-full py-3.5 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple text-xs font-bold text-white shadow-lg hover:shadow-neon-cyan/20 active:scale-[0.98] transition-all cursor-pointer flex items-center justify-center gap-2 disabled:opacity-50"
+                >
+                  {saveLoading ? (
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <span>🚀 确认保存设备配置</span>
+                  )}
+                </button>
               </div>
             </div>
           </div>

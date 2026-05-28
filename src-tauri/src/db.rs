@@ -35,6 +35,22 @@ pub fn get_brain_dir() -> PathBuf {
         .join("brain")
 }
 
+pub fn get_device_name() -> String {
+    let _ = dotenvy::dotenv();
+    std::env::var("DEVICE_NAME")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| {
+            std::env::var("COMPUTERNAME")
+                .or_else(|_| std::env::var("HOSTNAME"))
+                .or_else(|_| std::env::var("USERNAME"))
+                .or_else(|_| std::env::var("USER"))
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or_else(|| "unknown-device".to_string())
+        })
+}
+
 // 2. 会话元数据与日志读取逻辑
 
 pub fn extract_convo_info(uuid: &str, db_path: &Path) -> (String, String) {
@@ -134,6 +150,23 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
         [],
     )?;
 
+    // SQLite 增量升级：为 sessions 表添加 device_name 字段
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+        let mut rows = stmt.query([])?;
+        let mut has_device_name = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "device_name" {
+                has_device_name = true;
+                break;
+            }
+        }
+        if !has_device_name {
+            let _ = conn.execute("ALTER TABLE sessions ADD COLUMN device_name TEXT DEFAULT 'unknown';", []);
+        }
+    }
+
     conn.execute(
         "CREATE TABLE IF NOT EXISTS turns (
             source TEXT NOT NULL,
@@ -156,20 +189,36 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
         [],
     )?;
 
-
+    // 检测并平滑重构 daily_stats 缓存表以引入设备名称字段
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(daily_stats)")?;
+        let mut rows = stmt.query([])?;
+        let mut stats_has_device_name = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "device_name" {
+                stats_has_device_name = true;
+                break;
+            }
+        }
+        if !stats_has_device_name {
+            let _ = conn.execute("DROP TABLE IF EXISTS daily_stats;", []);
+        }
+    }
 
     // 直接创建基于联合主键的最新 daily_stats 缓存表结构
     conn.execute(
         "CREATE TABLE IF NOT EXISTS daily_stats (
             date TEXT NOT NULL,
             source TEXT NOT NULL,
+            device_name TEXT NOT NULL DEFAULT 'unknown',
             input_tokens INTEGER DEFAULT 0,
             cached_input_tokens INTEGER DEFAULT 0,
             output_tokens INTEGER DEFAULT 0,
             thinking_tokens INTEGER DEFAULT 0,
             sessions_count INTEGER DEFAULT 0,
             cost_usd REAL DEFAULT 0.0,
-            PRIMARY KEY (date, source)
+            PRIMARY KEY (date, source, device_name)
         )",
         [],
     )?;
@@ -199,10 +248,11 @@ pub fn rebuild_daily_stats_cache(conn: &rusqlite::Connection) -> Result<(), rusq
         let _ = stmt.execute([])?;
         
         let mut stmt_insert = conn.prepare(
-            "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
+            "INSERT INTO daily_stats (date, source, device_name, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
              SELECT 
                  substr(s.created_at, 1, 10) as date,
                  s.source,
+                 s.device_name,
                  COALESCE(SUM(t.input_tokens), 0) as input_tokens,
                  COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
                  COALESCE(SUM(t.output_tokens), 0) as output_tokens,
@@ -211,7 +261,7 @@ pub fn rebuild_daily_stats_cache(conn: &rusqlite::Connection) -> Result<(), rusq
                  COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
              FROM sessions s
              LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
-             GROUP BY date, s.source"
+             GROUP BY date, s.source, s.device_name"
         )?;
         let _ = stmt_insert.execute([])?;
     } else {
@@ -223,10 +273,11 @@ pub fn rebuild_daily_stats_cache(conn: &rusqlite::Connection) -> Result<(), rusq
         let _ = stmt_del.execute(rusqlite::params![one_year_ago_str])?;
 
         let mut stmt_insert = conn.prepare(
-            "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
+            "INSERT INTO daily_stats (date, source, device_name, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
              SELECT 
                  substr(s.created_at, 1, 10) as date,
                  s.source,
+                 s.device_name,
                  COALESCE(SUM(t.input_tokens), 0) as input_tokens,
                  COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
                  COALESCE(SUM(t.output_tokens), 0) as output_tokens,
@@ -236,7 +287,7 @@ pub fn rebuild_daily_stats_cache(conn: &rusqlite::Connection) -> Result<(), rusq
              FROM sessions s
              LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
              WHERE substr(s.created_at, 1, 10) >= ?
-             GROUP BY date, s.source"
+             GROUP BY date, s.source, s.device_name"
         )?;
         let _ = stmt_insert.execute(rusqlite::params![one_year_ago_str])?;
     }
@@ -256,10 +307,11 @@ pub fn rebuild_pg_daily_stats_cache(client: &mut postgres::Client) -> Result<(),
         // 首次全量同步
         tx.execute("DELETE FROM daily_stats", &[]).map_err(|e| e.to_string())?;
         tx.execute(
-            "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
+            "INSERT INTO daily_stats (date, source, device_name, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
              SELECT 
                  SUBSTR(s.created_at, 1, 10) as date,
                  s.source,
+                 s.device_name,
                  COALESCE(SUM(t.input_tokens), 0) as input_tokens,
                  COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
                  COALESCE(SUM(t.output_tokens), 0) as output_tokens,
@@ -268,7 +320,7 @@ pub fn rebuild_pg_daily_stats_cache(client: &mut postgres::Client) -> Result<(),
                  COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
              FROM sessions s
              LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
-             GROUP BY SUBSTR(s.created_at, 1, 10), s.source",
+             GROUP BY SUBSTR(s.created_at, 1, 10), s.source, s.device_name",
             &[],
         ).map_err(|e| e.to_string())?;
     } else {
@@ -280,10 +332,11 @@ pub fn rebuild_pg_daily_stats_cache(client: &mut postgres::Client) -> Result<(),
             .map_err(|e| e.to_string())?;
 
         tx.execute(
-            "INSERT INTO daily_stats (date, source, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
+            "INSERT INTO daily_stats (date, source, device_name, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, sessions_count, cost_usd)
              SELECT 
                  SUBSTR(s.created_at, 1, 10) as date,
                  s.source,
+                 s.device_name,
                  COALESCE(SUM(t.input_tokens), 0) as input_tokens,
                  COALESCE(SUM(t.cached_input_tokens), 0) as cached_input_tokens,
                  COALESCE(SUM(t.output_tokens), 0) as output_tokens,
@@ -293,7 +346,7 @@ pub fn rebuild_pg_daily_stats_cache(client: &mut postgres::Client) -> Result<(),
              FROM sessions s
              LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
              WHERE SUBSTR(s.created_at, 1, 10) >= $1
-             GROUP BY SUBSTR(s.created_at, 1, 10), s.source",
+             GROUP BY SUBSTR(s.created_at, 1, 10), s.source, s.device_name",
             &[&one_year_ago_str],
         ).map_err(|e| e.to_string())?;
     }
@@ -715,14 +768,16 @@ pub fn sync_claude_code(
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
                 };
 
+                let dev_name = get_device_name();
                 tx.execute(
-                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
-                     VALUES ('claude_code', ?, ?, ?, ?, ?, ?)
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
+                     VALUES ('claude_code', ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(source, uuid) DO UPDATE SET
                         last_parsed_idx = excluded.last_parsed_idx,
                         last_mtime = excluded.last_mtime,
-                        title = excluded.title",
-                    rusqlite::params![uuid, title, created_at, line_idx, mtime, file_path.to_string_lossy().to_string()],
+                        title = excluded.title,
+                        device_name = excluded.device_name",
+                    rusqlite::params![uuid, title, created_at, line_idx, mtime, file_path.to_string_lossy().to_string(), dev_name],
                 )?;
 
                 for turn in &new_turns {
@@ -853,14 +908,16 @@ pub fn sync_codex(
                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
                 };
 
+                let dev_name = get_device_name();
                 tx.execute(
-                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
-                     VALUES ('codex', ?, ?, ?, ?, ?, ?)
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
+                     VALUES ('codex', ?, ?, ?, ?, ?, ?, ?)
                      ON CONFLICT(source, uuid) DO UPDATE SET
                         last_parsed_idx = excluded.last_parsed_idx,
                         last_mtime = excluded.last_mtime,
-                        title = excluded.title",
-                    rusqlite::params![uuid, title, created_at, line_idx, mtime, file_path.to_string_lossy().to_string()],
+                        title = excluded.title,
+                        device_name = excluded.device_name",
+                    rusqlite::params![uuid, title, created_at, line_idx, mtime, file_path.to_string_lossy().to_string(), dev_name],
                 )?;
 
                 for turn in &new_turns {
@@ -873,6 +930,304 @@ pub fn sync_codex(
             }
             tx.commit()?;
         }
+    }
+
+    Ok(())
+}
+
+pub fn get_trae_workspace_dir() -> PathBuf {
+    Path::new(&get_user_profile_dir())
+        .join("AppData")
+        .join("Roaming")
+        .join("Trae")
+        .join("User")
+        .join("workspaceStorage")
+}
+
+pub fn get_trae_cn_workspace_dir() -> PathBuf {
+    Path::new(&get_user_profile_dir())
+        .join("AppData")
+        .join("Roaming")
+        .join("Trae CN")
+        .join("User")
+        .join("workspaceStorage")
+}
+
+pub fn sync_trae(
+    conn_cache: &mut rusqlite::Connection,
+    progress_offset: usize,
+    total_files: usize,
+    progress_cb: &impl Fn(usize, usize),
+) -> Result<(), rusqlite::Error> {
+    let trae_dir = get_trae_workspace_dir();
+    sync_trae_common(conn_cache, &trae_dir, "trae", progress_offset, total_files, progress_cb)
+}
+
+pub fn sync_trae_cn(
+    conn_cache: &mut rusqlite::Connection,
+    progress_offset: usize,
+    total_files: usize,
+    progress_cb: &impl Fn(usize, usize),
+) -> Result<(), rusqlite::Error> {
+    let trae_cn_dir = get_trae_cn_workspace_dir();
+    sync_trae_common(conn_cache, &trae_cn_dir, "trae_cn", progress_offset, total_files, progress_cb)
+}
+
+fn sync_trae_common(
+    conn_cache: &mut rusqlite::Connection,
+    workspace_dir: &Path,
+    source: &str,
+    progress_offset: usize,
+    total_files: usize,
+    progress_cb: &impl Fn(usize, usize),
+) -> Result<(), rusqlite::Error> {
+    if !workspace_dir.exists() {
+        return Ok(());
+    }
+
+    log_progress(&format!("正在扫描并增量同步 {} 历史会话数据...", if source == "trae" { "Trae" } else { "Trae CN" }));
+
+    let mut ws_dbs = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(workspace_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                let db_path = path.join("state.vscdb");
+                if db_path.exists() {
+                    ws_dbs.push(db_path);
+                }
+            }
+        }
+    }
+
+    let mut session_cache = HashMap::new();
+    if let Ok(mut stmt) = conn_cache.prepare(&format!("SELECT uuid, last_parsed_idx, last_mtime FROM sessions WHERE source = '{}'", source)) {
+        if let Ok(mut rows) = stmt.query([]) {
+            while let Ok(Some(row)) = rows.next() {
+                if let (Ok(uuid), Ok(idx), Ok(mtime)) = (
+                    row.get::<_, String>(0),
+                    row.get::<_, i64>(1),
+                    row.get::<_, f64>(2),
+                ) {
+                    session_cache.insert(uuid, (idx, mtime));
+                }
+            }
+        }
+    }
+
+    let mut session_count = 0;
+    for (ws_idx, db_path) in ws_dbs.iter().enumerate() {
+        let conn_ws = match rusqlite::Connection::open_with_flags(
+            db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                | rusqlite::OpenFlags::SQLITE_OPEN_URI
+                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let table_check: Result<i32, _> = conn_ws.query_row(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ItemTable'",
+            [],
+            |_| Ok(1),
+        );
+        if table_check.is_err() {
+            continue;
+        }
+
+        let storage_val: Result<String, _> = conn_ws.query_row(
+            "SELECT value FROM ItemTable WHERE key = 'memento/icube-ai-agent-storage'",
+            [],
+            |row| row.get(0),
+        );
+        let storage_json: serde_json::Value = match storage_val {
+            Ok(val) => serde_json::from_str(&val).unwrap_or(serde_json::Value::Null),
+            Err(_) => continue,
+        };
+
+        let sessions = match storage_json.get("list").and_then(|l| l.as_array()) {
+            Some(l) => l,
+            None => continue,
+        };
+
+        if sessions.is_empty() {
+            continue;
+        }
+
+        let agent_val: Result<String, _> = conn_ws.query_row(
+            "SELECT value FROM ItemTable WHERE key = 'icube_session_agent_map'",
+            [],
+            |row| row.get(0),
+        );
+        let agent_map: HashMap<String, String> = agent_val
+            .ok()
+            .and_then(|val| serde_json::from_str(&val).ok())
+            .unwrap_or_default();
+
+        let mut session_model_map = HashMap::new();
+        if let Ok(mut stmt) = conn_ws.prepare("SELECT key, value FROM ItemTable WHERE key LIKE '%_ai-chat:sessionRelation:modelMap'") {
+            if let Ok(mut rows) = stmt.query([]) {
+                while let Some(row) = rows.next().ok().flatten() {
+                    if let (Ok(_key), Ok(val_str)) = (row.get::<_, String>(0), row.get::<_, String>(1)) {
+                        if let Ok(m_data) = serde_json::from_str::<serde_json::Value>(&val_str) {
+                            if let Some(obj) = m_data.as_object() {
+                                for (sess_id, agents) in obj {
+                                    if let Some(agent_obj) = agents.as_object() {
+                                        for (agent_name, model_raw) in agent_obj {
+                                            if let Some(model_str) = model_raw.as_str() {
+                                                let mut model_name = model_str.to_string();
+                                                if model_str.contains("1_-_") {
+                                                    if let Some(part) = model_str.split("1_-_").nth(1) {
+                                                        model_name = part.to_string();
+                                                    }
+                                                }
+                                                session_model_map.insert((sess_id.clone(), agent_name.clone()), model_name);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let chat_val: Result<String, _> = conn_ws.query_row(
+            "SELECT value FROM ItemTable WHERE key = 'ChatStore'",
+            [],
+            |row| row.get(0),
+        );
+        let mut turns_count_map = HashMap::new();
+        if let Ok(val) = chat_val {
+            if let Ok(chat_data) = serde_json::from_str::<serde_json::Value>(&val) {
+                if let Some(turns_height) = chat_data.get("state").and_then(|s| s.get("turnsHeight")).and_then(|t| t.as_object()) {
+                    for turn_key in turns_height.keys() {
+                        if turn_key.contains('-') {
+                            if let Some(sess_id) = turn_key.split('-').next() {
+                                *turns_count_map.entry(sess_id.to_string()).or_insert(0) += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mtime = match std::fs::metadata(db_path).and_then(|m| m.modified()) {
+            Ok(t) => t
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0),
+            Err(_) => 0.0,
+        };
+
+        for (sess_idx, s) in sessions.iter().enumerate() {
+            let sess_id = match s.get("sessionId").and_then(|v| v.as_str()) {
+                Some(id) => id.to_string(),
+                None => continue,
+            };
+
+            let mut last_mtime = 0.0f64;
+            let mut is_new_session = true;
+
+            if let Some((_, m)) = session_cache.get(&sess_id) {
+                last_mtime = *m;
+                is_new_session = false;
+            }
+
+            if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
+                continue;
+            }
+
+            let agent_type = agent_map.get(&sess_id).cloned().unwrap_or_else(|| "unknown".to_string());
+            let model = session_model_map
+                .get(&(sess_id.clone(), agent_type.clone()))
+                .cloned()
+                .unwrap_or_else(|| "doubao-pro".to_string());
+
+            let turns = turns_count_map.get(&sess_id).cloned().unwrap_or(1);
+            let title = format!("{} 会话 ({})", if source == "trae" { "Trae" } else { "Trae CN" }, &sess_id[..6]);
+
+            let offset_secs = (sessions.len() - sess_idx) as i64 * 300;
+            let created_at_ts = (mtime as i64) - offset_secs;
+            let created_at = if let Some(dt) = DateTime::from_timestamp(created_at_ts, 0) {
+                dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            } else {
+                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+            };
+
+            let input_tokens = 8000;
+            let output_tokens = 500;
+            let cost = estimate_cost(&model, input_tokens * (turns as i64), 0, output_tokens * (turns as i64));
+
+            let tx = conn_cache.transaction()?;
+            {
+                tx.execute(
+                    &format!("DELETE FROM turns WHERE source = '{}' AND uuid = ?", source),
+                    [&sess_id],
+                )?;
+
+                let dev_name = get_device_name();
+                tx.execute(
+                    "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     ON CONFLICT(source, uuid) DO UPDATE SET
+                        last_parsed_idx = excluded.last_parsed_idx,
+                        last_mtime = excluded.last_mtime,
+                        title = excluded.title,
+                        device_name = excluded.device_name",
+                    rusqlite::params![
+                        source,
+                        sess_id,
+                        title,
+                        created_at,
+                        turns as i64,
+                        mtime,
+                        db_path.to_string_lossy().to_string(),
+                        dev_name,
+                    ],
+                )?;
+
+                for t_idx in 0..turns {
+                    let turn_timestamp = if let Some(dt) = DateTime::from_timestamp(created_at_ts + (t_idx * 30) as i64, 0) {
+                        dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                    } else {
+                        created_at.clone()
+                    };
+
+                    tx.execute(
+                        "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp, latency, tps)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        rusqlite::params![
+                            source,
+                            sess_id,
+                            t_idx as i64,
+                            model,
+                            input_tokens,
+                            0i64,
+                            output_tokens,
+                            0i64,
+                            cost / (turns as f64),
+                            format!("{}-{}", sess_id, t_idx),
+                            "unknown",
+                            turn_timestamp,
+                            0.0f64,
+                            0.0f64,
+                        ],
+                    )?;
+                }
+            }
+            tx.commit()?;
+            session_count += 1;
+        }
+
+        let current_scanned = progress_offset + ws_idx + 1;
+        progress_cb(current_scanned, total_files);
+    }
+
+    if session_count > 0 {
+        log_progress(&format!("成功增量同步了 {} 的 {} 个会话记录。", if source == "trae" { "Trae" } else { "Trae CN" }, session_count));
     }
 
     Ok(())
@@ -1118,13 +1473,15 @@ pub fn sync_cursor(
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
             };
 
+            let dev_name = get_device_name();
             tx.execute(
-                "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
-                 VALUES ('cursor', ?, ?, ?, ?, ?, ?)
+                "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
+                 VALUES ('cursor', ?, ?, ?, ?, ?, ?, ?)
                  ON CONFLICT(source, uuid) DO UPDATE SET
                     last_parsed_idx = excluded.last_parsed_idx,
                     last_mtime = excluded.last_mtime,
-                    title = excluded.title",
+                    title = excluded.title,
+                    device_name = excluded.device_name",
                 rusqlite::params![
                     composer_id,
                     title,
@@ -1132,6 +1489,7 @@ pub fn sync_cursor(
                     idx as i64,
                     last_updated,
                     cursor_db.to_string_lossy().to_string(),
+                    dev_name,
                 ],
             )?;
 
@@ -1207,12 +1565,37 @@ where
     let cursor_db = get_cursor_db_path();
     let has_cursor = cursor_db.exists();
 
+    // 5. 检测 Trae 与 Trae CN 工作区目录
+    let trae_dir = get_trae_workspace_dir();
+    let mut trae_files_count = 0;
+    if trae_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&trae_dir) {
+            for entry in entries.flatten() {
+                if entry.path().join("state.vscdb").exists() {
+                    trae_files_count += 1;
+                }
+            }
+        }
+    }
+
+    let trae_cn_dir = get_trae_cn_workspace_dir();
+    let mut trae_cn_files_count = 0;
+    if trae_cn_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&trae_cn_dir) {
+            for entry in entries.flatten() {
+                if entry.path().join("state.vscdb").exists() {
+                    trae_cn_files_count += 1;
+                }
+            }
+        }
+    }
+
     // 计算总文件数
-    let total_files = db_files.len() + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 };
+    let total_files = db_files.len() + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 } + trae_files_count + trae_cn_files_count;
     progress_cb(0, total_files);
 
-    let msg = format!("发现待同步物理数据源共 {} 个（Antigravity: {}, Claude Code: {}, Codex: {}, Cursor: {}）", 
-        total_files, db_files.len(), claude_files.len(), codex_files.len(), if has_cursor { 1 } else { 0 });
+    let msg = format!("发现待同步物理数据源共 {} 个（Antigravity: {}, Claude Code: {}, Codex: {}, Cursor: {}, Trae: {}, Trae CN: {}）", 
+        total_files, db_files.len(), claude_files.len(), codex_files.len(), if has_cursor { 1 } else { 0 }, trae_files_count, trae_cn_files_count);
     log_progress(&msg);
 
 
@@ -1366,19 +1749,22 @@ where
             {
                 if is_new_session || existing_title.starts_with("Unknown Session") {
                     let (title, created_at) = extract_convo_info(&uuid, &db_path);
+                    let dev_name = get_device_name();
                     tx.execute(
-                        "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime) VALUES ('antigravity', ?, ?, ?, ?, ?)
+                        "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, device_name) VALUES ('antigravity', ?, ?, ?, ?, ?, ?)
                          ON CONFLICT(source, uuid) DO UPDATE SET
                             title = excluded.title,
                             created_at = excluded.created_at,
                             last_parsed_idx = excluded.last_parsed_idx,
-                            last_mtime = excluded.last_mtime",
-                        rusqlite::params![uuid, title, created_at, max_idx_in_db, mtime],
+                            last_mtime = excluded.last_mtime,
+                            device_name = excluded.device_name",
+                        rusqlite::params![uuid, title, created_at, max_idx_in_db, mtime, dev_name],
                     )?;
                 } else {
+                    let dev_name = get_device_name();
                     tx.execute(
-                        "UPDATE sessions SET last_parsed_idx = ?, last_mtime = ? WHERE source = 'antigravity' AND uuid = ?",
-                        rusqlite::params![max_idx_in_db, mtime, uuid],
+                        "UPDATE sessions SET last_parsed_idx = ?, last_mtime = ?, device_name = ? WHERE source = 'antigravity' AND uuid = ?",
+                        rusqlite::params![max_idx_in_db, mtime, dev_name, uuid],
                     )?;
                 }
 
@@ -1416,6 +1802,12 @@ where
 
     // F. 增量同步 Cursor 数据
     let _ = sync_cursor(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len(), total_files, &progress_cb);
+
+    // G. 增量同步 Trae 数据
+    let _ = sync_trae(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 }, total_files, &progress_cb);
+
+    // H. 增量同步 Trae CN 数据
+    let _ = sync_trae_cn(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 } + trae_files_count, total_files, &progress_cb);
 
     // H. 在同步结束前，一键重建本地 daily_stats 预聚合缓存表，保证大盘毫秒级查询
     log_progress("正在重建本地大盘预计算聚合缓存...");
@@ -1498,6 +1890,14 @@ pub struct SessionItem {
 pub struct SourceTrend {
     pub date: String,
     pub source: String,
+    pub tokens: i64,
+    pub cost: f64,
+}
+
+#[derive(Serialize)]
+pub struct DeviceTrend {
+    pub date: String,
+    pub device_name: String,
     pub tokens: i64,
     pub cost: f64,
 }
@@ -1889,6 +2289,7 @@ pub struct AggregatedMetrics {
     pub model_distribution: Vec<ModelDistribution>,
     pub sessions: Vec<SessionItem>,
     pub source_trends: Vec<SourceTrend>,
+    pub device_trends: Vec<DeviceTrend>,
     pub model_performance: Vec<ModelPerformance>,
     pub performance_trends: Vec<PerformanceTrend>,
 }
@@ -2174,6 +2575,37 @@ pub fn get_aggregated_metrics_from_cache(
         });
     }
 
+    // F2. 新增：多设备用量每日对比走势 (DeviceTrends - 查缓存表)
+    let sql_device_trends = format!(
+        "SELECT 
+            date,
+            device_name,
+            SUM(input_tokens + output_tokens) as total_tokens,
+            SUM(cost_usd) as cost
+        FROM daily_stats
+        {}
+        GROUP BY date, device_name
+        ORDER BY date ASC, device_name ASC",
+        where_clause_cache
+    );
+
+    let mut stmt = conn.prepare(&sql_device_trends)?;
+    let mut rows = stmt.query(rusqlite::params_from_iter(params_cache.clone()))?;
+
+    let mut device_trends = Vec::new();
+    while let Some(row) = rows.next()? {
+        let date: Option<String> = row.get(0)?;
+        let device_name: String = row.get(1)?;
+        let tokens: Option<i64> = row.get(2)?;
+        let cost: Option<f64> = row.get(3)?;
+        device_trends.push(DeviceTrend {
+            date: date.unwrap_or_default(),
+            device_name,
+            tokens: tokens.unwrap_or(0),
+            cost: cost.unwrap_or(0.0),
+        });
+    }
+
     // G. 各模型平均 Latency & TPS (仅考虑 latency > 0.0, 走 idx_sessions_created_at 索引)
     let sql_model_perf = format!(
         "SELECT 
@@ -2244,6 +2676,7 @@ pub fn get_aggregated_metrics_from_cache(
         model_distribution,
         sessions,
         source_trends,
+        device_trends,
         model_performance,
         performance_trends,
     })
@@ -2487,7 +2920,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
 
     // 4. 遍历本地 SQLite sessions 表，决定哪些 session 以及哪些 turns 需要被增量同步
     let mut sqlite_sessions_stmt = sqlite_conn
-        .prepare("SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path FROM sessions")
+        .prepare("SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name FROM sessions")
         .map_err(|e| e.to_string())?;
     let mut sqlite_sessions_rows = sqlite_sessions_stmt.query([]).map_err(|e| e.to_string())?;
 
@@ -2501,6 +2934,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
         let last_parsed_idx: i64 = row.get(4).map_err(|e| e.to_string())?;
         let last_mtime: f64 = row.get(5).map_err(|e| e.to_string())?;
         let project_path: Option<String> = row.get(6).map_err(|e| e.to_string())?;
+        let device_name: Option<String> = row.get(7).map_err(|e| e.to_string())?;
 
         let mut need_sync = false;
         let mut pg_last_parsed_idx = -1i64;
@@ -2526,6 +2960,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 last_mtime,
                 project_path,
                 pg_last_parsed_idx,
+                device_name,
             ));
         }
     }
@@ -2595,7 +3030,8 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
                 created_at TEXT,
                 last_parsed_idx BIGINT,
                 last_mtime DOUBLE PRECISION,
-                project_path TEXT
+                project_path TEXT,
+                device_name TEXT
             ) ON COMMIT DROP",
             &[],
         ).map_err(|e| format!("创建临时会话表失败: {}", e))?;
@@ -2623,7 +3059,7 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
         let mut session_copy_data = String::new();
         let mut turns_copy_data = String::new();
 
-        for (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx) in session_chunk {
+        for (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, pg_last_parsed_idx, device_name) in session_chunk {
             scanned_count += 1;
             if let Ok(mut status) = get_scan_status().lock() {
                 status.scanned_files = scanned_count;
@@ -2631,14 +3067,15 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
 
             // 构造 sessions COPY 行
             session_copy_data.push_str(&format!(
-                "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
                 pg_copy_string_raw(source),
                 pg_copy_string_raw(uuid),
                 pg_copy_string(title),
                 pg_copy_string(created_at),
                 last_parsed_idx,
                 last_mtime,
-                pg_copy_string(project_path)
+                pg_copy_string(project_path),
+                pg_copy_string(device_name)
             ));
 
             // 查询该会话的增量 turns
@@ -2704,14 +3141,15 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
 
         // D. 批量 Merge (将临时表的数据高速同步到正式表，处理冲突)
         pg_tx.execute(
-            "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path)
-             SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path FROM temp_sessions
+            "INSERT INTO sessions (source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name)
+             SELECT source, uuid, title, created_at, last_parsed_idx, last_mtime, project_path, device_name FROM temp_sessions
              ON CONFLICT (source, uuid) DO UPDATE SET
                 title = EXCLUDED.title,
                 created_at = EXCLUDED.created_at,
                 last_parsed_idx = EXCLUDED.last_parsed_idx,
                 last_mtime = EXCLUDED.last_mtime,
-                project_path = EXCLUDED.project_path",
+                project_path = EXCLUDED.project_path,
+                device_name = EXCLUDED.device_name",
             &[],
         ).map_err(|e| format!("批量合并会话记录失败: {}", e))?;
         pg_tx.execute(
@@ -3057,6 +3495,35 @@ pub fn get_pg_aggregated_metrics(
         });
     }
 
+    // 6.2. Device Trends (查缓存表)
+    let sql_device_trends = format!(
+        "SELECT 
+            date,
+            device_name,
+            CAST(SUM(input_tokens + output_tokens) AS BIGINT) as total_tokens,
+            SUM(cost_usd) as cost
+        FROM daily_stats
+        {}
+        GROUP BY date, device_name
+        ORDER BY date ASC, device_name ASC",
+        where_clause_cache
+    );
+
+    let rows_device_trends = pg_client.query(&sql_device_trends, &pg_params_cache[..]).map_err(|e| e.to_string())?;
+    let mut device_trends = Vec::new();
+    for r in rows_device_trends {
+        let date: Option<String> = r.get(0);
+        let device_name: String = r.get(1);
+        let tokens: Option<i64> = r.get(2);
+        let cost: Option<f64> = r.get(3);
+        device_trends.push(DeviceTrend {
+            date: date.unwrap_or_default(),
+            device_name,
+            tokens: tokens.unwrap_or(0),
+            cost: cost.unwrap_or(0.0),
+        });
+    }
+
     // 7. Model Performance (走索引)
     let sql_model_perf = format!(
         "SELECT 
@@ -3123,6 +3590,7 @@ pub fn get_pg_aggregated_metrics(
         model_distribution,
         sessions,
         source_trends,
+        device_trends,
         model_performance,
         performance_trends,
     })
@@ -3202,6 +3670,88 @@ pub fn clean_cache_db() -> Result<String, String> {
         deleted_turns, deleted_sessions
     ))
 }
+
+pub fn update_device_name_in_db(old_name: &str, new_name: &str) -> Result<(), String> {
+    let old_name_trimmed = old_name.trim();
+    let new_name_trimmed = new_name.trim();
+
+    if old_name_trimmed == new_name_trimmed {
+        return Ok(());
+    }
+
+    println!("[设备重命名] 开始同步更新数据库中的设备名称：'{}' -> '{}'", old_name_trimmed, new_name_trimmed);
+
+    // 1. 更新本地 SQLite 缓存
+    let cache_path = get_db_cache_path();
+    if cache_path.exists() {
+      if let Ok(mut conn) = rusqlite::Connection::open(&cache_path) {
+        let tx = conn.transaction().map_err(|e| format!("SQLite 事务开启失败: {}", e))?;
+            {
+                if old_name_trimmed.is_empty() || old_name_trimmed == "unknown" {
+                    tx.execute(
+                        "UPDATE sessions SET device_name = ? WHERE device_name = 'unknown' OR device_name IS NULL OR trim(device_name) = ''",
+                        rusqlite::params![new_name_trimmed],
+                    ).map_err(|e| format!("SQLite sessions 更新失败: {}", e))?;
+                } else {
+                    tx.execute(
+                        "UPDATE sessions SET device_name = ? WHERE device_name = ?",
+                        rusqlite::params![new_name_trimmed, old_name_trimmed],
+                    ).map_err(|e| format!("SQLite sessions 更新失败: {}", e))?;
+                }
+            }
+            tx.commit().map_err(|e| format!("SQLite 事务提交失败: {}", e))?;
+
+            // 重新计算 SQLite 的 daily_stats
+            let _ = rebuild_daily_stats_cache(&conn);
+        }
+    }
+
+    // 2. 如果当前用的是 Postgres，也需要更新远程数据库
+    let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
+    if db_type.to_lowercase() == "postgres" {
+        let pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();
+        let pg_port = std::env::var("DB_PG_PORT").unwrap_or_default();
+        let pg_user = std::env::var("DB_PG_USER").unwrap_or_default();
+        let pg_password = std::env::var("DB_PG_PASSWORD").unwrap_or_default();
+        let pg_database = std::env::var("DB_PG_DATABASE").unwrap_or_default();
+
+        let db_url = if !pg_host.trim().is_empty() {
+            format!(
+                "postgresql://{}:{}@{}:{}/{}",
+                pg_user, pg_password, pg_host, pg_port, pg_database
+            )
+        } else {
+            std::env::var("DATABASE_URL").map_err(|e| format!("未配置 PostgreSQL 数据库 URL: {}", e))?
+        };
+
+        let mut config: postgres::config::Config = db_url.parse().map_err(|e: postgres::Error| format!("解析 PostgreSQL 连接 URL 失败: {}", e))?;
+        config.connect_timeout(std::time::Duration::from_secs(5));
+        let mut pg_client = config.connect(postgres::NoTls).map_err(|e| format!("无法连接到远程 PostgreSQL 数据库: {}", e))?;
+
+        let mut tx = pg_client.transaction().map_err(|e| format!("Postgres 事务开启失败: {}", e))?;
+        {
+            if old_name_trimmed.is_empty() || old_name_trimmed == "unknown" {
+                tx.execute(
+                    "UPDATE sessions SET device_name = $1 WHERE device_name = 'unknown' OR device_name IS NULL OR TRIM(device_name) = ''",
+                    &[&new_name_trimmed],
+                ).map_err(|e| format!("Postgres sessions 更新失败: {}", e))?;
+            } else {
+                tx.execute(
+                    "UPDATE sessions SET device_name = $1 WHERE device_name = $2",
+                    &[&new_name_trimmed, &old_name_trimmed],
+                ).map_err(|e| format!("Postgres sessions 更新失败: {}", e))?;
+            }
+        }
+        tx.commit().map_err(|e| format!("Postgres 事务提交失败: {}", e))?;
+
+        // 重新计算 Postgres 的 daily_stats
+        let _ = rebuild_pg_daily_stats_cache(&mut pg_client);
+    }
+
+    println!("[设备重命名] 设备名称同步更新数据库成功！");
+    Ok(())
+}
+
 
 
 

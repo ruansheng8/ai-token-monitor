@@ -8,6 +8,21 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- 原生主题检测脚本，在 React 加载前立即应用 dark 类名以防闪白 -->
+    <script>
+      (function() {
+        try {
+          const saved = localStorage.getItem('theme');
+          if (saved === 'dark') {
+            document.documentElement.classList.add('dark');
+          } else {
+            document.documentElement.classList.remove('dark');
+          }
+        } catch (e) {
+          console.error(e);
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

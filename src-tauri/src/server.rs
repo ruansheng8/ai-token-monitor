@@ -272,6 +272,8 @@ pub struct ConfigReq {
     pub pg_user: Option<String>,
     pub pg_password: Option<String>,
     pub pg_database: Option<String>,
+    pub device_name: Option<String>,
+    pub default_device_name: Option<String>,
 }
 
 pub async fn handle_config_get() -> impl axum::response::IntoResponse {
@@ -284,6 +286,13 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
 
         let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
         let sqlite_path = std::env::var("DB_SQLITE_PATH").ok();
+        let device_name = std::env::var("DEVICE_NAME").ok();
+
+        let default_device_name = std::env::var("COMPUTERNAME")
+            .or_else(|_| std::env::var("HOSTNAME"))
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "unknown-device".to_string());
         
         let mut pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();
         let mut pg_port = std::env::var("DB_PG_PORT").unwrap_or_default();
@@ -312,6 +321,8 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
             pg_user: Some(pg_user),
             pg_password: Some(pg_password),
             pg_database: Some(pg_database),
+            device_name,
+            default_device_name: Some(default_device_name),
         };
 
         Ok::<ConfigReq, String>(resp)
@@ -425,6 +436,49 @@ pub async fn handle_config_save(
     axum::Json(req): axum::Json<ConfigReq>,
 ) -> impl axum::response::IntoResponse {
     let result = tokio::task::spawn_blocking(move || {
+        // 1. 获取旧的配置值 (获取前先确保加载过 dotenv)
+        let _ = dotenvy::dotenv();
+        let old_db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
+        let old_sqlite_path = std::env::var("DB_SQLITE_PATH").unwrap_or_default();
+        let old_device_name = crate::db::get_device_name();
+
+        let old_pg_host = std::env::var("DB_PG_HOST").unwrap_or_default();
+        let old_pg_port = std::env::var("DB_PG_PORT").unwrap_or_default();
+        let old_pg_user = std::env::var("DB_PG_USER").unwrap_or_default();
+        let old_pg_password = std::env::var("DB_PG_PASSWORD").unwrap_or_default();
+        let old_pg_database = std::env::var("DB_PG_DATABASE").unwrap_or_default();
+
+        let new_db_type = req.db_type.trim().to_string();
+        let new_sqlite_path = req.sqlite_path.clone().unwrap_or_default().trim().to_string();
+        let new_device_name = req.device_name.clone().unwrap_or_default().trim().to_string();
+
+        let new_pg_host = req.pg_host.clone().unwrap_or_default().trim().to_string();
+        let new_pg_port = req.pg_port.clone().unwrap_or_default().trim().to_string();
+        let new_pg_user = req.pg_user.clone().unwrap_or_default().trim().to_string();
+        let new_pg_password = req.pg_password.clone().unwrap_or_default().trim().to_string();
+        let new_pg_database = req.pg_database.clone().unwrap_or_default().trim().to_string();
+
+        // 2. 对比数据库参数是否改变
+        let db_type_changed = old_db_type.to_lowercase() != new_db_type.to_lowercase();
+        let mut db_params_changed = false;
+        if new_db_type.to_lowercase() == "postgres" {
+            if old_pg_host != new_pg_host
+                || old_pg_port != new_pg_port
+                || old_pg_user != new_pg_user
+                || old_pg_password != new_pg_password
+                || old_pg_database != new_pg_database
+            {
+                db_params_changed = true;
+            }
+        } else {
+            if old_sqlite_path != new_sqlite_path {
+                db_params_changed = true;
+            }
+        }
+
+        let need_restart = db_type_changed || db_params_changed;
+
+        // 3. 写入 .env 文件
         let env_path = std::env::current_dir()
             .unwrap_or_else(|_| std::path::PathBuf::from("."))
             .join(".env");
@@ -451,30 +505,20 @@ pub async fn handle_config_save(
             }
         }
 
-        set_env_var(&mut lines, "DATABASE_TYPE", &req.db_type);
-        if let Some(path) = &req.sqlite_path {
-            set_env_var(&mut lines, "DB_SQLITE_PATH", path);
-        } else {
-            set_env_var(&mut lines, "DB_SQLITE_PATH", "");
-        }
+        set_env_var(&mut lines, "DATABASE_TYPE", &new_db_type);
+        set_env_var(&mut lines, "DB_SQLITE_PATH", &new_sqlite_path);
+        set_env_var(&mut lines, "DEVICE_NAME", &new_device_name);
 
-        let host = req.pg_host.clone().unwrap_or_default();
-        let port = req.pg_port.clone().unwrap_or_default();
-        let user = req.pg_user.clone().unwrap_or_default();
-        let password = req.pg_password.clone().unwrap_or_default();
-        let database = req.pg_database.clone().unwrap_or_default();
-
-        // 始终保存 PostgreSQL 的配置参数，防止在不同数据库引擎间切换时配置丢失
-        set_env_var(&mut lines, "DB_PG_HOST", &host);
-        set_env_var(&mut lines, "DB_PG_PORT", &port);
-        set_env_var(&mut lines, "DB_PG_USER", &user);
-        set_env_var(&mut lines, "DB_PG_PASSWORD", &password);
-        set_env_var(&mut lines, "DB_PG_DATABASE", &database);
+        set_env_var(&mut lines, "DB_PG_HOST", &new_pg_host);
+        set_env_var(&mut lines, "DB_PG_PORT", &new_pg_port);
+        set_env_var(&mut lines, "DB_PG_USER", &new_pg_user);
+        set_env_var(&mut lines, "DB_PG_PASSWORD", &new_pg_password);
+        set_env_var(&mut lines, "DB_PG_DATABASE", &new_pg_database);
         
-        if !host.trim().is_empty() {
+        if !new_pg_host.is_empty() {
             let url = format!(
                 "postgresql://{}:{}@{}:{}/{}",
-                user, password, host, port, database
+                new_pg_user, new_pg_password, new_pg_host, new_pg_port, new_pg_database
             );
             set_env_var(&mut lines, "DATABASE_URL", &url);
         } else {
@@ -485,12 +529,45 @@ pub async fn handle_config_save(
         std::fs::write(&env_path, new_content)
             .map_err(|e| format!("写入 .env 配置文件失败: {}", e))?;
 
-        Ok::<String, String>("配置已成功保存！为确保新配置生效并避免数据冲突，系统需要重新启动。".to_string())
+        // 4. 立即更新进程内的环境变量以使其在无需重启时立即生效
+        std::env::set_var("DATABASE_TYPE", &new_db_type);
+        std::env::set_var("DB_SQLITE_PATH", &new_sqlite_path);
+        std::env::set_var("DEVICE_NAME", &new_device_name);
+        std::env::set_var("DB_PG_HOST", &new_pg_host);
+        std::env::set_var("DB_PG_PORT", &new_pg_port);
+        std::env::set_var("DB_PG_USER", &new_pg_user);
+        std::env::set_var("DB_PG_PASSWORD", &new_pg_password);
+        std::env::set_var("DB_PG_DATABASE", &new_pg_database);
+        if !new_pg_host.is_empty() {
+            let url = format!(
+                "postgresql://{}:{}@{}:{}/{}",
+                new_pg_user, new_pg_password, new_pg_host, new_pg_port, new_pg_database
+            );
+            std::env::set_var("DATABASE_URL", &url);
+        } else {
+            std::env::set_var("DATABASE_URL", "");
+        }
+
+        // 5. 如果无需重启且设备名发生了修改，则同步数据库中的设备名记录并刷新大盘趋势缓存
+        if !need_restart && old_device_name != new_device_name {
+            if let Err(e) = crate::db::update_device_name_in_db(&old_device_name, &new_device_name) {
+                eprintln!("[设备配置] 同步更新数据库中设备名报错: {}", e);
+                return Err(format!("设备名称保存成功，但同步更新数据库中设备名失败: {}", e));
+            }
+        }
+
+        let msg = if need_restart {
+            "配置已成功保存！为确保新配置生效并避免数据冲突，系统需要重新启动。".to_string()
+        } else {
+            "配置已成功保存并立即生效，无需重启！".to_string()
+        };
+
+        Ok::<(String, bool), String>((msg, need_restart))
     }).await;
 
     match result {
-        Ok(Ok(msg)) => {
-            let body = serde_json::json!({ "success": true, "message": msg });
+        Ok(Ok((msg, need_restart))) => {
+            let body = serde_json::json!({ "success": true, "message": msg, "need_restart": need_restart });
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/json; charset=utf-8")

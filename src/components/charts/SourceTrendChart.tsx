@@ -17,12 +17,18 @@ const ENGINE_COLORS = {
   antigravity: '#8b5cf6', // 科技紫
   claude_code: '#f59e0b', // 橙黄
   codex: '#06b6d4',       // 明亮青
+  cursor: '#00bcd4',      // Cursor 亮青
+  trae: '#3b82f6',        // Trae 蓝
+  trae_cn: '#10b981',     // Trae CN 绿
 };
 
 const SOURCE_LABELS: Record<string, string> = {
   antigravity: 'Antigravity (Gemini)',
   claude_code: 'Claude Code',
   codex: 'Codex CLI',
+  cursor: 'Cursor',
+  trae: 'Trae',
+  trae_cn: 'Trae CN',
 };
 
 
@@ -52,7 +58,7 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
     const dates = Array.from(new Set(data.map(item => item.date))).sort();
 
     // 针对每个来源，按日期对齐数据
-    const sources = ['antigravity', 'claude_code', 'codex'];
+    const sources = ['antigravity', 'claude_code', 'codex', 'cursor', 'trae', 'trae_cn'];
     const seriesData = sources.map(src => {
       const srcData = dates.map(d => {
         const found = data.find(item => item.date === d && item.source === src);
