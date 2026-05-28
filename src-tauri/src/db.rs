@@ -129,6 +129,52 @@ pub fn extract_convo_info(uuid: &str, db_path: &Path) -> (String, String) {
     (title, created_at)
 }
 
+fn detect_project_name(project_path: Option<&str>) -> String {
+    project_path
+        .and_then(|path_str| {
+            let path = std::path::Path::new(path_str);
+            if path.is_file() || path.extension().is_some() {
+                path.parent().and_then(|p| p.file_name())
+            } else {
+                path.file_name()
+            }
+        })
+        .and_then(|name| name.to_str())
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty() && name != "sessions" && name != "workspaceStorage" && name != "globalStorage")
+        .unwrap_or_else(|| "unknown-project".to_string())
+}
+
+fn seed_default_model_pricing(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let defaults = [
+        ("*opus*", 15.0_f64, 1.5_f64, 75.0_f64, 10_i64),
+        ("*sonnet*", 3.0_f64, 0.3_f64, 15.0_f64, 20_i64),
+        ("*haiku*", 0.25_f64, 0.03_f64, 1.25_f64, 30_i64),
+        ("*gemini*pro*", 1.25_f64, 0.3125_f64, 5.0_f64, 40_i64),
+        ("*gemini*flash*", 0.075_f64, 0.01875_f64, 0.3_f64, 50_i64),
+        ("*", 2.5_f64, 0.25_f64, 10.0_f64, 999_i64),
+    ];
+
+    for (pattern, input, cached, output, priority) in defaults {
+        conn.execute(
+            "INSERT INTO model_pricing (
+                model_pattern,
+                input_price_per_million,
+                cached_input_price_per_million,
+                output_price_per_million,
+                priority,
+                enabled,
+                updated_at
+            ) VALUES (?, ?, ?, ?, ?, 1, ?)
+            ON CONFLICT(model_pattern) DO NOTHING",
+            rusqlite::params![pattern, input, cached, output, priority, now],
+        )?;
+    }
+
+    Ok(())
+}
+
 // 3. 增量本地缓存数据库结构初始化
 
 pub fn init_cache_db() -> Result<(), rusqlite::Error> {
@@ -173,6 +219,87 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
             let _ = conn.execute("ALTER TABLE sessions ADD COLUMN device_name TEXT DEFAULT 'unknown';", []);
         }
     }
+
+    // SQLite 增量升级：为 sessions 表添加 project_name 字段
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(sessions)")?;
+        let mut rows = stmt.query([])?;
+        let mut has_project_name = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "project_name" {
+                has_project_name = true;
+                break;
+            }
+        }
+        if !has_project_name {
+            let _ = conn.execute("ALTER TABLE sessions ADD COLUMN project_name TEXT DEFAULT 'unknown-project';", []);
+            let mut stmt_update = conn.prepare("SELECT source, uuid, project_path FROM sessions")?;
+            let mut rows_update = stmt_update.query([])?;
+            let mut updates = Vec::new();
+            while let Some(row) = rows_update.next()? {
+                let source: String = row.get(0)?;
+                let uuid: String = row.get(1)?;
+                let project_path: Option<String> = row.get(2)?;
+                let proj_name = detect_project_name(project_path.as_deref());
+                updates.push((source, uuid, proj_name));
+            }
+            for (source, uuid, proj_name) in updates {
+                conn.execute(
+                    "UPDATE sessions SET project_name = ? WHERE source = ? AND uuid = ?",
+                    rusqlite::params![proj_name, source, uuid],
+                )?;
+            }
+        }
+    }
+
+    conn.execute(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS sessions_fts USING fts5(
+            source,
+            uuid,
+            title,
+            project_name,
+            tokenize='unicode61 remove_diacritics 2'
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS project_daily_stats (
+            date TEXT NOT NULL,
+            project_name TEXT NOT NULL,
+            total_tokens INTEGER DEFAULT 0,
+            total_cost_usd REAL DEFAULT 0.0,
+            sessions_count INTEGER DEFAULT 0,
+            PRIMARY KEY (date, project_name)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS model_pricing (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            model_pattern TEXT NOT NULL UNIQUE,
+            input_price_per_million REAL NOT NULL,
+            cached_input_price_per_million REAL NOT NULL,
+            output_price_per_million REAL NOT NULL,
+            priority INTEGER NOT NULL DEFAULT 100,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS exchange_rates (
+            currency_code TEXT PRIMARY KEY,
+            rate_from_usd REAL NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    seed_default_model_pricing(&conn)?;
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS turns (
@@ -2822,6 +2949,52 @@ mod tests {
     use super::*;
     use std::fs::{self, File};
     use std::io::Write;
+
+    #[test]
+    fn test_init_cache_db_creates_project_and_pricing_structures() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_schema_test_{}", test_id));
+        std::fs::create_dir_all(&temp_path).unwrap();
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+        std::env::set_var("DATABASE_TYPE", "sqlite");
+
+        init_cache_db().unwrap();
+
+        let conn = rusqlite::Connection::open(get_db_cache_path()).unwrap();
+
+        let session_columns: Vec<String> = conn
+            .prepare("PRAGMA table_info(sessions)")
+            .unwrap()
+            .query_map([], |row| row.get(1))
+            .unwrap()
+            .map(|row| row.unwrap())
+            .collect();
+
+        assert!(session_columns.contains(&"project_name".to_string()));
+
+        let fts_exists: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='sessions_fts'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(fts_exists, 1);
+
+        let pricing_exists: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='model_pricing'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(pricing_exists, 1);
+
+        let project_stats_exists: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM sqlite_master WHERE type='table' AND name='project_daily_stats'",
+            [],
+            |row| row.get(0),
+        ).unwrap();
+        assert_eq!(project_stats_exists, 1);
+
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
 
     #[test]
     fn test_estimate_cost() {
