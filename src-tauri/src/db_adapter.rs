@@ -232,6 +232,8 @@ pub fn init_tables(conn: &DbConn) -> Result<(), String> {
         DbConn::Sqlite(conn_lock) => {
             let mut conn = conn_lock.lock().unwrap();
             let report = sqlite_migrations::migrations::runner()
+                .set_abort_divergent(false)
+                .set_abort_missing(false)
                 .run(&mut *conn)
                 .map_err(|e| format!("Refinery SQLite migration failed: {:?} (底层详情: {})", e, e))?;
             for migration in report.applied_migrations() {
@@ -247,6 +249,8 @@ pub fn init_tables(conn: &DbConn) -> Result<(), String> {
             
             // 运行数据库迁移
             let report_res = postgres_migrations::migrations::runner()
+                .set_abort_divergent(false)
+                .set_abort_missing(false)
                 .run(&mut *client);
             
             // 释放排他咨询锁
