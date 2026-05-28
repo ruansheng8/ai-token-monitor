@@ -6,8 +6,8 @@ mod server;
 mod db_adapter;
 
 use axum::{routing::{get, post}, Router};
-use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback, handle_config_get, handle_config_test, handle_config_save, handle_db_clean, handle_sessions_paginated};
-use std::path::{Path, PathBuf};
+use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback, handle_config_get, handle_config_test, handle_config_save, handle_app_restart, handle_db_clean, handle_sessions_paginated};
+use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
 use tauri::Manager;
 
@@ -118,6 +118,7 @@ fn main() {
                 .route("/api/config", get(handle_config_get))
                 .route("/api/config/test", post(handle_config_test))
                 .route("/api/config/save", post(handle_config_save))
+                .route("/api/app/restart", post(handle_app_restart))
                 .route("/api/db/clean", post(handle_db_clean).get(handle_db_clean))
                 .fallback(serve_static_file_fallback);
 

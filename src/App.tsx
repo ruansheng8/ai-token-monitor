@@ -1761,10 +1761,17 @@ export default function App() {
                       if (response.ok) {
                         const res = await response.json();
                         if (res.success) {
-                          alert(res.message);
                           setIsConfigOpen(false);
-                          // 成功保存后，立即拉取新库看板数据，完成免重启即时切换！
-                          fetchData(source, startDate, endDate);
+                          if (confirm(`${res.message}\n\n为了使新的数据库配置生效并避免数据冲突，软件需要重新启动。是否立即自动重启软件？`)) {
+                            try {
+                              await fetch('/api/app/restart', { method: 'POST' });
+                            } catch (e) {
+                              console.error('重启请求失败:', e);
+                              alert('自动重启失败，请手动关闭并重新打开软件。');
+                            }
+                          } else {
+                            alert('配置已保存！新配置将在下次启动软件时生效。');
+                          }
                         } else {
                           setConfigMessage({ success: false, text: res.message });
                         }

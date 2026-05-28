@@ -2618,8 +2618,17 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
 
     let mut scanned_count = 0;
 
-    // 5. 分批（每 50 个会话）镜像同步变动部分
-    for session_chunk in sessions_to_sync.chunks(50) {
+    // 预编译增量 turns 查询，避免在循环内部重复 compile
+    let mut sqlite_turns_stmt = sqlite_conn
+        .prepare(
+            "SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp, latency, tps 
+             FROM turns 
+             WHERE source = ? AND uuid = ? AND idx > ?"
+        )
+        .map_err(|e| e.to_string())?;
+
+    // 5. 分批（每 1000 个会话）镜像同步变动部分，减少临时表创建销毁及系统表锁开销
+    for session_chunk in sessions_to_sync.chunks(1000) {
         log_progress(&format!(
             "正在同步数据至远程 PostgreSQL ({}/{}) ...",
             scanned_count, total_sessions
@@ -2684,13 +2693,6 @@ pub fn sync_local_to_postgres() -> Result<(), String> {
             ));
 
             // 查询该会话的增量 turns
-            let mut sqlite_turns_stmt = sqlite_conn
-                .prepare(
-                    "SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp, latency, tps 
-                     FROM turns 
-                     WHERE source = ? AND uuid = ? AND idx > ?"
-                )
-                .map_err(|e| e.to_string())?;
             let mut sqlite_turns_rows = sqlite_turns_stmt
                 .query(rusqlite::params![source, uuid, pg_last_parsed_idx])
                 .map_err(|e| e.to_string())?;

@@ -484,10 +484,7 @@ pub async fn handle_config_save(
         std::fs::write(&env_path, new_content)
             .map_err(|e| format!("写入 .env 配置文件失败: {}", e))?;
 
-        // 触发热连接池重载
-        crate::db_adapter::reset_conn_pool();
-
-        Ok::<String, String>("配置参数已成功写入 .env，且后端数据库连接已热重载生效！".to_string())
+        Ok::<String, String>("配置已成功保存！为确保新配置生效并避免数据冲突，系统需要重新启动。".to_string())
     }).await;
 
     match result {
@@ -519,6 +516,28 @@ pub async fn handle_config_save(
                 .unwrap()
         }
     }
+}
+
+pub async fn handle_app_restart() -> impl axum::response::IntoResponse {
+    // 异步执行重启，给响应留出足够时间返回前端
+    tokio::spawn(async {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        println!("[系统重启] 正在重新启动应用...");
+        if let Some(app_handle) = crate::db::APP_HANDLE.get() {
+            app_handle.restart();
+        } else {
+            eprintln!("[系统重启] 错误: APP_HANDLE 未被初始化，尝试直接退出程序。");
+            std::process::exit(0);
+        }
+    });
+
+    let body = serde_json::json!({ "success": true, "message": "系统正在重启，请稍候..." });
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(Body::from(serde_json::to_vec(&body).unwrap()))
+        .unwrap()
 }
 
 pub async fn handle_db_clean() -> impl axum::response::IntoResponse {
