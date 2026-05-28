@@ -193,7 +193,7 @@ const getDateBounds = (range: 'all' | 'today' | 'week' | '30days' | 'month' | 'q
 const exportToCSV = (sessions: SessionItem[]) => {
   if (!sessions || sessions.length === 0) return;
   
-  const headers = ['来源/引擎', '会话 UUID', '会话标题', '创建时间', '输入 Tokens', '输出 Tokens', '缓存 Tokens', '推理 Tokens', '产生费用 (USD)', '使用模型'];
+  const headers = ['工具/引擎', '会话 UUID', '会话标题', '创建时间', '输入 Tokens', '输出 Tokens', '缓存 Tokens', '推理 Tokens', '产生费用 (USD)', '使用模型'];
   const csvRows = [headers.join(',')];
   
   sessions.forEach(s => {
@@ -688,7 +688,7 @@ export default function App() {
     fetchSessions(currentPage, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
   }, [currentPage, pageSize, searchKeyword, sortField, sortOrder, hideZero]);
 
-  // 2. 当时间起止和来源变动时，大盘和列表需要同时同步更新，且重置页码
+  // 2. 当时间起止和工具变动时，大盘和列表需要同时同步更新，且重置页码
   useEffect(() => {
     setCurrentPage(1);
     fetchData(source, startDate, endDate);
@@ -832,7 +832,7 @@ export default function App() {
                   {source === 'trae' && <TraeIcon className="w-4 h-4 text-[#3b82f6]" />}
                   {source === 'trae_cn' && <TraeIcon className="w-4 h-4 text-[#10b981]" />}
                   <span>
-                    {source === 'all' && '全部来源 (All)'}
+                    {source === 'all' && '全部工具 (All)'}
                     {source === 'antigravity' && 'Antigravity'}
                     {source === 'claude_code' && 'Claude Code'}
                     {source === 'codex' && 'Codex CLI'}
@@ -852,7 +852,7 @@ export default function App() {
                   ></div>
                   <div className="absolute left-0 right-0 mt-2 bg-bg-secondary/95 dark:bg-[#0f192b]/95 border border-card-border rounded-xl shadow-[0_10px_35px_rgba(0,0,0,0.35)] backdrop-blur-md z-50 py-1.5 flex flex-col gap-0.5 animate-fade-in">
                     {[
-                      { value: 'all', label: '全部来源 (All)', icon: <Globe className="w-3.5 h-3.5 text-neon-cyan" /> },
+                      { value: 'all', label: '全部工具 (All)', icon: <Globe className="w-3.5 h-3.5 text-neon-cyan" /> },
                       { value: 'antigravity', label: 'Antigravity', icon: <GeminiIcon className="w-3.5 h-3.5 text-[#8b5cf6]" /> },
                       { value: 'claude_code', label: 'Claude Code', icon: <ClaudeIcon className="w-3.5 h-3.5 text-[#d97757]" /> },
                       { value: 'codex', label: 'Codex CLI', icon: <OpenAIIcon className="w-3.5 h-3.5 text-[#10a37f]" /> },
@@ -1160,7 +1160,7 @@ export default function App() {
                       : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
                   }`}
                 >
-                  🤖 来源维度
+                  🤖 工具维度
                 </button>
               )}
               <button
@@ -1233,7 +1233,16 @@ export default function App() {
           {/* 按月汇总表 */}
           <div className="glass-card p-5 flex flex-col gap-4">
             <div className="pb-3 border-b border-card-border">
-              <h2 className="text-sm font-semibold text-text-primary">按月用量汇总</h2>
+              <h2 className="text-sm font-semibold text-text-primary">
+                按月用量汇总（{timeRange === 'custom' ? `${startDate} 至 ${endDate}` : {
+                  all: '全部时间',
+                  today: '今日',
+                  week: '最近7天',
+                  '30days': '最近30天',
+                  month: '本月',
+                  quarter: '本季度'
+                }[timeRange] || ''}）
+              </h2>
             </div>
             <div className="table-responsive max-h-[350px] overflow-y-auto">
               <table className="data-table">
@@ -1384,7 +1393,7 @@ export default function App() {
                     <span className="flex items-center gap-1">会话标题 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
                   </th>
                   <th onClick={() => handleSort('source')} className="sortable text-left py-3 cursor-pointer hover:text-neon-cyan transition-colors">
-                    <span className="flex items-center gap-1">统计来源 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
+                    <span className="flex items-center gap-1">统计工具 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>
                   </th>
                   <th onClick={() => handleSort('created_at')} className="sortable text-left py-3 cursor-pointer hover:text-neon-cyan transition-colors">
                     <span className="flex items-center gap-1">创建时间 <ChevronsUpDown className="w-3 h-3 text-text-muted" /></span>

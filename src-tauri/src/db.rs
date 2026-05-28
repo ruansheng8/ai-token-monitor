@@ -286,7 +286,7 @@ pub fn rebuild_daily_stats_cache(conn: &rusqlite::Connection) -> Result<(), rusq
                  COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
              FROM sessions s
              LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
-             WHERE substr(s.created_at, 1, 10) >= ?
+             WHERE s.created_at >= ?
              GROUP BY date, s.source, s.device_name"
         )?;
         let _ = stmt_insert.execute(rusqlite::params![one_year_ago_str])?;
@@ -345,7 +345,7 @@ pub fn rebuild_pg_daily_stats_cache(client: &mut postgres::Client) -> Result<(),
                  COALESCE(SUM(t.cost_usd), 0.0) as cost_usd
              FROM sessions s
              LEFT JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
-             WHERE SUBSTR(s.created_at, 1, 10) >= $1
+             WHERE s.created_at >= $1
              GROUP BY SUBSTR(s.created_at, 1, 10), s.source, s.device_name",
             &[&one_year_ago_str],
         ).map_err(|e| e.to_string())?;
@@ -683,84 +683,84 @@ pub fn sync_claude_code(
         }
     }
 
-    for (idx, file_path) in jsonl_files.into_iter().enumerate() {
-        let current_scanned = progress_offset + idx + 1;
-        progress_cb(current_scanned, total_files);
+    let tx = conn_cache.transaction()?;
+    {
+        for (idx, file_path) in jsonl_files.into_iter().enumerate() {
+            let current_scanned = progress_offset + idx + 1;
+            progress_cb(current_scanned, total_files);
 
-        let uuid = match file_path.strip_prefix(&projects_dir) {
-            Ok(p) => p.to_string_lossy().to_string(),
-            Err(_) => file_path.file_name().unwrap_or_default().to_string_lossy().to_string(),
-        };
+            let uuid = match file_path.strip_prefix(&projects_dir) {
+                Ok(p) => p.to_string_lossy().to_string(),
+                Err(_) => file_path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+            };
 
-        let mtime = match std::fs::metadata(&file_path).and_then(|m| m.modified()) {
-            Ok(t) => t
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0),
-            Err(_) => 0.0,
-        };
+            let mtime = match std::fs::metadata(&file_path).and_then(|m| m.modified()) {
+                Ok(t) => t
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0),
+                Err(_) => 0.0,
+            };
 
-        let mut last_parsed_idx = -1i64;
-        let mut last_mtime = 0.0f64;
-        let mut is_new_session = true;
+            let mut last_parsed_idx = -1i64;
+            let mut last_mtime = 0.0f64;
+            let mut is_new_session = true;
 
-        if let Some((parsed_idx, m)) = session_cache.get(&uuid) {
-            last_parsed_idx = *parsed_idx;
-            last_mtime = *m;
-            is_new_session = false;
-        }
+            if let Some((parsed_idx, m)) = session_cache.get(&uuid) {
+                last_parsed_idx = *parsed_idx;
+                last_mtime = *m;
+                is_new_session = false;
+            }
 
-        if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
-            continue;
-        }
+            if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
+                continue;
+            }
 
-        if let Ok(file) = File::open(&file_path) {
-            let reader = BufReader::new(file);
-            let mut line_idx = 0i64;
-            let mut new_turns = Vec::new();
+            if let Ok(file) = File::open(&file_path) {
+                let reader = BufReader::new(file);
+                let mut line_idx = 0i64;
+                let mut new_turns = Vec::new();
 
-            for line in reader.lines() {
-                if let Ok(line_str) = line {
-                    if line_str.trim().is_empty() {
-                        continue;
-                    }
-                    line_idx += 1;
-                    if line_idx <= last_parsed_idx {
-                        continue;
-                    }
+                for line in reader.lines() {
+                    if let Ok(line_str) = line {
+                        if line_str.trim().is_empty() {
+                            continue;
+                        }
+                        line_idx += 1;
+                        if line_idx <= last_parsed_idx {
+                            continue;
+                        }
 
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
-                        let (input, _cache_creation, cache_read, output) = extract_claude_tokens(&val);
-                        if input > 0 || output > 0 {
-                            let model = extract_claude_model(&val);
-                            let timestamp = extract_claude_timestamp(&val);
-                            let (message_id, request_id) = extract_claude_ids(&val);
-                            let total_input = get_total_input_tokens(&model, input, cache_read);
-                            let cost = estimate_cost(&model, total_input, cache_read, output);
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
+                            let (input, _cache_creation, cache_read, output) = extract_claude_tokens(&val);
+                            if input > 0 || output > 0 {
+                                let model = extract_claude_model(&val);
+                                let timestamp = extract_claude_timestamp(&val);
+                                let (message_id, request_id) = extract_claude_ids(&val);
+                                let total_input = get_total_input_tokens(&model, input, cache_read);
+                                let cost = estimate_cost(&model, total_input, cache_read, output);
 
-                            new_turns.push((
-                                line_idx - 1,
-                                model,
-                                total_input,
-                                cache_read,
-                                output,
-                                0,
-                                cost,
-                                message_id,
-                                request_id,
-                                timestamp,
-                            ));
+                                new_turns.push((
+                                    line_idx - 1,
+                                    model,
+                                    total_input,
+                                    cache_read,
+                                    output,
+                                    0,
+                                    cost,
+                                    message_id,
+                                    request_id,
+                                    timestamp,
+                                ));
+                            }
                         }
                     }
                 }
-            }
 
-            if !new_turns.is_empty() {
-                log_progress(&format!("发现 Claude Code 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
-            }
+                if !new_turns.is_empty() {
+                    log_progress(&format!("发现 Claude Code 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+                }
 
-            let tx = conn_cache.transaction()?;
-            {
                 let title = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
                 let created_at = if !new_turns.is_empty() {
                     new_turns[0].9.clone()
@@ -788,9 +788,9 @@ pub fn sync_claude_code(
                     )?;
                 }
             }
-            tx.commit()?;
         }
     }
+    tx.commit()?;
 
     Ok(())
 }
@@ -828,79 +828,79 @@ pub fn sync_codex(
         }
     }
 
-    for (idx, file_path) in jsonl_files.into_iter().enumerate() {
-        let current_scanned = progress_offset + idx + 1;
-        progress_cb(current_scanned, total_files);
+    let tx = conn_cache.transaction()?;
+    {
+        for (idx, file_path) in jsonl_files.into_iter().enumerate() {
+            let current_scanned = progress_offset + idx + 1;
+            progress_cb(current_scanned, total_files);
 
-        let uuid = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
+            let uuid = file_path.file_name().unwrap_or_default().to_string_lossy().to_string();
 
-        let mtime = match std::fs::metadata(&file_path).and_then(|m| m.modified()) {
-            Ok(t) => t
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0),
-            Err(_) => 0.0,
-        };
+            let mtime = match std::fs::metadata(&file_path).and_then(|m| m.modified()) {
+                Ok(t) => t
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0),
+                Err(_) => 0.0,
+            };
 
-        let mut last_parsed_idx = -1i64;
-        let mut last_mtime = 0.0f64;
-        let mut is_new_session = true;
+            let mut last_parsed_idx = -1i64;
+            let mut last_mtime = 0.0f64;
+            let mut is_new_session = true;
 
-        if let Some((parsed_idx, m)) = session_cache.get(&uuid) {
-            last_parsed_idx = *parsed_idx;
-            last_mtime = *m;
-            is_new_session = false;
-        }
+            if let Some((parsed_idx, m)) = session_cache.get(&uuid) {
+                last_parsed_idx = *parsed_idx;
+                last_mtime = *m;
+                is_new_session = false;
+            }
 
-        if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
-            continue;
-        }
+            if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
+                continue;
+            }
 
-        if let Ok(file) = File::open(&file_path) {
-            let reader = BufReader::new(file);
-            let mut line_idx = 0i64;
-            let mut new_turns = Vec::new();
+            if let Ok(file) = File::open(&file_path) {
+                let reader = BufReader::new(file);
+                let mut line_idx = 0i64;
+                let mut new_turns = Vec::new();
 
-            for line in reader.lines() {
-                if let Ok(line_str) = line {
-                    if line_str.trim().is_empty() {
-                        continue;
-                    }
-                    line_idx += 1;
-                    if line_idx <= last_parsed_idx {
-                        continue;
-                    }
+                for line in reader.lines() {
+                    if let Ok(line_str) = line {
+                        if line_str.trim().is_empty() {
+                            continue;
+                        }
+                        line_idx += 1;
+                        if line_idx <= last_parsed_idx {
+                            continue;
+                        }
 
-                    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
-                        if let Some((input, cache_read, output, thinking, model)) = extract_codex_tokens_and_model(&val, &default_model) {
-                            let timestamp = extract_claude_timestamp(&val);
-                            let (message_id, request_id) = extract_claude_ids(&val);
-                            let total_input = get_total_input_tokens(&model, input, cache_read);
-                            let cost = estimate_cost(&model, total_input, cache_read, output);
+                        if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
+                            if let Some((input, cache_read, output, thinking, model)) = extract_codex_tokens_and_model(&val, &default_model) {
+                                let timestamp = extract_claude_timestamp(&val);
+                                let (message_id, request_id) = extract_claude_ids(&val);
+                                let total_input = get_total_input_tokens(&model, input, cache_read);
+                                let cost = estimate_cost(&model, total_input, cache_read, output);
 
-                            new_turns.push((
-                                line_idx - 1,
-                                model,
-                                total_input,
-                                cache_read,
-                                output,
-                                thinking,
-                                cost,
-                                message_id,
-                                request_id,
-                                timestamp,
-                            ));
+                                new_turns.push((
+                                    line_idx - 1,
+                                    model,
+                                    total_input,
+                                    cache_read,
+                                    output,
+                                    thinking,
+                                    cost,
+                                    message_id,
+                                    request_id,
+                                    timestamp,
+                                ));
+                            }
                         }
                     }
                 }
-            }
 
-            if !new_turns.is_empty() {
-                log_progress(&format!("发现 Codex 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
-            }
+                if !new_turns.is_empty() {
+                    log_progress(&format!("发现 Codex 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+                }
 
-            let tx = conn_cache.transaction()?;
-            {
                 let title = file_path.file_stem().unwrap_or_default().to_string_lossy().to_string();
                 let created_at = if !new_turns.is_empty() {
                     new_turns[0].9.clone()
@@ -928,9 +928,9 @@ pub fn sync_codex(
                     )?;
                 }
             }
-            tx.commit()?;
         }
     }
+    tx.commit()?;
 
     Ok(())
 }
@@ -1016,73 +1016,76 @@ fn sync_trae_common(
     }
 
     let mut session_count = 0;
-    for (ws_idx, db_path) in ws_dbs.iter().enumerate() {
-        let conn_ws = match rusqlite::Connection::open_with_flags(
-            db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
-                | rusqlite::OpenFlags::SQLITE_OPEN_URI
-                | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
-        ) {
-            Ok(c) => c,
-            Err(_) => continue,
-        };
+    let tx = conn_cache.transaction()?;
+    {
+        for (ws_idx, db_path) in ws_dbs.iter().enumerate() {
+            let conn_ws = match rusqlite::Connection::open_with_flags(
+                db_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_URI
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            ) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
 
-        let table_check: Result<i32, _> = conn_ws.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ItemTable'",
-            [],
-            |_| Ok(1),
-        );
-        if table_check.is_err() {
-            continue;
-        }
+            let table_check: Result<i32, _> = conn_ws.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='ItemTable'",
+                [],
+                |_| Ok(1),
+            );
+            if table_check.is_err() {
+                continue;
+            }
 
-        let storage_val: Result<String, _> = conn_ws.query_row(
-            "SELECT value FROM ItemTable WHERE key = 'memento/icube-ai-agent-storage'",
-            [],
-            |row| row.get(0),
-        );
-        let storage_json: serde_json::Value = match storage_val {
-            Ok(val) => serde_json::from_str(&val).unwrap_or(serde_json::Value::Null),
-            Err(_) => continue,
-        };
+            let storage_val: Result<String, _> = conn_ws.query_row(
+                "SELECT value FROM ItemTable WHERE key = 'memento/icube-ai-agent-storage'",
+                [],
+                |row| row.get(0),
+            );
+            let storage_json: serde_json::Value = match storage_val {
+                Ok(val) => serde_json::from_str(&val).unwrap_or(serde_json::Value::Null),
+                Err(_) => continue,
+            };
 
-        let sessions = match storage_json.get("list").and_then(|l| l.as_array()) {
-            Some(l) => l,
-            None => continue,
-        };
+            let sessions = match storage_json.get("list").and_then(|l| l.as_array()) {
+                Some(l) => l,
+                None => continue,
+            };
 
-        if sessions.is_empty() {
-            continue;
-        }
+            if sessions.is_empty() {
+                continue;
+            }
 
-        let agent_val: Result<String, _> = conn_ws.query_row(
-            "SELECT value FROM ItemTable WHERE key = 'icube_session_agent_map'",
-            [],
-            |row| row.get(0),
-        );
-        let agent_map: HashMap<String, String> = agent_val
-            .ok()
-            .and_then(|val| serde_json::from_str(&val).ok())
-            .unwrap_or_default();
+            let agent_val: Result<String, _> = conn_ws.query_row(
+                "SELECT value FROM ItemTable WHERE key = 'icube_session_agent_map'",
+                [],
+                |row| row.get(0),
+            );
+            let agent_map: HashMap<String, String> = agent_val
+                .ok()
+                .and_then(|val| serde_json::from_str(&val).ok())
+                .unwrap_or_default();
 
-        let mut session_model_map = HashMap::new();
-        if let Ok(mut stmt) = conn_ws.prepare("SELECT key, value FROM ItemTable WHERE key LIKE '%_ai-chat:sessionRelation:modelMap'") {
-            if let Ok(mut rows) = stmt.query([]) {
-                while let Some(row) = rows.next().ok().flatten() {
-                    if let (Ok(_key), Ok(val_str)) = (row.get::<_, String>(0), row.get::<_, String>(1)) {
-                        if let Ok(m_data) = serde_json::from_str::<serde_json::Value>(&val_str) {
-                            if let Some(obj) = m_data.as_object() {
-                                for (sess_id, agents) in obj {
-                                    if let Some(agent_obj) = agents.as_object() {
-                                        for (agent_name, model_raw) in agent_obj {
-                                            if let Some(model_str) = model_raw.as_str() {
-                                                let mut model_name = model_str.to_string();
-                                                if model_str.contains("1_-_") {
-                                                    if let Some(part) = model_str.split("1_-_").nth(1) {
-                                                        model_name = part.to_string();
+            let mut session_model_map = HashMap::new();
+            if let Ok(mut stmt) = conn_ws.prepare("SELECT key, value FROM ItemTable WHERE key LIKE '%_ai-chat:sessionRelation:modelMap'") {
+                if let Ok(mut rows) = stmt.query([]) {
+                    while let Some(row) = rows.next().ok().flatten() {
+                        if let (Ok(_key), Ok(val_str)) = (row.get::<_, String>(0), row.get::<_, String>(1)) {
+                            if let Ok(m_data) = serde_json::from_str::<serde_json::Value>(&val_str) {
+                                if let Some(obj) = m_data.as_object() {
+                                    for (sess_id, agents) in obj {
+                                        if let Some(agent_obj) = agents.as_object() {
+                                            for (agent_name, model_raw) in agent_obj {
+                                                if let Some(model_str) = model_raw.as_str() {
+                                                    let mut model_name = model_str.to_string();
+                                                    if model_str.contains("1_-_") {
+                                                        if let Some(part) = model_str.split("1_-_").nth(1) {
+                                                            model_name = part.to_string();
+                                                        }
                                                     }
+                                                    session_model_map.insert((sess_id.clone(), agent_name.clone()), model_name);
                                                 }
-                                                session_model_map.insert((sess_id.clone(), agent_name.clone()), model_name);
                                             }
                                         }
                                     }
@@ -1092,77 +1095,74 @@ fn sync_trae_common(
                     }
                 }
             }
-        }
 
-        let chat_val: Result<String, _> = conn_ws.query_row(
-            "SELECT value FROM ItemTable WHERE key = 'ChatStore'",
-            [],
-            |row| row.get(0),
-        );
-        let mut turns_count_map = HashMap::new();
-        if let Ok(val) = chat_val {
-            if let Ok(chat_data) = serde_json::from_str::<serde_json::Value>(&val) {
-                if let Some(turns_height) = chat_data.get("state").and_then(|s| s.get("turnsHeight")).and_then(|t| t.as_object()) {
-                    for turn_key in turns_height.keys() {
-                        if turn_key.contains('-') {
-                            if let Some(sess_id) = turn_key.split('-').next() {
-                                *turns_count_map.entry(sess_id.to_string()).or_insert(0) += 1;
+            let chat_val: Result<String, _> = conn_ws.query_row(
+                "SELECT value FROM ItemTable WHERE key = 'ChatStore'",
+                [],
+                |row| row.get(0),
+            );
+            let mut turns_count_map = HashMap::new();
+            if let Ok(val) = chat_val {
+                if let Ok(chat_data) = serde_json::from_str::<serde_json::Value>(&val) {
+                    if let Some(turns_height) = chat_data.get("state").and_then(|s| s.get("turnsHeight")).and_then(|t| t.as_object()) {
+                        for turn_key in turns_height.keys() {
+                            if turn_key.contains('-') {
+                                if let Some(sess_id) = turn_key.split('-').next() {
+                                    *turns_count_map.entry(sess_id.to_string()).or_insert(0) += 1;
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        let mtime = match std::fs::metadata(db_path).and_then(|m| m.modified()) {
-            Ok(t) => t
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0),
-            Err(_) => 0.0,
-        };
-
-        for (sess_idx, s) in sessions.iter().enumerate() {
-            let sess_id = match s.get("sessionId").and_then(|v| v.as_str()) {
-                Some(id) => id.to_string(),
-                None => continue,
+            let mtime = match std::fs::metadata(db_path).and_then(|m| m.modified()) {
+                Ok(t) => t
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0),
+                Err(_) => 0.0,
             };
 
-            let mut last_mtime = 0.0f64;
-            let mut is_new_session = true;
+            for (sess_idx, s) in sessions.iter().enumerate() {
+                let sess_id = match s.get("sessionId").and_then(|v| v.as_str()) {
+                    Some(id) => id.to_string(),
+                    None => continue,
+                };
 
-            if let Some((_, m)) = session_cache.get(&sess_id) {
-                last_mtime = *m;
-                is_new_session = false;
-            }
+                let mut last_mtime = 0.0f64;
+                let mut is_new_session = true;
 
-            if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
-                continue;
-            }
+                if let Some((_, m)) = session_cache.get(&sess_id) {
+                    last_mtime = *m;
+                    is_new_session = false;
+                }
 
-            let agent_type = agent_map.get(&sess_id).cloned().unwrap_or_else(|| "unknown".to_string());
-            let model = session_model_map
-                .get(&(sess_id.clone(), agent_type.clone()))
-                .cloned()
-                .unwrap_or_else(|| "doubao-pro".to_string());
+                if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
+                    continue;
+                }
 
-            let turns = turns_count_map.get(&sess_id).cloned().unwrap_or(1);
-            let title = format!("{} 会话 ({})", if source == "trae" { "Trae" } else { "Trae CN" }, &sess_id[..6]);
+                let agent_type = agent_map.get(&sess_id).cloned().unwrap_or_else(|| "unknown".to_string());
+                let model = session_model_map
+                    .get(&(sess_id.clone(), agent_type.clone()))
+                    .cloned()
+                    .unwrap_or_else(|| "doubao-pro".to_string());
 
-            let offset_secs = (sessions.len() - sess_idx) as i64 * 300;
-            let created_at_ts = (mtime as i64) - offset_secs;
-            let created_at = if let Some(dt) = DateTime::from_timestamp(created_at_ts, 0) {
-                dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-            } else {
-                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-            };
+                let turns = turns_count_map.get(&sess_id).cloned().unwrap_or(1);
+                let title = format!("{} 会话 ({})", if source == "trae" { "Trae" } else { "Trae CN" }, &sess_id[..6]);
 
-            let input_tokens = 8000;
-            let output_tokens = 500;
-            let cost = estimate_cost(&model, input_tokens * (turns as i64), 0, output_tokens * (turns as i64));
+                let offset_secs = (sessions.len() - sess_idx) as i64 * 300;
+                let created_at_ts = (mtime as i64) - offset_secs;
+                let created_at = if let Some(dt) = DateTime::from_timestamp(created_at_ts, 0) {
+                    dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                } else {
+                    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                };
 
-            let tx = conn_cache.transaction()?;
-            {
+                let input_tokens = 8000;
+                let output_tokens = 500;
+                let cost = estimate_cost(&model, input_tokens * (turns as i64), 0, output_tokens * (turns as i64));
+
                 tx.execute(
                     &format!("DELETE FROM turns WHERE source = '{}' AND uuid = ?", source),
                     [&sess_id],
@@ -1217,14 +1217,14 @@ fn sync_trae_common(
                         ],
                     )?;
                 }
+                session_count += 1;
             }
-            tx.commit()?;
-            session_count += 1;
-        }
 
-        let current_scanned = progress_offset + ws_idx + 1;
-        progress_cb(current_scanned, total_files);
+            let current_scanned = progress_offset + ws_idx + 1;
+            progress_cb(current_scanned, total_files);
+        }
     }
+    tx.commit()?;
 
     if session_count > 0 {
         log_progress(&format!("成功增量同步了 {} 的 {} 个会话记录。", if source == "trae" { "Trae" } else { "Trae CN" }, session_count));
@@ -1303,163 +1303,162 @@ pub fn sync_cursor(
         composer_sessions.push((key, val));
     }
 
-    for (session_idx, (key, val)) in composer_sessions.into_iter().enumerate() {
-        let current_scanned = progress_offset + session_idx + 1;
-        progress_cb(current_scanned, total_files);
+    let tx = conn_cache.transaction()?;
+    {
+        for (session_idx, (key, val)) in composer_sessions.into_iter().enumerate() {
+            let current_scanned = progress_offset + session_idx + 1;
+            progress_cb(current_scanned, total_files);
 
-        let composer_id = key.trim_start_matches("composerData:").to_string();
-        let data: serde_json::Value = match serde_json::from_str(&val) {
-            Ok(d) => d,
-            Err(_) => continue,
-        };
-
-        // 提取会话标题
-        let mut title = data.get("name")
-            .and_then(|v| v.as_str())
-            .unwrap_or("未命名 Composer 会话")
-            .to_string();
-        
-        // 修复部分乱码
-        if title.contains('\u{0000}') {
-            title = "Composer 会话".to_string();
-        }
-
-        // 提取最后修改时间（毫秒级时间戳转换为秒级浮点数）
-        let last_updated = data.get("lastUpdatedAt")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0) / 1000.0;
-
-        let mut last_mtime = 0.0f64;
-        let mut is_new_session = true;
-
-        if let Some((_, m)) = session_cache.get(&composer_id) {
-            last_mtime = *m;
-            is_new_session = false;
-        }
-
-        // 增量比较：如果 lastUpdatedAt 未变且不是新会话，则直接跳过
-        if !is_new_session && (last_mtime - last_updated).abs() < 1e-4 {
-            continue;
-        }
-
-        let headers: Vec<serde_json::Value> = data.get("fullConversationHeadersOnly")
-            .and_then(|v| v.as_array())
-            .cloned()
-            .unwrap_or_default();
-
-        let mut new_turns = Vec::new();
-        let mut idx = 0;
-
-        for (h_idx, header) in headers.iter().enumerate() {
-            let bubble_id = match header.get("bubbleId").and_then(|v| v.as_str()) {
-                Some(b) => b,
-                None => continue,
+            let composer_id = key.trim_start_matches("composerData:").to_string();
+            let data: serde_json::Value = match serde_json::from_str(&val) {
+                Ok(d) => d,
+                Err(_) => continue,
             };
 
-            let bubble_key = format!("bubbleId:{}:{}", composer_id, bubble_id);
-            let bubble_val: Result<String, _> = conn_cursor.query_row(
-                "SELECT value FROM cursorDiskKV WHERE key = ?",
-                [&bubble_key],
-                |row| row.get(0),
-            );
+            // 提取会话标题
+            let mut title = data.get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("未命名 Composer 会话")
+                .to_string();
+            
+            // 修复部分乱码
+            if title.contains('\u{0000}') {
+                title = "Composer 会话".to_string();
+            }
 
-            if let Ok(b_str) = bubble_val {
-                if let Ok(b_json) = serde_json::from_str::<serde_json::Value>(&b_str) {
-                    let bubble_type = b_json.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                    if bubble_type == 2 { // Assistant 气泡才算有效交互轮次
-                        let token_count = b_json.get("tokenCount");
-                        let input_tokens = token_count.and_then(|tc| tc.get("inputTokens").and_then(|v| v.as_i64())).unwrap_or(0);
-                        let output_tokens = token_count.and_then(|tc| tc.get("outputTokens").and_then(|v| v.as_i64())).unwrap_or(0);
+            // 提取最后修改时间（毫秒级时间戳转换为秒级浮点数）
+            let last_updated = data.get("lastUpdatedAt")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0) / 1000.0;
 
-                        let mut model = b_json.get("modelInfo")
-                            .and_then(|mi| mi.get("modelName").and_then(|v| v.as_str()))
-                            .unwrap_or("default")
-                            .to_string();
+            let mut last_mtime = 0.0f64;
+            let mut is_new_session = true;
 
-                        if model == "default" {
-                            model = data.get("modelConfig")
-                                .and_then(|mc| mc.get("modelName").and_then(|v| v.as_str()))
+            if let Some((_, m)) = session_cache.get(&composer_id) {
+                last_mtime = *m;
+                is_new_session = false;
+            }
+
+            // 增量比较：如果 lastUpdatedAt 未变且不是新会话，则直接跳过
+            if !is_new_session && (last_mtime - last_updated).abs() < 1e-4 {
+                continue;
+            }
+
+            let headers: Vec<serde_json::Value> = data.get("fullConversationHeadersOnly")
+                .and_then(|v| v.as_array())
+                .cloned()
+                .unwrap_or_default();
+
+            let mut new_turns = Vec::new();
+            let mut idx = 0;
+
+            for (h_idx, header) in headers.iter().enumerate() {
+                let bubble_id = match header.get("bubbleId").and_then(|v| v.as_str()) {
+                    Some(b) => b,
+                    None => continue,
+                };
+
+                let bubble_key = format!("bubbleId:{}:{}", composer_id, bubble_id);
+                let bubble_val: Result<String, _> = conn_cursor.query_row(
+                    "SELECT value FROM cursorDiskKV WHERE key = ?",
+                    [&bubble_key],
+                    |row| row.get(0),
+                );
+
+                if let Ok(b_str) = bubble_val {
+                    if let Ok(b_json) = serde_json::from_str::<serde_json::Value>(&b_str) {
+                        let bubble_type = b_json.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
+                        if bubble_type == 2 { // Assistant 气泡才算有效交互轮次
+                            let token_count = b_json.get("tokenCount");
+                            let input_tokens = token_count.and_then(|tc| tc.get("inputTokens").and_then(|v| v.as_i64())).unwrap_or(0);
+                            let output_tokens = token_count.and_then(|tc| tc.get("outputTokens").and_then(|v| v.as_i64())).unwrap_or(0);
+
+                            let mut model = b_json.get("modelInfo")
+                                .and_then(|mi| mi.get("modelName").and_then(|v| v.as_str()))
                                 .unwrap_or("default")
                                 .to_string();
-                        }
 
-                        if model == "default" || model.is_empty() {
-                            model = "claude-3-5-sonnet".to_string();
-                        }
+                            if model == "default" {
+                                model = data.get("modelConfig")
+                                    .and_then(|mc| mc.get("modelName").and_then(|v| v.as_str()))
+                                    .unwrap_or("default")
+                                    .to_string();
+                            }
 
-                        if input_tokens > 0 || output_tokens > 0 {
-                            let timestamp_ms = b_json.get("createdAt")
-                                .and_then(|v| v.as_i64())
-                                .unwrap_or(data.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0));
+                            if model == "default" || model.is_empty() {
+                                model = "claude-3-5-sonnet".to_string();
+                            }
 
-                            let timestamp = if timestamp_ms > 0 {
-                                if let Some(dt) = DateTime::from_timestamp(timestamp_ms / 1000, (timestamp_ms % 1000) as u32 * 1_000_000) {
-                                    dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                            if input_tokens > 0 || output_tokens > 0 {
+                                let timestamp_ms = b_json.get("createdAt")
+                                    .and_then(|v| v.as_i64())
+                                    .unwrap_or(data.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0));
+
+                                let timestamp = if timestamp_ms > 0 {
+                                    if let Some(dt) = DateTime::from_timestamp(timestamp_ms / 1000, (timestamp_ms % 1000) as u32 * 1_000_000) {
+                                        dt.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                                    } else {
+                                        chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+                                    }
                                 } else {
                                     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-                                }
-                            } else {
-                                chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-                            };
+                                };
 
-                            // 计算交互延迟 Latency 和 TPS
-                            let mut latency = 0.0;
-                            let mut tps = 0.0;
+                                // 计算交互延迟 Latency 和 TPS
+                                let mut latency = 0.0;
+                                let mut tps = 0.0;
 
-                            if h_idx > 0 {
-                                let prev_header = &headers[h_idx - 1];
-                                let prev_type = prev_header.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
-                                if prev_type == 1 { // 上一轮是 User 输入
-                                    if let Some(prev_bubble_id) = prev_header.get("bubbleId").and_then(|v| v.as_str()) {
-                                        let prev_key = format!("bubbleId:{}:{}", composer_id, prev_bubble_id);
-                                        let prev_val: Result<String, _> = conn_cursor.query_row(
-                                            "SELECT value FROM cursorDiskKV WHERE key = ?",
-                                            [&prev_key],
-                                            |row| row.get(0),
-                                        );
-                                        if let Ok(p_str) = prev_val {
-                                            if let Ok(p_json) = serde_json::from_str::<serde_json::Value>(&p_str) {
-                                                let prev_created_ms = p_json.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0);
-                                                if prev_created_ms > 0 && timestamp_ms > prev_created_ms {
-                                                    latency = (timestamp_ms - prev_created_ms) as f64 / 1000.0;
-                                                    if latency > 0.0 {
-                                                        tps = output_tokens as f64 / latency;
+                                if h_idx > 0 {
+                                    let prev_header = &headers[h_idx - 1];
+                                    let prev_type = prev_header.get("type").and_then(|v| v.as_i64()).unwrap_or(0);
+                                    if prev_type == 1 { // 上一轮是 User 输入
+                                        if let Some(prev_bubble_id) = prev_header.get("bubbleId").and_then(|v| v.as_str()) {
+                                            let prev_key = format!("bubbleId:{}:{}", composer_id, prev_bubble_id);
+                                            let prev_val: Result<String, _> = conn_cursor.query_row(
+                                                "SELECT value FROM cursorDiskKV WHERE key = ?",
+                                                [&prev_key],
+                                                |row| row.get(0),
+                                            );
+                                            if let Ok(p_str) = prev_val {
+                                                if let Ok(p_json) = serde_json::from_str::<serde_json::Value>(&p_str) {
+                                                    let prev_created_ms = p_json.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0);
+                                                    if prev_created_ms > 0 && timestamp_ms > prev_created_ms {
+                                                        latency = (timestamp_ms - prev_created_ms) as f64 / 1000.0;
+                                                        if latency > 0.0 {
+                                                            tps = output_tokens as f64 / latency;
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                 }
+
+                                let cost = estimate_cost(&model, input_tokens, 0, output_tokens);
+                                let message_id = bubble_id.to_string();
+                                let request_id = b_json.get("requestId").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+
+                                new_turns.push((
+                                    idx,
+                                    model,
+                                    input_tokens,
+                                    0i64, // cached_input_tokens
+                                    output_tokens,
+                                    0i64, // thinking_tokens
+                                    cost,
+                                    message_id,
+                                    request_id,
+                                    timestamp,
+                                    latency,
+                                    tps,
+                                ));
+                                idx += 1;
                             }
-
-                            let cost = estimate_cost(&model, input_tokens, 0, output_tokens);
-                            let message_id = bubble_id.to_string();
-                            let request_id = b_json.get("requestId").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-
-                            new_turns.push((
-                                idx,
-                                model,
-                                input_tokens,
-                                0i64, // cached_input_tokens
-                                output_tokens,
-                                0i64, // thinking_tokens
-                                cost,
-                                message_id,
-                                request_id,
-                                timestamp,
-                                latency,
-                                tps,
-                            ));
-                            idx += 1;
                         }
                     }
                 }
             }
-        }
 
-        // 执行增量写入事务
-        let tx = conn_cache.transaction()?;
-        {
             tx.execute("DELETE FROM turns WHERE source = 'cursor' AND uuid = ?", [&composer_id])?;
 
             let created_at_ms = data.get("createdAt").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -1515,8 +1514,8 @@ pub fn sync_cursor(
                 )?;
             }
         }
-        tx.commit()?;
     }
+    tx.commit()?;
 
     Ok(())
 }
@@ -1651,102 +1650,101 @@ where
     log_progress("正在扫描并增量同步 Antigravity 历史会话数据...");
 
     // C. 增量同步 Antigravity 数据
-    for (i, db_path) in db_files.into_iter().enumerate() {
-        let uuid = db_path.file_stem().unwrap().to_str().unwrap().to_string();
-        let mtime = match std::fs::metadata(&db_path).and_then(|m| m.modified()) {
-            Ok(t) => t
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs_f64())
-                .unwrap_or(0.0),
-            Err(_) => 0.0,
-        };
+    {
+        let tx = conn_cache.transaction()?;
+        for (i, db_path) in db_files.into_iter().enumerate() {
+            let uuid = db_path.file_stem().unwrap().to_str().unwrap().to_string();
+            let mtime = match std::fs::metadata(&db_path).and_then(|m| m.modified()) {
+                Ok(t) => t
+                    .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0),
+                Err(_) => 0.0,
+            };
 
-        let mut last_parsed_idx = -1i64;
-        let mut last_mtime = 0.0f64;
-        let mut existing_title = String::new();
-        let mut is_new_session = true;
+            let mut last_parsed_idx = -1i64;
+            let mut last_mtime = 0.0f64;
+            let mut existing_title = String::new();
+            let mut is_new_session = true;
 
-        if let Some((parsed_idx, m, title)) = session_cache.get(&uuid) {
-            last_parsed_idx = *parsed_idx;
-            last_mtime = *m;
-            existing_title = title.clone();
-            is_new_session = false;
-        }
+            if let Some((parsed_idx, m, title)) = session_cache.get(&uuid) {
+                last_parsed_idx = *parsed_idx;
+                last_mtime = *m;
+                existing_title = title.clone();
+                is_new_session = false;
+            }
 
-        if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
-            progress_cb(i + 1, total_files);
-            continue;
-        }
+            if !is_new_session && (last_mtime - mtime).abs() < 1e-4 {
+                progress_cb(i + 1, total_files);
+                continue;
+            }
 
-        let mut new_turns = Vec::new();
-        let mut max_idx_in_db = last_parsed_idx;
-        let mut read_success = false;
+            let mut new_turns = Vec::new();
+            let mut max_idx_in_db = last_parsed_idx;
+            let mut read_success = false;
 
-        if let Ok(conn_session) = rusqlite::Connection::open(&db_path) {
-            let has_gen_metadata: Result<i32, _> = conn_session.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gen_metadata'",
-                [],
-                |_| Ok(1),
-            );
+            if let Ok(conn_session) = rusqlite::Connection::open(&db_path) {
+                let has_gen_metadata: Result<i32, _> = conn_session.query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name='gen_metadata'",
+                    [],
+                    |_| Ok(1),
+                );
 
-            if has_gen_metadata.is_ok() {
-                if let Ok(mut stmt) = conn_session.prepare(
-                    "SELECT idx, data FROM gen_metadata WHERE size > 0 AND idx > ? ORDER BY idx ASC",
-                ) {
-                    if let Ok(mut rows) = stmt.query([last_parsed_idx]) {
-                        read_success = true;
-                        while let Ok(Some(row)) = rows.next() {
-                            let idx: i64 = row.get(0).unwrap_or(0);
-                            if idx > max_idx_in_db {
-                                max_idx_in_db = idx;
-                            }
-                            let blob: Vec<u8> = match row.get(1) {
-                                Ok(b) => b,
-                                Err(_) => continue,
-                            };
+                if has_gen_metadata.is_ok() {
+                    if let Ok(mut stmt) = conn_session.prepare(
+                        "SELECT idx, data FROM gen_metadata WHERE size > 0 AND idx > ? ORDER BY idx ASC",
+                    ) {
+                        if let Ok(mut rows) = stmt.query([last_parsed_idx]) {
+                            read_success = true;
+                            while let Ok(Some(row)) = rows.next() {
+                                let idx: i64 = row.get(0).unwrap_or(0);
+                                if idx > max_idx_in_db {
+                                    max_idx_in_db = idx;
+                                }
+                                let blob: Vec<u8> = match row.get(1) {
+                                    Ok(b) => b,
+                                    Err(_) => continue,
+                                };
 
-                            let mut pos = 0;
-                            let len = blob.len();
-                            if let Ok(raw_parsed) = parse_protobuf_orig(&blob, &mut pos, len) {
-                                let deep_parsed = try_parse_sub_messages(raw_parsed);
-                                let metrics = extract_metrics_from_proto(&deep_parsed);
-                                if !metrics.is_empty() {
-                                    let mut uncached = 0;
-                                    let mut cached = 0;
-                                    let mut output = 0;
-                                    let mut thinking = 0;
-                                    let model = metrics[0].model.clone();
-                                    for m in metrics {
-                                        uncached += m.uncached_input;
-                                        cached += m.cached_input;
-                                        output += m.output;
-                                        thinking += m.thinking;
+                                let mut pos = 0;
+                                let len = blob.len();
+                                if let Ok(raw_parsed) = parse_protobuf_orig(&blob, &mut pos, len) {
+                                    let deep_parsed = try_parse_sub_messages(raw_parsed);
+                                    let metrics = extract_metrics_from_proto(&deep_parsed);
+                                    if !metrics.is_empty() {
+                                        let mut uncached = 0;
+                                        let mut cached = 0;
+                                        let mut output = 0;
+                                        let mut thinking = 0;
+                                        let model = metrics[0].model.clone();
+                                        for m in metrics {
+                                            uncached += m.uncached_input;
+                                            cached += m.cached_input;
+                                            output += m.output;
+                                            thinking += m.thinking;
+                                        }
+                                        new_turns.push((
+                                            uuid.clone(),
+                                            idx,
+                                            model,
+                                            uncached,
+                                            cached,
+                                            output,
+                                            thinking,
+                                        ));
                                     }
-                                    new_turns.push((
-                                        uuid.clone(),
-                                        idx,
-                                        model,
-                                        uncached,
-                                        cached,
-                                        output,
-                                        thinking,
-                                    ));
                                 }
                             }
                         }
                     }
                 }
             }
-        }
 
-        if read_success {
-            if !new_turns.is_empty() {
-                log_progress(&format!("发现 Antigravity 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
-            }
+            if read_success {
+                if !new_turns.is_empty() {
+                    log_progress(&format!("发现 Antigravity 会话 [{}] 有 {} 条新轮次，正在同步...", uuid, new_turns.len()));
+                }
 
-            // 写入增量数据并更新修改时间
-            let tx = conn_cache.transaction()?;
-            {
                 if is_new_session || existing_title.starts_with("Unknown Session") {
                     let (title, created_at) = extract_convo_info(&uuid, &db_path);
                     let dev_name = get_device_name();
@@ -1786,12 +1784,12 @@ where
                         ],
                     )?;
                 }
+            } else {
+                log_progress(&format!("跳过会话 [{}] 的更新：物理数据库目前无法访问或格式不兼容，下次将重新尝试", uuid));
             }
-            tx.commit()?;
-        } else {
-            log_progress(&format!("跳过会话 [{}] 的更新：物理数据库目前无法访问或格式不兼容，下次将重新尝试", uuid));
+            progress_cb(i + 1, total_files);
         }
-        progress_cb(i + 1, total_files);
+        tx.commit()?;
     }
 
     // D. 增量同步 Claude Code 数据
@@ -1823,6 +1821,8 @@ where
             format!("同步至 PostgreSQL 失败: {}", e),
         ))));
     }
+
+    log_progress("✨ 本地大盘预计算缓存重建完成，系统已就绪！");
 
     Ok(())
 }

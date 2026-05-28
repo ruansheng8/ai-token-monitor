@@ -57,7 +57,7 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
     // 提取所有不重复的日期并排序
     const dates = Array.from(new Set(data.map(item => item.date))).sort();
 
-    // 针对每个来源，按日期对齐数据
+    // 针对每个工具，按日期对齐数据
     const sources = ['antigravity', 'claude_code', 'codex', 'cursor', 'trae', 'trae_cn'];
     const seriesData = sources.map(src => {
       const srcData = dates.map(d => {
