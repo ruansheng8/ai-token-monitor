@@ -1575,6 +1575,10 @@ pub fn get_sessions_paginated(
         }
     }
 
+    if hide_zero {
+        conditions.push("EXISTS (SELECT 1 FROM turns t WHERE t.source = s.source AND t.uuid = s.uuid AND (COALESCE(t.input_tokens, 0) + COALESCE(t.output_tokens, 0)) > 0)");
+    }
+
     let where_clause = if conditions.is_empty() {
         "".to_string()
     } else {
@@ -1754,6 +1758,10 @@ pub fn get_pg_sessions_paginated(
             params.push(like_str);
             param_idx += 2;
         }
+    }
+
+    if hide_zero {
+        conditions.push("EXISTS (SELECT 1 FROM turns t WHERE t.source = s.source AND t.uuid = s.uuid AND (COALESCE(t.input_tokens, 0) + COALESCE(t.output_tokens, 0)) > 0)".to_string());
     }
 
     let where_clause = if conditions.is_empty() {

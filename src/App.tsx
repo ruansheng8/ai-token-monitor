@@ -240,7 +240,7 @@ export default function App() {
   const [sortField, setSortField] = useState<keyof SessionItem | 'total'>('created_at');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(5);
   const [source, setSource] = useState<'all' | 'antigravity' | 'claude_code' | 'codex' | 'cursor'>('all');
   const [isSourceDropdownOpen, setIsSourceDropdownOpen] = useState(false);
   const [timeRange, setTimeRange] = useState<'all' | 'today' | 'week' | '30days' | 'month' | 'quarter' | 'custom'>('30days');
@@ -1399,6 +1399,7 @@ export default function App() {
                   onChange={(e) => setPageSize(Number(e.target.value))}
                   className="bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-2.5 py-1 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer"
                 >
+                  <option value={5}>5 条/页</option>
                   <option value={10}>10 条/页</option>
                   <option value={20}>20 条/页</option>
                   <option value={50}>50 条/页</option>
