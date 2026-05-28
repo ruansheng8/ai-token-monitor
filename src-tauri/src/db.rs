@@ -721,29 +721,143 @@ fn get_total_input_tokens(model: &str, input: i64, cached: i64) -> i64 {
     }
 }
 
-pub fn estimate_cost(model: &str, input: i64, cached: i64, output: i64) -> f64 {
-    let model_lower = model.to_lowercase();
-    if model_lower.contains("opus") {
-        let uncached = (input - cached).max(0);
-        ((uncached as f64 * 15.0) + (cached as f64 * 1.5) + (output as f64 * 75.0)) / 1_000_000.0
-    } else if model_lower.contains("sonnet") || model_lower.contains("claude-3-5") {
-        let uncached = (input - cached).max(0);
-        ((uncached as f64 * 3.0) + (cached as f64 * 0.3) + (output as f64 * 15.0)) / 1_000_000.0
-    } else if model_lower.contains("haiku") {
-        let uncached = (input - cached).max(0);
-        ((uncached as f64 * 0.25) + (cached as f64 * 0.03) + (output as f64 * 1.25)) / 1_000_000.0
-    } else if model_lower.contains("gemini") {
-        if model_lower.contains("pro") {
-            let uncached = (input - cached).max(0);
-            ((uncached as f64 * 1.25) + (cached as f64 * 0.3125) + (output as f64 * 5.0)) / 1_000_000.0
-        } else {
-            let uncached = (input - cached).max(0);
-            ((uncached as f64 * 0.075) + (cached as f64 * 0.01875) + (output as f64 * 0.3)) / 1_000_000.0
-        }
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ModelPricingRow {
+    pub id: Option<i64>,
+    pub model_pattern: String,
+    pub input_price_per_million: f64,
+    pub cached_input_price_per_million: f64,
+    pub output_price_per_million: f64,
+    pub priority: i64,
+    pub enabled: bool,
+    pub updated_at: String,
+}
+
+fn glob_match(pattern: &str, model: &str) -> bool {
+    let regex_pattern = format!("^{}$", regex::escape(pattern).replace("\\*", ".*"));
+    if let Ok(regex) = Regex::new(&regex_pattern) {
+        regex.is_match(&model.to_lowercase())
     } else {
-        let uncached = (input - cached).max(0);
-        ((uncached as f64 * 2.5) + (cached as f64 * 0.25) + (output as f64 * 10.0)) / 1_000_000.0
+        false
     }
+}
+
+fn load_model_pricing(conn: &rusqlite::Connection) -> Result<Vec<ModelPricingRow>, rusqlite::Error> {
+    let mut stmt = conn.prepare(
+        "SELECT id, model_pattern, input_price_per_million, cached_input_price_per_million,
+                output_price_per_million, priority, enabled, updated_at
+         FROM model_pricing
+         WHERE enabled = 1
+         ORDER BY priority ASC, id ASC"
+    )?;
+
+    let rows = stmt.query_map([], |row| {
+        Ok(ModelPricingRow {
+            id: row.get(0)?,
+            model_pattern: row.get(1)?,
+            input_price_per_million: row.get(2)?,
+            cached_input_price_per_million: row.get(3)?,
+            output_price_per_million: row.get(4)?,
+            priority: row.get(5)?,
+            enabled: row.get::<_, i64>(6)? == 1,
+            updated_at: row.get(7)?,
+        })
+    })?;
+
+    let mut result = Vec::new();
+    for r in rows {
+        result.push(r?);
+    }
+    Ok(result)
+}
+
+pub fn estimate_cost(model: &str, input: i64, cached: i64, output: i64) -> Result<f64, rusqlite::Error> {
+    let conn = rusqlite::Connection::open(get_db_cache_path())?;
+    let pricing = load_model_pricing(&conn)?;
+    let model_lower = model.to_lowercase();
+    let matched = pricing
+        .into_iter()
+        .find(|row| glob_match(&row.model_pattern.to_lowercase(), &model_lower));
+
+    let row = matched.unwrap_or_else(|| {
+        let model_lower = model.to_lowercase();
+        if model_lower.contains("opus") {
+            ModelPricingRow {
+                id: None,
+                model_pattern: "*opus*".to_string(),
+                input_price_per_million: 15.0,
+                cached_input_price_per_million: 1.5,
+                output_price_per_million: 75.0,
+                priority: 10,
+                enabled: true,
+                updated_at: "".to_string(),
+            }
+        } else if model_lower.contains("sonnet") || model_lower.contains("claude-3-5") {
+            ModelPricingRow {
+                id: None,
+                model_pattern: "*sonnet*".to_string(),
+                input_price_per_million: 3.0,
+                cached_input_price_per_million: 0.3,
+                output_price_per_million: 15.0,
+                priority: 20,
+                enabled: true,
+                updated_at: "".to_string(),
+            }
+        } else if model_lower.contains("haiku") {
+            ModelPricingRow {
+                id: None,
+                model_pattern: "*haiku*".to_string(),
+                input_price_per_million: 0.25,
+                cached_input_price_per_million: 0.03,
+                output_price_per_million: 1.25,
+                priority: 30,
+                enabled: true,
+                updated_at: "".to_string(),
+            }
+        } else if model_lower.contains("gemini") {
+            if model_lower.contains("pro") {
+                ModelPricingRow {
+                    id: None,
+                    model_pattern: "*gemini*pro*".to_string(),
+                    input_price_per_million: 1.25,
+                    cached_input_price_per_million: 0.3125,
+                    output_price_per_million: 5.0,
+                    priority: 40,
+                    enabled: true,
+                    updated_at: "".to_string(),
+                }
+            } else {
+                ModelPricingRow {
+                    id: None,
+                    model_pattern: "*gemini*flash*".to_string(),
+                    input_price_per_million: 0.075,
+                    cached_input_price_per_million: 0.01875,
+                    output_price_per_million: 0.3,
+                    priority: 50,
+                    enabled: true,
+                    updated_at: "".to_string(),
+                }
+            }
+        } else {
+            ModelPricingRow {
+                id: None,
+                model_pattern: "*".to_string(),
+                input_price_per_million: 2.5,
+                cached_input_price_per_million: 0.25,
+                output_price_per_million: 10.0,
+                priority: 999,
+                enabled: true,
+                updated_at: "".to_string(),
+            }
+        }
+    });
+
+    let uncached = (input - cached).max(0) as f64;
+    Ok((
+        uncached * row.input_price_per_million
+        + (cached as f64) * row.cached_input_price_per_million
+        + (output as f64) * row.output_price_per_million
+    ) / 1_000_000.0)
 }
 
 fn find_json_field_recursive(val: &serde_json::Value, target_keys: &[&str]) -> Option<i64> {
@@ -991,7 +1105,7 @@ pub fn sync_claude_code(
                                 let timestamp = extract_claude_timestamp(&val);
                                 let (message_id, request_id) = extract_claude_ids(&val);
                                 let total_input = get_total_input_tokens(&model, input, cache_read);
-                                let cost = estimate_cost(&model, total_input, cache_read, output);
+                                let cost = estimate_cost(&model, total_input, cache_read, output).unwrap_or(0.0);
 
                                 new_turns.push((
                                     line_idx - 1,
@@ -1136,7 +1250,7 @@ pub fn sync_codex(
                                 let timestamp = extract_claude_timestamp(&val);
                                 let (message_id, request_id) = extract_claude_ids(&val);
                                 let total_input = get_total_input_tokens(&model, input, cache_read);
-                                let cost = estimate_cost(&model, total_input, cache_read, output);
+                                let cost = estimate_cost(&model, total_input, cache_read, output).unwrap_or(0.0);
 
                                 new_turns.push((
                                     line_idx - 1,
@@ -1432,7 +1546,7 @@ fn sync_trae_common(
 
                 let input_tokens = 8000;
                 let output_tokens = 500;
-                let cost = estimate_cost(&model, input_tokens * (turns as i64), 0, output_tokens * (turns as i64));
+                let cost = estimate_cost(&model, input_tokens * (turns as i64), 0, output_tokens * (turns as i64)).unwrap_or(0.0);
 
                 tx.execute(
                     &format!("DELETE FROM turns WHERE source = '{}' AND uuid = ?", source),
@@ -1732,7 +1846,7 @@ pub fn sync_cursor(
                                     }
                                 }
 
-                                let cost = estimate_cost(&model, input_tokens, 0, output_tokens);
+                                let cost = estimate_cost(&model, input_tokens, 0, output_tokens).unwrap_or(0.0);
                                 let message_id = bubble_id.to_string();
                                 let request_id = b_json.get("requestId").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
 
@@ -2076,7 +2190,7 @@ where
                 }
 
                 for turn in &new_turns {
-                    let cost = estimate_cost(&turn.2, turn.3 + turn.4, turn.4, turn.5);
+                    let cost = estimate_cost(&turn.2, turn.3 + turn.4, turn.4, turn.5).unwrap_or(0.0);
                     tx.execute(
                         "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
                          VALUES ('antigravity', ?, ?, ?, ?, ?, ?, ?, ?, '', 'unknown', ?)",
@@ -3113,14 +3227,45 @@ mod tests {
 
     #[test]
     fn test_estimate_cost() {
-        let cost_opus = estimate_cost("claude-3-opus", 1000, 200, 500);
+        let cost_opus = estimate_cost("claude-3-opus", 1000, 200, 500).unwrap();
         assert!((cost_opus - 0.0498).abs() < 1e-6);
 
-        let cost_sonnet = estimate_cost("claude-3-5-sonnet", 1000, 300, 500);
+        let cost_sonnet = estimate_cost("claude-3-5-sonnet", 1000, 300, 500).unwrap();
         assert!((cost_sonnet - 0.00969).abs() < 1e-6);
 
-        let cost_flash = estimate_cost("gemini-2.5-flash", 10000, 2000, 5000);
+        let cost_flash = estimate_cost("gemini-2.5-flash", 10000, 2000, 5000).unwrap();
         assert!((cost_flash - 0.0021375).abs() < 1e-8);
+    }
+
+    #[test]
+    fn test_estimate_cost_prefers_model_pricing_table() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_pricing_test_{}", test_id));
+        std::fs::create_dir_all(&temp_path).unwrap();
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+        std::env::set_var("DATABASE_TYPE", "sqlite");
+
+        init_cache_db().unwrap();
+        let conn = rusqlite::Connection::open(get_db_cache_path()).unwrap();
+
+        conn.execute("DELETE FROM model_pricing", []).unwrap();
+        conn.execute(
+            "INSERT INTO model_pricing (
+                model_pattern,
+                input_price_per_million,
+                cached_input_price_per_million,
+                output_price_per_million,
+                priority,
+                enabled,
+                updated_at
+            ) VALUES ('*custom-sonnet*', 9.0, 0.9, 18.0, 1, 1, ?1)",
+            [chrono::Utc::now().to_rfc3339()],
+        ).unwrap();
+
+        let cost = estimate_cost("custom-sonnet-2026", 1_000_000, 200_000, 500_000).unwrap();
+        assert!((cost - 16.38).abs() < 1e-6);
+
+        let _ = std::fs::remove_dir_all(&temp_path);
     }
 
     #[test]
