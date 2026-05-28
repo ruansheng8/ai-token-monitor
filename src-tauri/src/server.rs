@@ -6,7 +6,7 @@ use axum::{
 };
 
 use crate::db::{
-    get_aggregated_metrics_from_cache, start_background_scan, get_scan_status,
+    get_aggregated_metrics_from_cache, get_pg_aggregated_metrics, start_background_scan, get_scan_status,
     get_sessions_paginated, get_pg_sessions_paginated,
 };
 
@@ -93,7 +93,13 @@ pub async fn handle_metrics(
     let start_date = params.get("start_date").cloned();
     let end_date = params.get("end_date").cloned();
     match tokio::task::spawn_blocking(move || {
-        get_aggregated_metrics_from_cache(source.as_deref(), start_date.as_deref(), end_date.as_deref())
+        let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
+        if db_type.to_lowercase() == "postgres" {
+            get_pg_aggregated_metrics(source.as_deref(), start_date.as_deref(), end_date.as_deref())
+                .map_err(|e| rusqlite::Error::ToSqlConversionFailure(Box::new(std::io::Error::new(std::io::ErrorKind::Other, e))))
+        } else {
+            get_aggregated_metrics_from_cache(source.as_deref(), start_date.as_deref(), end_date.as_deref())
+        }
     })
     .await
     {
@@ -458,25 +464,20 @@ pub async fn handle_config_save(
         let password = req.pg_password.clone().unwrap_or_default();
         let database = req.pg_database.clone().unwrap_or_default();
 
-        if req.db_type.to_lowercase() == "postgres" {
-            set_env_var(&mut lines, "DB_PG_HOST", &host);
-            set_env_var(&mut lines, "DB_PG_PORT", &port);
-            set_env_var(&mut lines, "DB_PG_USER", &user);
-            set_env_var(&mut lines, "DB_PG_PASSWORD", &password);
-            set_env_var(&mut lines, "DB_PG_DATABASE", &database);
-            
+        // 始终保存 PostgreSQL 的配置参数，防止在不同数据库引擎间切换时配置丢失
+        set_env_var(&mut lines, "DB_PG_HOST", &host);
+        set_env_var(&mut lines, "DB_PG_PORT", &port);
+        set_env_var(&mut lines, "DB_PG_USER", &user);
+        set_env_var(&mut lines, "DB_PG_PASSWORD", &password);
+        set_env_var(&mut lines, "DB_PG_DATABASE", &database);
+        
+        if !host.trim().is_empty() {
             let url = format!(
                 "postgresql://{}:{}@{}:{}/{}",
                 user, password, host, port, database
             );
             set_env_var(&mut lines, "DATABASE_URL", &url);
         } else {
-            // 清空 postgres 相关变量以保一致性
-            set_env_var(&mut lines, "DB_PG_HOST", "");
-            set_env_var(&mut lines, "DB_PG_PORT", "");
-            set_env_var(&mut lines, "DB_PG_USER", "");
-            set_env_var(&mut lines, "DB_PG_PASSWORD", "");
-            set_env_var(&mut lines, "DB_PG_DATABASE", "");
             set_env_var(&mut lines, "DATABASE_URL", "");
         }
 

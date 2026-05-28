@@ -974,12 +974,10 @@ pub fn sync_cursor(
             .and_then(|v| v.as_f64())
             .unwrap_or(0.0) / 1000.0;
 
-        let mut last_parsed_idx = -1i64;
         let mut last_mtime = 0.0f64;
         let mut is_new_session = true;
 
-        if let Some((parsed_idx, m)) = session_cache.get(&composer_id) {
-            last_parsed_idx = *parsed_idx;
+        if let Some((_, m)) = session_cache.get(&composer_id) {
             last_mtime = *m;
             is_new_session = false;
         }
@@ -2781,6 +2779,16 @@ pub fn get_pg_aggregated_metrics(
     // 运行 Postgres 数据库迁移以保证表结构最新
     crate::db_adapter::init_postgres_tables(&mut pg_client).map_err(|e| format!("执行 PostgreSQL 数据库迁移失败: {}", e))?;
 
+    // 检测 daily_stats 缓存表是否为空。如果为空，则自动为其触发全量预计算重建，防止首次导入配置后图表无数据
+    let stats_count: i64 = pg_client
+        .query_one("SELECT COUNT(1) FROM daily_stats", &[])
+        .map(|row| row.get::<_, i64>(0))
+        .unwrap_or(0);
+    if stats_count == 0 {
+        println!("[PG 数据自愈] 检测到远程 PostgreSQL 的 daily_stats 缓存表为空，正在后台为您重建大盘预计算缓存...");
+        let _ = rebuild_pg_daily_stats_cache(&mut pg_client);
+    }
+
     let mut conditions_cache = Vec::new();
     let mut params_cache: Vec<String> = Vec::new();
     let mut param_idx_cache = 1;
@@ -2805,7 +2813,6 @@ pub fn get_pg_aggregated_metrics(
         if !end.is_empty() {
             conditions_cache.push(format!("date <= ${}", param_idx_cache));
             params_cache.push(end.to_string());
-            param_idx_cache += 1;
         }
     }
 
@@ -2845,7 +2852,6 @@ pub fn get_pg_aggregated_metrics(
         if !end.is_empty() {
             conditions_raw.push(format!("s.created_at <= ${}", param_idx_raw));
             params_raw.push(format!("{}T23:59:59.999", end));
-            param_idx_raw += 1;
         }
     }
 
