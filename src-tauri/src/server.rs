@@ -274,6 +274,7 @@ pub struct ConfigReq {
     pub pg_database: Option<String>,
     pub device_name: Option<String>,
     pub default_device_name: Option<String>,
+    pub display_currency: Option<String>,
 }
 
 pub async fn handle_config_get() -> impl axum::response::IntoResponse {
@@ -287,6 +288,7 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
         let db_type = std::env::var("DATABASE_TYPE").unwrap_or_else(|_| "sqlite".to_string());
         let sqlite_path = std::env::var("DB_SQLITE_PATH").ok();
         let device_name = std::env::var("DEVICE_NAME").ok();
+        let display_currency = std::env::var("DISPLAY_CURRENCY").ok();
 
         let default_device_name = std::env::var("COMPUTERNAME")
             .or_else(|_| std::env::var("HOSTNAME"))
@@ -323,6 +325,7 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
             pg_database: Some(pg_database),
             device_name,
             default_device_name: Some(default_device_name),
+            display_currency,
         };
 
         Ok::<ConfigReq, String>(resp)
@@ -451,6 +454,7 @@ pub async fn handle_config_save(
         let new_db_type = req.db_type.trim().to_string();
         let new_sqlite_path = req.sqlite_path.clone().unwrap_or_default().trim().to_string();
         let new_device_name = req.device_name.clone().unwrap_or_default().trim().to_string();
+        let new_display_currency = req.display_currency.clone().unwrap_or_else(|| "USD".to_string()).trim().to_string();
 
         let new_pg_host = req.pg_host.clone().unwrap_or_default().trim().to_string();
         let new_pg_port = req.pg_port.clone().unwrap_or_default().trim().to_string();
@@ -508,6 +512,7 @@ pub async fn handle_config_save(
         set_env_var(&mut lines, "DATABASE_TYPE", &new_db_type);
         set_env_var(&mut lines, "DB_SQLITE_PATH", &new_sqlite_path);
         set_env_var(&mut lines, "DEVICE_NAME", &new_device_name);
+        set_env_var(&mut lines, "DISPLAY_CURRENCY", &new_display_currency);
 
         set_env_var(&mut lines, "DB_PG_HOST", &new_pg_host);
         set_env_var(&mut lines, "DB_PG_PORT", &new_pg_port);
@@ -533,6 +538,7 @@ pub async fn handle_config_save(
         std::env::set_var("DATABASE_TYPE", &new_db_type);
         std::env::set_var("DB_SQLITE_PATH", &new_sqlite_path);
         std::env::set_var("DEVICE_NAME", &new_device_name);
+        std::env::set_var("DISPLAY_CURRENCY", &new_display_currency);
         std::env::set_var("DB_PG_HOST", &new_pg_host);
         std::env::set_var("DB_PG_PORT", &new_pg_port);
         std::env::set_var("DB_PG_USER", &new_pg_user);
@@ -644,6 +650,101 @@ pub async fn handle_db_clean() -> impl axum::response::IntoResponse {
         }
         Err(e) => {
             let body = serde_json::json!({ "success": false, "message": format!("内部线程错误: {}", e) });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+pub struct ModelPricingResp {
+    pub rows: Vec<crate::db::ModelPricingRow>,
+    pub display_currency: String,
+}
+
+pub async fn handle_model_pricing_get() -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let rows = crate::db::list_model_pricing_rows()?;
+        let display_currency = std::env::var("DISPLAY_CURRENCY")
+            .unwrap_or_else(|_| "USD".to_string())
+            .to_uppercase();
+        Ok::<_, rusqlite::Error>(ModelPricingResp { rows, display_currency })
+    }).await;
+
+    match result {
+        Ok(Ok(data)) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&data).unwrap()))
+                .unwrap()
+        }
+        _ => Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from("Internal Server Error"))
+            .unwrap(),
+    }
+}
+
+pub async fn handle_model_pricing_save(
+    axum::Json(req): axum::Json<Vec<crate::db::ModelPricingRow>>,
+) -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        crate::db::upsert_model_pricing_rows(&req)?;
+        Ok::<_, rusqlite::Error>(())
+    }).await;
+
+    match result {
+        Ok(Ok(())) => {
+            let body = serde_json::json!({ "success": true, "message": "模型费率配置已成功保存并重新计算历史成本！" });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        _ => {
+            let body = serde_json::json!({ "success": false, "message": "保存模型费率配置失败" });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+    }
+}
+
+pub async fn handle_exchange_rate_refresh() -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(crate::db::get_db_cache_path())?;
+        let now = chrono::Utc::now().to_rfc3339();
+        conn.execute("INSERT OR REPLACE INTO exchange_rates (currency_code, rate_from_usd, updated_at) VALUES ('CNY', 7.24, ?)", [&now])?;
+        conn.execute("INSERT OR REPLACE INTO exchange_rates (currency_code, rate_from_usd, updated_at) VALUES ('JPY', 155.4, ?)", [&now])?;
+        conn.execute("INSERT OR REPLACE INTO exchange_rates (currency_code, rate_from_usd, updated_at) VALUES ('EUR', 0.92, ?)", [&now])?;
+        Ok::<_, rusqlite::Error>(())
+    }).await;
+
+    match result {
+        Ok(Ok(())) => {
+            let body = serde_json::json!({ "success": true, "message": "汇率数据已成功更新为最新模拟汇率（CNY=7.24, JPY=155.4, EUR=0.92）" });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        _ => {
+            let body = serde_json::json!({ "success": false, "message": "刷新汇率数据失败" });
             Response::builder()
                 .status(StatusCode::OK)
                 .header(header::CONTENT_TYPE, "application/json; charset=utf-8")

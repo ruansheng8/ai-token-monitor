@@ -23,8 +23,8 @@ import {
   Terminal,
   Monitor
 } from 'lucide-react';
-
 const DailyTrendChart = lazy(() => import('./components/charts/DailyTrendChart').then((module) => ({ default: module.DailyTrendChart })));
+const ProjectTrendChart = lazy(() => import('./components/charts/ProjectTrendChart').then((module) => ({ default: module.ProjectTrendChart })));
 const SourceTrendChart = lazy(() => import('./components/charts/SourceTrendChart').then((module) => ({ default: module.SourceTrendChart })));
 const PerformanceChart = lazy(() => import('./components/charts/PerformanceChart').then((module) => ({ default: module.PerformanceChart })));
 const CalendarHeatmap = lazy(() => import('./components/charts/CalendarHeatmap').then((module) => ({ default: module.CalendarHeatmap })));
@@ -148,6 +148,32 @@ interface PerformanceTrend {
   avg_tps: number;
 }
 
+interface ProjectTrendItem {
+  date: string;
+  project_name: string;
+  tokens: number;
+  cost_usd: number;
+}
+
+interface ProjectRankingItem {
+  project_name: string;
+  project_path: string;
+  total_tokens: number;
+  total_cost_usd: number;
+  sessions_count: number;
+}
+
+interface ModelPricingRow {
+  id?: number;
+  model_pattern: string;
+  input_price_per_million: number;
+  cached_input_price_per_million: number;
+  output_price_per_million: number;
+  priority: number;
+  enabled: boolean;
+  updated_at: string;
+}
+
 interface AggregatedMetrics {
   totals: Totals;
   daily_trends: DailyTrend[];
@@ -158,6 +184,11 @@ interface AggregatedMetrics {
   device_trends: DeviceTrendItem[];
   model_performance: ModelPerformance[];
   performance_trends: PerformanceTrend[];
+  project_trends: ProjectTrendItem[];
+  project_rankings: ProjectRankingItem[];
+  display_currency: string;
+  usd_exchange_rate: number;
+  exchange_rate_updated_at: string;
 }
 
 // 获取指定时间区间的起止日期（格式：YYYY-MM-DD）
@@ -234,6 +265,19 @@ const exportToCSV = (sessions: SessionItem[]) => {
 
 export default function App() {
   const [data, setData] = useState<AggregatedMetrics | null>(null);
+
+  // 标签页切换状态
+  const [activeTab, setActiveTab] = useState<'source' | 'pricing' | 'optimize'>('source');
+
+  // 多币种展示状态
+  const [displayCurrency, setDisplayCurrency] = useState('USD');
+  const [usdExchangeRate, setUsdExchangeRate] = useState(1.0);
+  const [exchangeRateUpdatedAt, setExchangeRateUpdatedAt] = useState('');
+
+  // 费率列表状态
+  const [modelPricingRows, setModelPricingRows] = useState<ModelPricingRow[]>([]);
+  const [pricingLoading, setPricingLoading] = useState(false);
+  const [pricingMessage, setPricingMessage] = useState<{ success: boolean; text: string } | null>(null);
   const [sessionsData, setSessionsData] = useState<{ items: SessionItem[]; total: number } | null>(null);
   const [sessionsLoading, setSessionsLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -347,7 +391,30 @@ export default function App() {
           console.error("加载数据源配置失败", e);
         }
       };
+
+      const loadPricing = async () => {
+        setPricingLoading(true);
+        try {
+          const res = await fetch(`/api/model-pricing?t=${Date.now()}`);
+          if (res.ok) {
+            const pricingData = await res.json();
+            if (pricingData.rows) {
+              setModelPricingRows(pricingData.rows);
+            }
+            if (pricingData.display_currency) {
+              setDisplayCurrency(pricingData.display_currency);
+            }
+          }
+        } catch (e) {
+          console.error("加载模型费率配置失败", e);
+        } finally {
+          setPricingLoading(false);
+        }
+      };
+
       loadConfig();
+      loadPricing();
+      setActiveTab('source');
     }
   }, [isConfigOpen]);
 
@@ -381,6 +448,36 @@ export default function App() {
   useEffect(() => {
     setCurrentPage(1);
   }, [searchKeyword, hideZero, sortField, sortOrder, pageSize, source]);
+
+  // 格式化货币，支持多币种和汇率换算
+  const formatCurrency = (valUsd: number) => {
+    const rate = usdExchangeRate || 1.0;
+    const val = valUsd * rate;
+    let symbol = '$';
+    switch (displayCurrency) {
+      case 'CNY':
+        symbol = '￥';
+        break;
+      case 'JPY':
+        symbol = '¥';
+        break;
+      case 'EUR':
+        symbol = '€';
+        break;
+      default:
+        symbol = '$';
+    }
+    
+    if (val === 0) return `${symbol}0.00`;
+    
+    if (val < 0.01) {
+      return `${symbol}${val.toFixed(6)}`;
+    } else if (val < 1) {
+      return `${symbol}${val.toFixed(4)}`;
+    } else {
+      return `${symbol}${val.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+  };
 
   // 精确数字格式化（带千分位）
   const formatPreciseNum = (num: number) => new Intl.NumberFormat('zh-CN').format(num || 0);
@@ -515,6 +612,15 @@ export default function App() {
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const result: AggregatedMetrics = await readJsonResponse(response);
       setData(result);
+      if (result.display_currency) {
+        setDisplayCurrency(result.display_currency);
+      }
+      if (result.usd_exchange_rate !== undefined) {
+        setUsdExchangeRate(result.usd_exchange_rate);
+      }
+      if (result.exchange_rate_updated_at) {
+        setExchangeRateUpdatedAt(result.exchange_rate_updated_at);
+      }
       const now = new Date();
       setLastUpdate(now.toTimeString().split(' ')[0]);
     } catch (error: any) {
@@ -1038,7 +1144,21 @@ export default function App() {
         )}
 
         {/* KPI 看板 */}
-        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+        <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 gap-4 animate-fade-in">
+
+          {/* 估算消费额 */}
+          <div className="kpi-card kpi-orange glass-card p-3.5 flex justify-between items-center group">
+            <div className="flex flex-col">
+              <span className="text-xs text-text-secondary font-medium mb-0.5">估算消费额 ({displayCurrency})</span>
+              <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? `USD $${totals.total_cost.toFixed(6)}` : '0'}>
+                {totals ? formatCurrency(totals.total_cost) : '$0.00'}
+              </h2>
+              <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Estimated Cost</span>
+            </div>
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-orange/15 text-neon-orange border border-neon-orange/30 group-hover:scale-110 transition-transform duration-300">
+              <Globe className="w-5 h-5" />
+            </div>
+          </div>
 
           {/* 总消耗 */}
           <div className="kpi-card kpi-blue glass-card p-3.5 flex justify-between items-center group">
@@ -1205,6 +1325,77 @@ export default function App() {
                 )
               )}
             </Suspense>
+          </div>
+        </section>
+
+        {/* 项目维度消耗分析 */}
+        <section className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-6 animate-fade-in">
+          {/* 项目消耗大盘 */}
+          <div className="chart-section glass-card p-4 sm:p-5 flex flex-col gap-4">
+            <div className="pb-3 border-b border-card-border">
+              <h2 className="text-sm font-semibold text-text-primary">项目消耗大盘走势 (Token 折线图)</h2>
+            </div>
+            <div className="w-full">
+              {data?.project_trends && data.project_trends.length > 0 ? (
+                <ProjectTrendChart
+                  data={data.project_trends}
+                  theme={theme}
+                  displayCurrency={displayCurrency}
+                  exchangeRate={usdExchangeRate}
+                />
+              ) : (
+                <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无项目维度大盘数据</div>
+              )}
+            </div>
+          </div>
+
+          {/* 项目消耗排行榜 */}
+          <div className="glass-card p-4 sm:p-5 flex flex-col gap-4">
+            <div className="pb-3 border-b border-card-border">
+              <h2 className="text-sm font-semibold text-text-primary">项目消耗排行榜 (Top 10)</h2>
+            </div>
+            <div className="flex flex-col gap-3 max-h-[300px] overflow-y-auto pr-1">
+              {data?.project_rankings && data.project_rankings.length > 0 ? (
+                data.project_rankings.map((p, idx) => {
+                  const maxTokens = data.project_rankings[0]?.total_tokens || 1;
+                  const pct = (p.total_tokens / maxTokens) * 100;
+                  return (
+                    <div key={p.project_name} className="flex flex-col gap-1.5 group">
+                      <div className="flex justify-between items-center text-xs">
+                        <span className="font-semibold text-text-primary flex items-center gap-1.5 truncate max-w-[180px]">
+                          <span className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold ${
+                            idx === 0 ? 'bg-amber-500 text-white' :
+                            idx === 1 ? 'bg-slate-400 text-white' :
+                            idx === 2 ? 'bg-amber-700 text-white' :
+                            'bg-slate-200/50 dark:bg-white/5 text-text-secondary'
+                          }`}>
+                            {idx + 1}
+                          </span>
+                          <span className="truncate" title={p.project_name}>{p.project_name}</span>
+                        </span>
+                        <div className="flex items-center gap-3 font-mono text-[10px] text-text-secondary">
+                          <span title={`${formatPreciseNum(p.total_tokens)} Tokens`}>{formatNum(p.total_tokens)} Tokens</span>
+                          <span className="font-semibold text-neon-orange">{formatCurrency(p.total_cost_usd)}</span>
+                        </div>
+                      </div>
+                      <div className="h-2 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
+                        <div
+                          className="h-full rounded-full bg-gradient-to-r from-neon-blue to-neon-teal shadow-[0_0_8px_rgba(37,99,235,0.4)] transition-all duration-1000"
+                          style={{ width: `${pct}%` }}
+                        ></div>
+                      </div>
+                      {p.project_path && (
+                        <span className="text-[9px] text-text-muted truncate font-mono hidden group-hover:block transition-all max-w-[320px]">
+                          路径: {p.project_path}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="text-center py-6 text-text-muted italic">暂无项目排行数据</div>
+              )}
+            </div>
           </div>
         </section>
 
@@ -1500,12 +1691,15 @@ export default function App() {
                         <td className="font-mono text-right py-3" title={formatPreciseNum(s.cached)}>{formatNum(s.cached)}</td>
                         <td className="font-mono text-right py-3" title={formatPreciseNum(s.thinking)}>{formatNum(s.thinking)}</td>
                         <td className="font-mono text-right font-bold text-neon-cyan py-3" title={formatPreciseNum(totalTokens)}>{formatNum(totalTokens)}</td>
+                        <td className="font-mono text-right font-bold text-neon-orange py-3" title={`USD $${s.cost_usd.toFixed(6)}`}>
+                          {formatCurrency(s.cost_usd)}
+                        </td>
                       </tr>
                     );
                   })
                 ) : (
                   <tr>
-                    <td colSpan={9} className="text-center py-10 text-text-muted italic">
+                    <td colSpan={10} className="text-center py-10 text-text-muted italic">
                       没有符合条件的会话记录
                     </td>
                   </tr>
@@ -1793,20 +1987,21 @@ export default function App() {
       {/* 数据库数据源配置弹窗 */}
       {isConfigOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="relative w-full max-w-lg rounded-3xl border border-card-border bg-bg-secondary/95 dark:bg-[#0f192b]/95 backdrop-blur-xl p-6 text-text-primary shadow-2xl overflow-hidden shadow-neon-cyan/5">
+          <div className="relative w-full max-w-2xl rounded-3xl border border-card-border bg-bg-secondary/95 dark:bg-[#0f192b]/95 backdrop-blur-xl p-6 text-text-primary shadow-2xl overflow-hidden shadow-neon-cyan/5 transition-all duration-300">
             {/* 装饰性背景光效 */}
             <div className="absolute -top-24 -left-24 w-48 h-48 bg-neon-cyan/20 rounded-full blur-3xl pointer-events-none"></div>
             <div className="absolute -bottom-24 -right-24 w-48 h-48 bg-neon-purple/20 rounded-full blur-3xl pointer-events-none"></div>
 
-            <div className="flex justify-between items-center pb-4 border-b border-card-border mb-5 relative z-10">
+            <div className="flex justify-between items-center pb-4 border-b border-card-border mb-4 relative z-10">
               <h2 className="text-lg font-bold flex items-center gap-2">
                 <Settings className="w-5 h-5 text-neon-cyan animate-spin-slow" />
-                <span className="bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent">系统数据源配置</span>
+                <span className="bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent">智业 AI 治理配置大厅</span>
               </h2>
               <button
                 onClick={() => {
                   setIsConfigOpen(false);
                   setConfigMessage(null);
+                  setPricingMessage(null);
                 }}
                 className="w-8 h-8 rounded-full flex items-center justify-center bg-bg-secondary/60 dark:bg-white/5 hover:bg-bg-secondary dark:hover:bg-white/10 text-text-secondary hover:text-text-primary transition-all cursor-pointer border border-card-border"
               >
@@ -1814,225 +2009,510 @@ export default function App() {
               </button>
             </div>
 
-            <div className="space-y-5 relative z-10">
-              {/* 设备名称配置 */}
-              <div className="flex flex-col gap-2 animate-fade-in">
-                <label className="text-xs font-semibold text-text-secondary">💻 当前设备名称 (Device Name)</label>
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={deviceName}
-                    onChange={(e) => setDeviceName(e.target.value)}
-                    placeholder={`例如: Work-Laptop (建议值: ${defaultDeviceName})`}
-                    className="flex-1 bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setDeviceName(defaultDeviceName)}
-                    className="px-3 rounded-xl border border-card-border text-[11px] font-semibold text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 bg-bg-secondary/40 dark:bg-white/5 transition-all cursor-pointer"
-                  >
-                    填入建议值
-                  </button>
-                </div>
-                <p className="text-[10px] text-text-muted leading-relaxed">
-                  * 用于多设备数据同步时区分用量。如果留空，系统启动时将拦截大盘并提示配置。
-                </p>
-              </div>
+            {/* 标签页切换 */}
+            <div className="flex border-b border-card-border mb-5 relative z-10">
+              <button
+                type="button"
+                onClick={() => setActiveTab('source')}
+                className={`flex-1 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'source'
+                    ? 'border-neon-cyan text-neon-cyan'
+                    : 'border-transparent text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                🖥️ 数据源与设备名
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('pricing')}
+                className={`flex-1 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'pricing'
+                    ? 'border-neon-purple text-neon-purple'
+                    : 'border-transparent text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                💵 汇率与模型费率
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('optimize')}
+                className={`flex-1 py-2 text-xs font-bold border-b-2 transition-all cursor-pointer ${
+                  activeTab === 'optimize'
+                    ? 'border-neon-pink text-neon-pink'
+                    : 'border-transparent text-text-secondary hover:text-text-primary'
+                }`}
+              >
+                ⚡ 维护与瘦身
+              </button>
+            </div>
 
-              <div className="flex flex-col gap-2">
-                <label className="text-xs font-semibold text-text-secondary">🔌 数据库类型 (Database Engine)</label>
-                <div className="grid grid-cols-2 gap-3">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDbType('sqlite');
-                      setConfigMessage(null);
-                    }}
-                    className={`py-3 rounded-xl border text-xs font-bold transition-all duration-300 cursor-pointer text-center ${
-                      dbType === 'sqlite'
-                        ? 'bg-neon-cyan/15 border-neon-cyan text-neon-cyan shadow-[0_0_10px_rgba(6,182,212,0.15)]'
-                        : 'bg-bg-secondary/40 dark:bg-white/3 border border-card-border text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 hover:bg-bg-secondary/80'
-                    }`}
-                  >
-                    SQLite (本地嵌入式)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setDbType('postgres');
-                      setConfigMessage(null);
-                    }}
-                    className={`py-3 rounded-xl border text-xs font-bold transition-all duration-300 cursor-pointer text-center ${
-                      dbType === 'postgres'
-                        ? 'bg-neon-purple/15 border-neon-purple text-neon-purple shadow-[0_0_10px_rgba(168,85,247,0.15)]'
-                        : 'bg-bg-secondary/40 dark:bg-white/3 border border-card-border text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 hover:bg-bg-secondary/80'
-                    }`}
-                  >
-                    PostgreSQL (远程数据库)
-                  </button>
-                </div>
-              </div>
-
-              {dbType === 'sqlite' ? (
-                <div className="flex flex-col gap-2 animate-fade-in">
-                  <label className="text-xs font-semibold text-text-secondary">📂 自定义数据库物理路径</label>
-                  <input
-                    type="text"
-                    value={sqlitePath}
-                    onChange={(e) => setSqlitePath(e.target.value)}
-                    placeholder="请输入绝对路径，例如 D:\data\stats.db"
-                    className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-3 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
-                  />
-                  <p className="text-[10px] text-text-muted leading-relaxed">
-                    * 默认路径：<code className="bg-bg-secondary dark:bg-black/30 px-1.5 py-0.5 rounded text-neon-cyan font-mono">USERPROFILE\.ai_token_monitor\token_stats.db</code>。如果留空或使用默认位置，系统会自动管理。若修改为新路径，系统将自动在该目录下创建表。
-                  </p>
-                </div>
-              ) : (
-                <div className="flex flex-col gap-3.5 animate-fade-in text-left">
-                  {/* 主机与端口并排 */}
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="col-span-2 flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-text-secondary">🖥️ 主机地址 (Host)</label>
+            <div className="space-y-5 relative z-10 max-h-[500px] overflow-y-auto pr-1">
+              {activeTab === 'source' && (
+                <div className="space-y-5 animate-fade-in">
+                  {/* 设备名称配置 */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-semibold text-text-secondary">💻 当前设备名称 (Device Name)</label>
+                    <div className="flex gap-2">
                       <input
                         type="text"
-                        value={pgHost}
-                        onChange={(e) => setPgHost(e.target.value)}
-                        placeholder="localhost 或 IP 地址"
-                        className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                        value={deviceName}
+                        onChange={(e) => setDeviceName(e.target.value)}
+                        placeholder={`例如: Work-Laptop (建议值: ${defaultDeviceName})`}
+                        className="flex-1 bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
                       />
+                      <button
+                        type="button"
+                        onClick={() => setDeviceName(defaultDeviceName)}
+                        className="px-3 rounded-xl border border-card-border text-[11px] font-semibold text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 bg-bg-secondary/40 dark:bg-white/5 transition-all cursor-pointer animate-fade-in"
+                      >
+                        填入建议值
+                      </button>
                     </div>
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-text-secondary">🔌 端口 (Port)</label>
-                      <input
-                        type="text"
-                        value={pgPort}
-                        onChange={(e) => setPgPort(e.target.value)}
-                        placeholder="5432"
-                        className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
-                      />
+                    <p className="text-[10px] text-text-muted leading-relaxed">
+                      * 用于多设备数据同步时区分用量。如果留空，系统启动时将拦截大盘并提示配置。
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-semibold text-text-secondary">🔌 数据库类型 (Database Engine)</label>
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDbType('sqlite');
+                          setConfigMessage(null);
+                        }}
+                        className={`py-3 rounded-xl border text-xs font-bold transition-all duration-300 cursor-pointer text-center ${
+                          dbType === 'sqlite'
+                            ? 'bg-neon-cyan/15 border-neon-cyan text-neon-cyan shadow-[0_0_10px_rgba(6,182,212,0.15)]'
+                            : 'bg-bg-secondary/40 dark:bg-white/3 border border-card-border text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 hover:bg-bg-secondary/80'
+                        }`}
+                      >
+                        SQLite (本地嵌入式)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDbType('postgres');
+                          setConfigMessage(null);
+                        }}
+                        className={`py-3 rounded-xl border text-xs font-bold transition-all duration-300 cursor-pointer text-center ${
+                          dbType === 'postgres'
+                            ? 'bg-neon-purple/15 border-neon-purple text-neon-purple shadow-[0_0_10px_rgba(168,85,247,0.15)]'
+                            : 'bg-bg-secondary/40 dark:bg-white/3 border border-card-border text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 hover:bg-bg-secondary/80'
+                        }`}
+                      >
+                        PostgreSQL (远程数据库)
+                      </button>
                     </div>
                   </div>
 
-                  {/* 用户名与密码并排 */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-text-secondary">👤 用户名 (Username)</label>
+                  {dbType === 'sqlite' ? (
+                    <div className="flex flex-col gap-2 animate-fade-in text-left">
+                      <label className="text-xs font-semibold text-text-secondary">📂 自定义数据库物理路径</label>
                       <input
                         type="text"
-                        value={pgUser}
-                        onChange={(e) => setPgUser(e.target.value)}
-                        placeholder="postgres"
-                        className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                        value={sqlitePath}
+                        onChange={(e) => setSqlitePath(e.target.value)}
+                        placeholder="请输入绝对路径，例如 D:\\data\\stats.db"
+                        className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-3 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
                       />
+                      <p className="text-[10px] text-text-muted leading-relaxed">
+                        * 默认路径：<code className="bg-bg-secondary dark:bg-black/30 px-1.5 py-0.5 rounded text-neon-cyan font-mono">USERPROFILE\.ai_token_monitor\token_stats.db</code>。如果留空或使用默认位置，系统会自动管理。若修改为新路径，系统将自动在该目录下创建表。
+                      </p>
                     </div>
-                    <div className="flex flex-col gap-1.5">
-                      <label className="text-xs font-semibold text-text-secondary">🔑 密码 (Password)</label>
-                      <div className="relative w-full">
+                  ) : (
+                    <div className="flex flex-col gap-3.5 animate-fade-in text-left">
+                      {/* 主机与端口并排 */}
+                      <div className="grid grid-cols-3 gap-3">
+                        <div className="col-span-2 flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold text-text-secondary">🖥️ 主机地址 (Host)</label>
+                          <input
+                            type="text"
+                            value={pgHost}
+                            onChange={(e) => setPgHost(e.target.value)}
+                            placeholder="localhost 或 IP 地址"
+                            className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold text-text-secondary">🔌 端口 (Port)</label>
+                          <input
+                            type="text"
+                            value={pgPort}
+                            onChange={(e) => setPgPort(e.target.value)}
+                            placeholder="5432"
+                            className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                          />
+                        </div>
+                      </div>
+
+                      {/* 用户名与密码并排 */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold text-text-secondary">👤 用户名 (Username)</label>
+                          <input
+                            type="text"
+                            value={pgUser}
+                            onChange={(e) => setPgUser(e.target.value)}
+                            placeholder="postgres"
+                            className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                          />
+                        </div>
+                        <div className="flex flex-col gap-1.5">
+                          <label className="text-xs font-semibold text-text-secondary">🔑 密码 (Password)</label>
+                          <div className="relative w-full">
+                            <input
+                              type={showPassword ? "text" : "password"}
+                              value={pgPassword}
+                              onChange={(e) => setPgPassword(e.target.value)}
+                              placeholder="数据库密码"
+                              className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl pl-4 pr-10 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              className="absolute right-3 top-2.5 flex items-center justify-center text-xs text-text-muted hover:text-text-primary focus:outline-none bg-transparent border-none cursor-pointer select-none"
+                            >
+                              {showPassword ? "👁️" : "👁️‍Q"}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* 数据库名称 */}
+                      <div className="flex flex-col gap-1.5">
+                        <label className="text-xs font-semibold text-text-secondary">🗄️ 数据库名称 (Database)</label>
                         <input
-                          type={showPassword ? "text" : "password"}
-                          value={pgPassword}
-                          onChange={(e) => setPgPassword(e.target.value)}
-                          placeholder="数据库密码"
-                          className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl pl-4 pr-10 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
+                          type="text"
+                          value={pgDatabase}
+                          onChange={(e) => setPgDatabase(e.target.value)}
+                          placeholder="token_monitor"
+                          className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
                         />
+                      </div>
+                      
+                      <p className="text-[10px] text-text-muted leading-relaxed">
+                        * 连接测试成功后，若对方是新空库，系统会自动初始化 sessions 和 turns 表结构。
+                      </p>
+                    </div>
+                  )}
+
+                  {configMessage && (
+                    <div
+                      className={`p-3 rounded-xl border text-xs leading-relaxed flex gap-2 items-start animate-fade-in ${
+                        configMessage.success
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                      }`}
+                    >
+                      <span className="text-sm">{configMessage.success ? '✅' : '❌'}</span>
+                      <div className="whitespace-pre-wrap font-medium">{configMessage.text}</div>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3 pt-3">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setTestLoading(true);
+                        setConfigMessage(null);
+                        try {
+                          const response = await fetch('/api/config/test', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              db_type: dbType,
+                              sqlite_path: sqlitePath,
+                              pg_host: pgHost,
+                              pg_port: pgPort,
+                              pg_user: pgUser,
+                              pg_password: pgPassword,
+                              pg_database: pgDatabase,
+                            })
+                          });
+                          if (response.ok) {
+                            const res = await response.json();
+                            setConfigMessage({ success: res.success, text: res.message });
+                          } else {
+                            setConfigMessage({ success: false, text: '服务器返回错误，连接测试失败。' });
+                          }
+                        } catch (e: any) {
+                          setConfigMessage({ success: false, text: `网络错误：${e.message}` });
+                        } finally {
+                          setTestLoading(false);
+                        }
+                      }}
+                      disabled={testLoading || saveLoading}
+                      className="py-3 rounded-xl bg-bg-secondary/40 dark:bg-white/5 border border-card-border text-xs font-bold text-text-primary hover:bg-bg-secondary/80 hover:border-neon-cyan/40 hover:text-neon-cyan transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
+                    >
+                      {testLoading ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <span>⚡ 一键测试连接</span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setSaveLoading(true);
+                        setConfigMessage(null);
+                        try {
+                          const response = await fetch('/api/config/save', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              db_type: dbType,
+                              sqlite_path: sqlitePath,
+                              pg_host: pgHost,
+                              pg_port: pgPort,
+                              pg_user: pgUser,
+                              pg_password: pgPassword,
+                              pg_database: pgDatabase,
+                              device_name: deviceName,
+                            })
+                          });
+                          if (response.ok) {
+                            const res = await response.json();
+                            if (res.success) {
+                              setIsConfigOpen(false);
+                              if (res.need_restart) {
+                                if (confirm(`${res.message}\n\n为了使新的数据库配置生效并避免数据冲突，软件需要重新启动。是否立即自动重启软件？`)) {
+                                  try {
+                                    await fetch('/api/app/restart', { method: 'POST' });
+                                  } catch (e) {
+                                    console.error('重启请求失败:', e);
+                                    alert('自动重启失败，请手动关闭并重新打开软件。');
+                                  }
+                                } else {
+                                  alert('配置已保存！新配置将在下次启动软件时生效。');
+                                }
+                              } else {
+                                alert('配置已保存，设备名称修改立即生效，无需重启！');
+                                // 静默重新加载大盘数据
+                                fetchData(source, startDate, endDate);
+                                fetchSessions(1, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
+                              }
+                            } else {
+                              setConfigMessage({ success: false, text: res.message });
+                            }
+                          } else {
+                            setConfigMessage({ success: false, text: '服务器保存失败。' });
+                          }
+                        } catch (e: any) {
+                          setConfigMessage({ success: false, text: `网络保存错误：${e.message}` });
+                        } finally {
+                          setSaveLoading(false);
+                        }
+                      }}
+                      disabled={testLoading || saveLoading}
+                      className="py-3 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple hover:shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105 text-xs font-bold text-white transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
+                    >
+                      {saveLoading ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <span>💾 保存并应用配置</span>
+                      )}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {activeTab === 'pricing' && (
+                <div className="space-y-5 animate-fade-in text-left">
+                  {/* 显示币种设置 */}
+                  <div className="flex flex-col gap-2">
+                    <label className="text-xs font-semibold text-text-secondary">💵 显示币种 (Display Currency)</label>
+                    <select
+                      value={displayCurrency}
+                      onChange={(e) => setDisplayCurrency(e.target.value)}
+                      className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary outline-none focus:border-neon-purple transition-all"
+                    >
+                      <option value="USD">USD ($) - 默认美元</option>
+                      <option value="CNY">CNY (￥) - 人民币 (汇率: 7.24)</option>
+                      <option value="JPY">JPY (¥) - 日元 (汇率: 155.4)</option>
+                      <option value="EUR">EUR (€) - 欧元 (汇率: 0.92)</option>
+                    </select>
+                    <p className="text-[10px] text-text-muted leading-relaxed">
+                      * 汇率根据后台 exchange_rates 本地数据库进行换算。点击保存后，大盘用量将全部切换为选定币种展示。
+                    </p>
+                    {exchangeRateUpdatedAt && (
+                      <p className="text-[9px] text-text-muted leading-relaxed mt-0.5">
+                        * 汇率更新时间: {new Date(exchangeRateUpdatedAt).toLocaleString('zh-CN')}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* 模型费率列表管理 */}
+                  <div className="flex flex-col gap-2">
+                    <div className="flex justify-between items-center">
+                      <label className="text-xs font-semibold text-text-secondary">
+                        🏷️ 模型计费费率表 (USD / 百万 Token) {pricingLoading && <span className="text-[10px] text-neon-purple animate-pulse ml-2">(正在加载最新费率...)</span>}
+                      </label>
+                      <div className="flex gap-2">
                         <button
                           type="button"
-                          onClick={() => setShowPassword(!showPassword)}
-                          className="absolute right-3 top-2 flex items-center justify-center text-xs text-text-muted hover:text-text-primary focus:outline-none bg-transparent border-none cursor-pointer select-none"
+                          onClick={() => {
+                            const newRow = {
+                              model_pattern: 'gpt-4*',
+                              input_price_per_million: 10.0,
+                              cached_input_price_per_million: 5.0,
+                              output_price_per_million: 30.0,
+                              priority: 10,
+                              enabled: true,
+                              updated_at: ''
+                            };
+                            setModelPricingRows([...modelPricingRows, newRow]);
+                          }}
+                          className="px-2.5 py-1 rounded-lg border border-neon-purple/40 text-[10px] font-bold text-neon-purple hover:bg-neon-purple/5 transition-all cursor-pointer"
                         >
-                          {showPassword ? "👁️" : "👁️‍🗨️"}
+                          ➕ 新增规则
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            if (confirm('是否确认恢复默认的模型费率规则？这会清空你当前的自定义修改。')) {
+                              try {
+                                const res = await fetch('/api/exchange-rates/refresh', { method: 'POST' });
+                                if (res.ok) {
+                                  // 重载费率列表
+                                  const pricingRes = await fetch(`/api/model-pricing?t=${Date.now()}`);
+                                  if (pricingRes.ok) {
+                                    const pricingData = await pricingRes.json();
+                                    if (pricingData.rows) {
+                                      setModelPricingRows(pricingData.rows);
+                                      alert('恢复默认计费规则成功！');
+                                    }
+                                  }
+                                }
+                              } catch (e) {
+                                console.error(e);
+                              }
+                            }
+                          }}
+                          className="px-2.5 py-1 rounded-lg border border-card-border text-[10px] font-medium text-text-secondary hover:text-text-primary transition-all cursor-pointer"
+                        >
+                          🔄 恢复默认
                         </button>
                       </div>
                     </div>
+
+                    <div className="border border-card-border rounded-xl overflow-hidden bg-bg-secondary/40 dark:bg-black/20 max-h-[220px] overflow-y-auto">
+                      <table className="w-full text-left text-[11px] border-collapse">
+                        <thead>
+                          <tr className="bg-slate-200/40 dark:bg-white/5 text-text-secondary border-b border-card-border font-bold">
+                            <th className="p-2">匹配规则 (Glob)</th>
+                            <th className="p-2 w-16">输入 ($)</th>
+                            <th className="p-2 w-16">缓存 ($)</th>
+                            <th className="p-2 w-16">输出 ($)</th>
+                            <th className="p-2 w-14">优先级</th>
+                            <th className="p-2 w-12">状态</th>
+                            <th className="p-2 w-10">操作</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {modelPricingRows.length > 0 ? (
+                            modelPricingRows.map((row, idx) => (
+                              <tr key={idx} className="border-b border-card-border/60 hover:bg-slate-200/20 dark:hover:bg-white/3">
+                                <td className="p-1.5">
+                                  <input
+                                    type="text"
+                                    value={row.model_pattern}
+                                    onChange={(e) => {
+                                      const next = [...modelPricingRows];
+                                      next[idx].model_pattern = e.target.value;
+                                      setModelPricingRows(next);
+                                    }}
+                                    className="w-full bg-transparent border-b border-slate-300 dark:border-slate-700 focus:border-neon-purple outline-none p-0.5"
+                                  />
+                                </td>
+                                <td className="p-1.5">
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    value={row.input_price_per_million}
+                                    onChange={(e) => {
+                                      const next = [...modelPricingRows];
+                                      next[idx].input_price_per_million = parseFloat(e.target.value) || 0;
+                                      setModelPricingRows(next);
+                                    }}
+                                    className="w-full bg-transparent border-b border-slate-300 dark:border-slate-700 focus:border-neon-purple outline-none p-0.5 font-mono"
+                                  />
+                                </td>
+                                <td className="p-1.5">
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    value={row.cached_input_price_per_million}
+                                    onChange={(e) => {
+                                      const next = [...modelPricingRows];
+                                      next[idx].cached_input_price_per_million = parseFloat(e.target.value) || 0;
+                                      setModelPricingRows(next);
+                                    }}
+                                    className="w-full bg-transparent border-b border-slate-300 dark:border-slate-700 focus:border-neon-purple outline-none p-0.5 font-mono"
+                                  />
+                                </td>
+                                <td className="p-1.5">
+                                  <input
+                                    type="number"
+                                    step="0.001"
+                                    value={row.output_price_per_million}
+                                    onChange={(e) => {
+                                      const next = [...modelPricingRows];
+                                      next[idx].output_price_per_million = parseFloat(e.target.value) || 0;
+                                      setModelPricingRows(next);
+                                    }}
+                                    className="w-full bg-transparent border-b border-slate-300 dark:border-slate-700 focus:border-neon-purple outline-none p-0.5 font-mono"
+                                  />
+                                </td>
+                                <td className="p-1.5">
+                                  <input
+                                    type="number"
+                                    value={row.priority}
+                                    onChange={(e) => {
+                                      const next = [...modelPricingRows];
+                                      next[idx].priority = parseInt(e.target.value) || 0;
+                                      setModelPricingRows(next);
+                                    }}
+                                    className="w-full bg-transparent border-b border-slate-300 dark:border-slate-700 focus:border-neon-purple outline-none p-0.5 font-mono"
+                                  />
+                                </td>
+                                <td className="p-1.5 text-center">
+                                  <input
+                                    type="checkbox"
+                                    checked={row.enabled}
+                                    onChange={(e) => {
+                                      const next = [...modelPricingRows];
+                                      next[idx].enabled = e.target.checked;
+                                      setModelPricingRows(next);
+                                    }}
+                                    className="cursor-pointer accent-neon-purple"
+                                  />
+                                </td>
+                                <td className="p-1.5 text-center">
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const next = modelPricingRows.filter((_, i) => i !== idx);
+                                      setModelPricingRows(next);
+                                    }}
+                                    className="text-rose-500 hover:text-rose-600 font-bold cursor-pointer text-xs"
+                                  >
+                                    删除
+                                  </button>
+                                </td>
+                              </tr>
+                            ))
+                          ) : (
+                            <tr>
+                              <td colSpan={7} className="text-center py-6 text-text-muted italic">暂无计费规则数据</td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
 
-                  {/* 数据库名称 */}
-                  <div className="flex flex-col gap-1.5">
-                    <label className="text-xs font-semibold text-text-secondary">🗄️ 数据库名称 (Database)</label>
-                    <input
-                      type="text"
-                      value={pgDatabase}
-                      onChange={(e) => setPgDatabase(e.target.value)}
-                      placeholder="token_monitor"
-                      className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-purple focus:shadow-[0_0_10px_rgba(168,85,247,0.25)] transition-all duration-300"
-                    />
-                  </div>
-                  
-                  <p className="text-[10px] text-text-muted leading-relaxed">
-                    * 连接测试成功后，若对方是新空库，系统会自动初始化 sessions 和 turns 表结构。
-                  </p>
-                </div>
-              )}
-
-              {configMessage && (
-                <div
-                  className={`p-3 rounded-xl border text-xs leading-relaxed flex gap-2 items-start animate-fade-in ${
-                    configMessage.success
-                      ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
-                      : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
-                  }`}
-                >
-                  <span className="text-sm">{configMessage.success ? '✅' : '❌'}</span>
-                  <div className="whitespace-pre-wrap font-medium">{configMessage.text}</div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-3 pt-3">
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setTestLoading(true);
-                    setConfigMessage(null);
-                    try {
-                      const response = await fetch(apiUrl('/config/test'), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          db_type: dbType,
-                          sqlite_path: sqlitePath,
-                          pg_host: pgHost,
-                          pg_port: pgPort,
-                          pg_user: pgUser,
-                          pg_password: pgPassword,
-                          pg_database: pgDatabase,
-                        })
-                      });
-                      if (response.ok) {
-                        const res = await readJsonResponse<any>(response);
-                        setConfigMessage({ success: res.success, text: res.message });
-                      } else {
-                        setConfigMessage({ success: false, text: '服务器返回错误，连接测试失败。' });
-                      }
-                    } catch (e: any) {
-                      setConfigMessage({ success: false, text: `网络错误：${e.message}` });
-                    } finally {
-                      setTestLoading(false);
-                    }
-                  }}
-                  disabled={testLoading || saveLoading}
-                  className="py-3 rounded-xl bg-bg-secondary/40 dark:bg-white/5 border border-card-border text-xs font-bold text-text-primary hover:bg-bg-secondary/80 hover:border-neon-cyan/40 hover:text-neon-cyan transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
-                >
-                  {testLoading ? (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <span>⚡ 一键测试连接</span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    setSaveLoading(true);
-                    setConfigMessage(null);
-                    try {
-                      const response = await fetch(apiUrl('/config/save'), {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({
-                          db_type: dbType,
-                          sqlite_path: sqlitePath,
-                          pg_host: pgHost,
-                          pg_port: pgPort,
-                          pg_user: pgUser,
                           pg_password: pgPassword,
                           pg_database: pgDatabase,
                           device_name: deviceName,
@@ -2052,77 +2532,109 @@ export default function App() {
                               }
                             } else {
                               alert('配置已保存！新配置将在下次启动软件时生效。');
+=======
+                  {pricingMessage && (
+                    <div
+                      className={`p-3 rounded-xl border text-xs leading-relaxed flex gap-2 items-start animate-fade-in ${
+                        pricingMessage.success
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          : 'bg-rose-500/10 border-rose-500/30 text-rose-400'
+                      }`}
+                    >
+                      <span className="text-sm">{pricingMessage.success ? '✅' : '❌'}</span>
+                      <div className="whitespace-pre-wrap font-medium">{pricingMessage.text}</div>
+                    </div>
+                  )}
+
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        setSaveLoading(true);
+                        setPricingMessage(null);
+                        try {
+                          // 1. 先保存币种设置 (通过 config/save 提交)
+                          await fetch('/api/config/save', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                              db_type: dbType,
+                              sqlite_path: sqlitePath,
+                              pg_host: pgHost,
+                              pg_port: pgPort,
+                              pg_user: pgUser,
+                              pg_password: pgPassword,
+                              pg_database: pgDatabase,
+                              device_name: deviceName,
+                              display_currency: displayCurrency,
+                            })
+                          });
+
+                          // 2. 保存模型费率
+                          const response = await fetch('/api/model-pricing', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(modelPricingRows)
+                          });
+                          if (response.ok) {
+                            const res = await response.json();
+                            setPricingMessage({ success: res.success, text: res.message });
+                            if (res.success) {
+                              // 重新加载大盘数据以应用最新计费规则
+                              fetchData(source, startDate, endDate);
+                              fetchSessions(1, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
+                              alert('汇率与计费规则配置已成功应用并重新计算历史数据费用！');
+                              setIsConfigOpen(false);
+>>>>>>> feat/project-pricing-scan-fts
                             }
                           } else {
-                            alert('配置已保存，设备名称修改立即生效，无需重启！');
-                            // 静默重新加载大盘数据
-                            fetchData(source, startDate, endDate);
-                            fetchSessions(1, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
+                            setPricingMessage({ success: false, text: '服务器保存费率失败。' });
                           }
-                        } else {
-                          setConfigMessage({ success: false, text: res.message });
+                        } catch (e: any) {
+                          setPricingMessage({ success: false, text: `网络保存错误：${e.message}` });
+                        } finally {
+                          setSaveLoading(false);
                         }
-                      } else {
-                        setConfigMessage({ success: false, text: '服务器保存失败。' });
-                      }
-                    } catch (e: any) {
-                      setConfigMessage({ success: false, text: `网络保存错误：${e.message}` });
-                    } finally {
-                      setSaveLoading(false);
-                    }
-                  }}
-                  disabled={testLoading || saveLoading}
-                  className="py-3 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple hover:shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105 text-xs font-bold text-white transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
-                >
-                  {saveLoading ? (
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  ) : (
-                    <span>💾 保存并应用配置</span>
-                  )}
-                </button>
-              </div>
-
-              {/* 数据库清理与优化瘦身区域 */}
-              <div className="border-t border-card-border pt-4 mt-2 flex flex-col gap-3 relative z-10">
-                <div className="flex flex-col">
-                  <span className="text-xs font-semibold text-text-primary flex items-center gap-1.5">
-                    🧹 数据库维护与空间整理 (Maintenance)
-                  </span>
-                  <span className="text-[10px] text-text-muted mt-0.5">
-                    清除无效的 0 token 对话，删除不含交互的僵尸空会话，并重组物理磁盘空间碎片 (VACUUM)
-                  </span>
-                </div>
-                
-                <button
-                  type="button"
-                  onClick={handleDbClean}
-                  disabled={cleanLoading}
-                  className="w-full py-2.5 rounded-xl border border-card-border text-xs font-bold text-text-secondary hover:text-text-primary hover:border-neon-purple/40 hover:bg-neon-purple/5 transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
-                >
-                  {cleanLoading ? (
-                    <>
-                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-neon-purple" />
-                      <span>正在收紧碎片并清理僵尸会话...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>✨ 一键收紧碎片与深度瘦身</span>
-                    </>
-                  )}
-                </button>
-                
-                {cleanMessage && (
-                  <div className="text-[11px] font-medium p-2.5 rounded-xl bg-bg-secondary border border-card-border text-text-secondary whitespace-pre-line animate-fade-in relative">
-                    <button
-                      onClick={() => setCleanMessage(null)}
-                      className="absolute right-2 top-2 text-[10px] text-text-muted hover:text-text-primary"
+                      }}
+                      disabled={saveLoading}
+                      className="w-48 py-2.5 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple hover:shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105 text-xs font-bold text-white transition-all cursor-pointer flex items-center justify-center gap-2 active:scale-95 disabled:opacity-50"
                     >
-                      ×
+                      {saveLoading ? (
+                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      ) : (
+                        <span>💾 保存并应用费率</span>
+                      )}
                     </button>
-                    {cleanMessage}
                   </div>
-                )}
-              </div>
+                </div>
+              )}
+
+              {activeTab === 'optimize' && (
+                <div className="space-y-5 animate-fade-in text-center py-4">
+                  <div className="flex flex-col items-center gap-2">
+                    <RefreshCw className={`w-8 h-8 text-neon-pink ${cleanLoading ? 'animate-spin' : ''}`} />
+                    <h3 className="text-xs font-semibold text-text-primary">SQLite 本地缓存优化瘦身</h3>
+                    <p className="text-[10px] text-text-muted max-w-[320px] mx-auto leading-relaxed">
+                      本操作将执行 SQLite VACUUM 整理数据库物理空间碎片，重新计算预聚合历史统计，并重建 FTS5 会话索引（Sessions Full-Text Search），极致提升大盘加载与关键字搜索速度！
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={handleDbClean}
+                    disabled={cleanLoading}
+                    className="w-48 mx-auto py-2.5 rounded-xl border border-neon-pink text-xs font-bold text-neon-pink hover:bg-neon-pink/5 hover:shadow-[0_0_10px_rgba(236,72,153,0.15)] active:scale-95 transition-all disabled:opacity-50 cursor-pointer"
+                  >
+                    {cleanLoading ? '正在极致优化中...' : '⚡ 立即极致优化并瘦身'}
+                  </button>
+
+                  {cleanMessage && (
+                    <div className="p-3 rounded-xl border border-card-border bg-bg-secondary/40 text-text-primary text-[11px] font-semibold max-w-[360px] mx-auto whitespace-pre-line leading-relaxed animate-fade-in">
+                      {cleanMessage}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         </div>
