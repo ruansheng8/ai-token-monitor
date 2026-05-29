@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
 import { apiUrl, readJsonResponse } from './lib/api';
-import { ReviewDrawer } from './components/ReviewDrawer';
+import { ReviewPage } from './components/ReviewDrawer';
 import {
   Cpu,
   ArrowDown,
@@ -269,8 +269,8 @@ const exportToCSV = (sessions: SessionItem[]) => {
 export default function App() {
   const [data, setData] = useState<AggregatedMetrics | null>(null);
 
-  // 复盘与建议抽屉状态
-  const [isReviewOpen, setIsReviewOpen] = useState(false);
+  // 模式切换状态：'monitor' = 监控仓表盘，'review' = 复盘全屏页
+  const [activeMode, setActiveMode] = useState<'monitor' | 'review'>('monitor');
 
   // 标签页切换状态
   const [activeTab, setActiveTab] = useState<'source' | 'pricing' | 'optimize'>('source');
@@ -387,6 +387,26 @@ export default function App() {
   const generateReportImage = async () => {
     setIsGeneratingReport(true);
     const originalGetComputedStyle = window.getComputedStyle;
+    const originalCreatePattern = CanvasRenderingContext2D.prototype.createPattern;
+
+    (CanvasRenderingContext2D.prototype as any).createPattern = function(
+      this: CanvasRenderingContext2D,
+      image: CanvasImageSource,
+      repetition: string | null
+    ) {
+      const img = image as any;
+      if (img && (img.width === 0 || img.height === 0)) {
+        try {
+          const emptyCanvas = document.createElement('canvas');
+          emptyCanvas.width = 1;
+          emptyCanvas.height = 1;
+          return originalCreatePattern.call(this, emptyCanvas, repetition);
+        } catch (e) {
+          console.warn('Failed to create fallback pattern for 0-size image', e);
+        }
+      }
+      return originalCreatePattern.call(this, image, repetition);
+    };
 
     const oklabToRgb = (l: number, a: number, b: number, alpha?: number): string => {
       const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
@@ -501,6 +521,12 @@ export default function App() {
         scale: 1.5, // 采用 1.5 倍缩放，兼顾高清重绘的同时，降低大面积绘图的内存压力
         logging: false,
         ignoreElements: (el) => {
+          if (el.tagName.toLowerCase() === 'canvas') {
+            const canvasEl = el as HTMLCanvasElement;
+            if (canvasEl.width === 0 || canvasEl.height === 0) {
+              return true;
+            }
+          }
           return el.classList.contains('no-print');
         }
       });
@@ -511,6 +537,7 @@ export default function App() {
       console.error('Failed to generate report image:', error);
       alert('生成财务报表图片失败，原因: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
+      CanvasRenderingContext2D.prototype.createPattern = originalCreatePattern;
       window.getComputedStyle = originalGetComputedStyle;
       setIsGeneratingReport(false);
     }
@@ -1127,8 +1154,8 @@ export default function App() {
 
       {!appInitializing && !initError && (
         <div className="max-w-[1400px] mx-auto p-4 sm:p-5 flex flex-col gap-4" id="report-container">
-        {/* 头部导航栏 */}
-        <header className="relative z-30 dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-5 py-3 gap-3 no-print">
+          <header className="relative z-30 dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-5 py-3 gap-3 no-print">
+          {/* 左侧：Logo + 切换器 */}
           <div className="flex items-center gap-4">
             <svg className="w-9 h-9" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -1145,91 +1172,120 @@ export default function App() {
               <h1 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">AI Token Monitor</h1>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">Multi-Engine Dashboard</span>
             </div>
-          </div>
-          <div className="flex items-center gap-4">
-            <div className="text-xs text-text-secondary flex items-center gap-2">
-              <span className="w-1.5 h-1.5 bg-neon-green rounded-full shadow-[0_0_8px_var(--color-neon-green)]"></span>
-              数据同步于: <span className="font-mono text-neon-cyan font-semibold">{lastUpdate}</span>
-            </div>
 
-            {/* 数据源选择器 */}
-            <div className="relative">
-              <button
-                onClick={() => setIsSourceDropdownOpen(!isSourceDropdownOpen)}
-                className="flex items-center gap-2 bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-3.5 py-2 text-xs font-semibold text-text-primary outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer h-10 min-w-[170px] justify-between shadow-sm select-none"
-              >
-                <div className="flex items-center gap-2">
-                  {source === 'all' && <Globe className="w-4 h-4 text-neon-cyan" />}
-                  {source === 'antigravity' && <GeminiIcon className="w-4 h-4 text-[#8b5cf6]" />}
-                  {source === 'claude_code' && <ClaudeIcon className="w-4 h-4 text-[#d97757]" />}
-                  {source === 'codex' && <OpenAIIcon className="w-4 h-4 text-[#10a37f]" />}
-                  {source === 'cursor' && <CursorIcon className="w-4 h-4 text-[#00bcd4]" />}
-                  {source === 'trae' && <TraeIcon className="w-4 h-4 text-[#3b82f6]" />}
-                  {source === 'trae_cn' && <TraeIcon className="w-4 h-4 text-[#10b981]" />}
-                  <span>
-                    {source === 'all' && '全部工具 (All)'}
-                    {source === 'antigravity' && 'Antigravity'}
-                    {source === 'claude_code' && 'Claude Code'}
-                    {source === 'codex' && 'Codex CLI'}
-                    {source === 'cursor' && 'Cursor'}
-                    {source === 'trae' && 'Trae'}
-                    {source === 'trae_cn' && 'Trae CN'}
-                  </span>
-                </div>
-                <ChevronDown className={`w-3.5 h-3.5 text-text-secondary transition-transform duration-300 ${isSourceDropdownOpen ? 'rotate-180' : ''}`} />
-              </button>
-
-              {isSourceDropdownOpen && (
-                <>
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setIsSourceDropdownOpen(false)}
-                  ></div>
-                  <div className="absolute left-0 right-0 mt-2 bg-bg-secondary/95 dark:bg-[#0f192b]/95 border border-card-border rounded-xl shadow-[0_10px_35px_rgba(0,0,0,0.35)] backdrop-blur-md z-50 py-1.5 flex flex-col gap-0.5 animate-fade-in">
-                    {[
-                      { value: 'all', label: '全部工具 (All)', icon: <Globe className="w-3.5 h-3.5 text-neon-cyan" /> },
-                      { value: 'antigravity', label: 'Antigravity', icon: <GeminiIcon className="w-3.5 h-3.5 text-[#8b5cf6]" /> },
-                      { value: 'claude_code', label: 'Claude Code', icon: <ClaudeIcon className="w-3.5 h-3.5 text-[#d97757]" /> },
-                      { value: 'codex', label: 'Codex CLI', icon: <OpenAIIcon className="w-3.5 h-3.5 text-[#10a37f]" /> },
-                      { value: 'cursor', label: 'Cursor', icon: <CursorIcon className="w-3.5 h-3.5 text-[#00bcd4]" /> },
-                      { value: 'trae', label: 'Trae', icon: <TraeIcon className="w-3.5 h-3.5 text-[#3b82f6]" /> },
-                      { value: 'trae_cn', label: 'Trae CN', icon: <TraeIcon className="w-3.5 h-3.5 text-[#10b981]" /> },
-                    ].map((opt) => (
-                      <button
-                        key={opt.value}
-                        onClick={() => {
-                          setSource(opt.value as any);
-                          setIsSourceDropdownOpen(false);
-                        }}
-                        className={`flex items-center gap-2.5 px-4 py-2.5 text-xs font-semibold text-left transition-all duration-200 cursor-pointer ${
-                          source === opt.value
-                            ? 'bg-gradient-to-r from-neon-cyan/15 to-neon-purple/10 text-neon-cyan border-l-2 border-neon-cyan'
-                            : 'text-text-secondary hover:text-text-primary hover:bg-white/5 border-l-2 border-transparent'
-                        }`}
-                      >
-                        {opt.icon}
-                        <span>{opt.label}</span>
-                      </button>
-                    ))}
-                  </div>
-                </>
-              )}
-            </div>
-            {/* 复盘与建议按钮 */}
-            <button
-              onClick={() => setIsReviewOpen(true)}
-              className="flex items-center gap-2 h-10 px-4 rounded-xl border transition-all duration-300 hover:scale-105 active:scale-100 cursor-pointer"
+            {/* 监控 / 复盘 药丸形 Tab 切换器 */}
+            <div
+              className="rounded-full border p-1 flex gap-0.5 ml-2"
               style={{
-                background: 'linear-gradient(135deg, rgba(8,145,178,0.12), rgba(124,58,237,0.08))',
-                borderColor: 'rgba(6,182,212,0.35)',
-                color: 'var(--neon-cyan)',
-                boxShadow: '0 2px 12px rgba(6,182,212,0.1)',
+                borderColor: 'rgba(6,182,212,0.25)',
+                background: 'rgba(255,255,255,0.05)',
+                boxShadow: '0 12px 32px rgba(15,23,42,0.06)',
               }}
-              title="AI 使用复盘与建议"
             >
-              <Sparkles className="w-4 h-4" />
-              <span className="text-xs font-semibold">复盘</span>
-            </button>
+              <button
+                id="mode-tab-monitor"
+                onClick={() => setActiveMode('monitor')}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-200 cursor-pointer"
+                style={activeMode === 'monitor' ? {
+                  background: 'linear-gradient(to right, #2563eb, #06b6d4)',
+                  color: '#ffffff',
+                  boxShadow: '0 10px 24px rgba(37,99,235,0.22)',
+                } : { color: 'var(--text-secondary)' }}
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                监控
+              </button>
+              <button
+                id="mode-tab-review"
+                onClick={() => setActiveMode('review')}
+                className="flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-bold transition-all duration-200 cursor-pointer"
+                style={activeMode === 'review' ? {
+                  background: 'linear-gradient(to right, #0891b2, #7c3aed)',
+                  color: '#ffffff',
+                  boxShadow: '0 10px 24px rgba(124,58,237,0.22)',
+                } : { color: 'var(--text-secondary)' }}
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                复盘
+              </button>
+            </div>
+          </div>
+
+          {/* 右侧控件区 */}
+          <div className="flex items-center gap-4">
+            {/* 监控模式专属控件 */}
+            {activeMode === 'monitor' && (
+              <>
+                <div className="text-xs text-text-secondary flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 bg-neon-green rounded-full shadow-[0_0_8px_var(--color-neon-green)]"></span>
+                  数据同步于: <span className="font-mono text-neon-cyan font-semibold">{lastUpdate}</span>
+                </div>
+
+                {/* 数据源选择器 */}
+                <div className="relative">
+                  <button
+                    onClick={() => setIsSourceDropdownOpen(!isSourceDropdownOpen)}
+                    className="flex items-center gap-2 bg-bg-secondary/60 dark:bg-[#0b1528] border border-card-border rounded-xl px-3.5 py-2 text-xs font-semibold text-text-primary outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] hover:border-neon-cyan/50 transition-all duration-300 cursor-pointer h-10 min-w-[170px] justify-between shadow-sm select-none"
+                  >
+                    <div className="flex items-center gap-2">
+                      {source === 'all' && <Globe className="w-4 h-4 text-neon-cyan" />}
+                      {source === 'antigravity' && <GeminiIcon className="w-4 h-4 text-[#8b5cf6]" />}
+                      {source === 'claude_code' && <ClaudeIcon className="w-4 h-4 text-[#d97757]" />}
+                      {source === 'codex' && <OpenAIIcon className="w-4 h-4 text-[#10a37f]" />}
+                      {source === 'cursor' && <CursorIcon className="w-4 h-4 text-[#00bcd4]" />}
+                      {source === 'trae' && <TraeIcon className="w-4 h-4 text-[#3b82f6]" />}
+                      {source === 'trae_cn' && <TraeIcon className="w-4 h-4 text-[#10b981]" />}
+                      <span>
+                        {source === 'all' && '全部工具 (All)'}
+                        {source === 'antigravity' && 'Antigravity'}
+                        {source === 'claude_code' && 'Claude Code'}
+                        {source === 'codex' && 'Codex CLI'}
+                        {source === 'cursor' && 'Cursor'}
+                        {source === 'trae' && 'Trae'}
+                        {source === 'trae_cn' && 'Trae CN'}
+                      </span>
+                    </div>
+                    <ChevronDown className={`w-3.5 h-3.5 text-text-secondary transition-transform duration-300 ${isSourceDropdownOpen ? 'rotate-180' : ''}`} />
+                  </button>
+
+                  {isSourceDropdownOpen && (
+                    <>
+                      <div
+                        className="fixed inset-0 z-40"
+                        onClick={() => setIsSourceDropdownOpen(false)}
+                      ></div>
+                      <div className="absolute left-0 right-0 mt-2 bg-bg-secondary/95 dark:bg-[#0f192b]/95 border border-card-border rounded-xl shadow-[0_10px_35px_rgba(0,0,0,0.35)] backdrop-blur-md z-50 py-1.5 flex flex-col gap-0.5 animate-fade-in">
+                        {[
+                          { value: 'all', label: '全部工具 (All)', icon: <Globe className="w-3.5 h-3.5 text-neon-cyan" /> },
+                          { value: 'antigravity', label: 'Antigravity', icon: <GeminiIcon className="w-3.5 h-3.5 text-[#8b5cf6]" /> },
+                          { value: 'claude_code', label: 'Claude Code', icon: <ClaudeIcon className="w-3.5 h-3.5 text-[#d97757]" /> },
+                          { value: 'codex', label: 'Codex CLI', icon: <OpenAIIcon className="w-3.5 h-3.5 text-[#10a37f]" /> },
+                          { value: 'cursor', label: 'Cursor', icon: <CursorIcon className="w-3.5 h-3.5 text-[#00bcd4]" /> },
+                          { value: 'trae', label: 'Trae', icon: <TraeIcon className="w-3.5 h-3.5 text-[#3b82f6]" /> },
+                          { value: 'trae_cn', label: 'Trae CN', icon: <TraeIcon className="w-3.5 h-3.5 text-[#10b981]" /> },
+                        ].map((opt) => (
+                          <button
+                            key={opt.value}
+                            onClick={() => {
+                              setSource(opt.value as any);
+                              setIsSourceDropdownOpen(false);
+                            }}
+                            className={`flex items-center gap-2.5 px-4 py-2.5 text-xs font-semibold text-left transition-all duration-200 cursor-pointer ${
+                              source === opt.value
+                                ? 'bg-gradient-to-r from-neon-cyan/15 to-neon-purple/10 text-neon-cyan border-l-2 border-neon-cyan'
+                                : 'text-text-secondary hover:text-text-primary hover:bg-white/5 border-l-2 border-transparent'
+                            }`}
+                          >
+                            {opt.icon}
+                            <span>{opt.label}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
 
             {/* 数据库数据源配置按钮 */}
             <button
@@ -1249,21 +1305,67 @@ export default function App() {
               {theme === 'light' ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
             </button>
 
-            <button
-              onClick={handleSyncClick}
-              disabled={loading || scanStatus?.is_scanning}
-              className={`flex items-center gap-2 text-sm font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:scale-105 active:scale-100 hover:shadow-neon-cyan/35 text-white px-5 rounded-xl transition-all duration-300 h-10 ${
-                loading || scanStatus?.is_scanning ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
-              }`}
-            >
-              <RefreshCw className={`w-4 h-4 ${refreshSpin || scanStatus?.is_scanning ? 'animate-spin' : ''}`} />
-              <span>{scanStatus?.is_scanning ? '正在同步...' : '同步刷新'}</span>
-            </button>
+            {/* 同步刷新按钮 - 仅监控模式 */}
+            {activeMode === 'monitor' && (
+              <button
+                onClick={handleSyncClick}
+                disabled={loading || scanStatus?.is_scanning}
+                className={`flex items-center gap-2 text-sm font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:scale-105 active:scale-100 hover:shadow-neon-cyan/35 text-white px-5 rounded-xl transition-all duration-300 h-10 ${
+                  loading || scanStatus?.is_scanning ? 'opacity-70 cursor-not-allowed' : 'cursor-pointer'
+                }`}
+              >
+                <RefreshCw className={`w-4 h-4 ${refreshSpin || scanStatus?.is_scanning ? 'animate-spin' : ''}`} />
+                <span>{scanStatus?.is_scanning ? '正在同步...' : '同步刷新'}</span>
+              </button>
+            )}
           </div>
         </header>
 
-        {/* 时间筛选控制栏 */}
-        <section className="glass-card p-3 flex flex-col md:flex-row justify-between items-center gap-3 border border-card-border bg-bg-secondary/20 shadow-sm backdrop-blur-md rounded-[24px] no-print">
+        {activeMode === 'review' ? (
+          <ReviewPage
+            metrics={data ? {
+              timeRange: timeRange === 'all' ? '全部时间' : timeRange === 'today' ? '今天' : timeRange === 'week' ? '近7天' : timeRange === '30days' ? '近30天' : timeRange === 'month' ? '本月' : timeRange === 'quarter' ? '本季度' : `${startDate} ~ ${endDate}`,
+              totalTokens: data.totals.total_tokens,
+              totalCostUsd: data.totals.total_cost,
+              totalSessions: data.totals.total_sessions,
+              cacheHitRate: data.totals.cache_hit_rate,
+              thinkingRatio: data.totals.thinking_ratio,
+              sourceBreakdown: data.source_trends.length > 0
+                ? JSON.stringify(
+                    Object.entries(
+                      data.source_trends.reduce((acc: Record<string, number>, item) => {
+                        acc[item.source] = (acc[item.source] || 0) + item.tokens;
+                        return acc;
+                      }, {})
+                    ).map(([source, tokens]) => ({ source, tokens })).slice(0, 8)
+                  )
+                : undefined,
+              modelDistribution: data.model_distribution.length > 0
+                ? JSON.stringify(
+                    data.model_distribution.slice(0, 6).map(m => ({
+                      model: m.model,
+                      total_tokens: m.total_tokens,
+                    }))
+                  )
+                : undefined,
+              dailyTrendSummary: data.daily_trends.length > 0
+                ? JSON.stringify(
+                    data.daily_trends.slice(-7).map(d => ({
+                      date: d.date,
+                      tokens: d.input + d.output + d.cached + d.thinking,
+                      sessions: d.sessions,
+                    }))
+                  )
+                : undefined,
+              availableSources: data.source_trends.length > 0
+                ? Array.from(new Set(data.source_trends.map((item) => item.source)))
+                : [],
+            } : null}
+          />
+        ) : (
+          <>
+            {/* 时间筛选控制栏 */}
+            <section className="glass-card p-3 flex flex-col md:flex-row justify-between items-center gap-3 border border-card-border bg-bg-secondary/20 shadow-sm backdrop-blur-md rounded-[24px] no-print">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs font-semibold text-text-secondary mr-2">🕒 时间区间：</span>
             <div className="pill-container">
@@ -1977,8 +2079,10 @@ export default function App() {
             </Suspense>
           </section>
         )}
-      </div>
-      )}
+      </>
+    )}
+  </div>
+)}
 
       {/* 启动连接错误闪屏 */}
       {initError && (
@@ -3055,49 +3159,6 @@ export default function App() {
           </div>
         </div>
       )}
-      {/* 使用复盘与建议抽屉 */}
-      <ReviewDrawer
-        isOpen={isReviewOpen}
-        onClose={() => setIsReviewOpen(false)}
-        metrics={data ? {
-          timeRange: timeRange === 'all' ? '全部时间' : timeRange === 'today' ? '今天' : timeRange === 'week' ? '近7天' : timeRange === '30days' ? '近30天' : timeRange === 'month' ? '本月' : timeRange === 'quarter' ? '本季度' : `${startDate} ~ ${endDate}`,
-          totalTokens: data.totals.total_tokens,
-          totalCostUsd: data.totals.total_cost,
-          totalSessions: data.totals.total_sessions,
-          cacheHitRate: data.totals.cache_hit_rate,
-          thinkingRatio: data.totals.thinking_ratio,
-          sourceBreakdown: data.source_trends.length > 0
-            ? JSON.stringify(
-                Object.entries(
-                  data.source_trends.reduce((acc: Record<string, number>, item) => {
-                    acc[item.source] = (acc[item.source] || 0) + item.tokens;
-                    return acc;
-                  }, {})
-                ).map(([source, tokens]) => ({ source, tokens })).slice(0, 8)
-              )
-            : undefined,
-          modelDistribution: data.model_distribution.length > 0
-            ? JSON.stringify(
-                data.model_distribution.slice(0, 6).map(m => ({
-                  model: m.model,
-                  total_tokens: m.total_tokens,
-                }))
-              )
-            : undefined,
-          dailyTrendSummary: data.daily_trends.length > 0
-            ? JSON.stringify(
-                data.daily_trends.slice(-7).map(d => ({
-                  date: d.date,
-                  tokens: d.input + d.output + d.cached + d.thinking,
-                  sessions: d.sessions,
-                }))
-              )
-            : undefined,
-          availableSources: data.source_trends.length > 0
-            ? Array.from(new Set(data.source_trends.map((item) => item.source)))
-            : [],
-        } : null}
-      />
 
       {/* 财务报表生成中的 Loading 遮罩 */}
       {isGeneratingReport && (
@@ -3177,13 +3238,35 @@ export default function App() {
                 关闭预览
               </button>
               {reportImgUrl && (
-                <a
-                  href={reportImgUrl}
-                  download={`AI_Token_Monitor_财务报表_${new Date().toISOString().split('T')[0]}.png`}
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Tauri WebView2 不支持 data: URL 的 <a download>，改用 Blob + createObjectURL
+                    try {
+                      const base64 = reportImgUrl.split(',')[1];
+                      const binary = atob(base64);
+                      const bytes = new Uint8Array(binary.length);
+                      for (let i = 0; i < binary.length; i++) {
+                        bytes[i] = binary.charCodeAt(i);
+                      }
+                      const blob = new Blob([bytes], { type: 'image/png' });
+                      const url = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = url;
+                      a.download = `AI_Token_Monitor_财务报表_${new Date().toISOString().split('T')[0]}.png`;
+                      document.body.appendChild(a);
+                      a.click();
+                      document.body.removeChild(a);
+                      setTimeout(() => URL.revokeObjectURL(url), 1000);
+                    } catch (e) {
+                      console.error('下载图片失败:', e);
+                      alert('保存图片失败，请尝试右键图片另存为。');
+                    }
+                  }}
                   className="px-6 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_15px_rgba(6,182,212,0.25)] hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer min-w-[150px] text-center flex items-center justify-center gap-1.5"
                 >
                   📥 保存财务报表图片
-                </a>
+                </button>
               )}
             </div>
           </div>

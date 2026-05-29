@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Sparkles,
-  X,
   Monitor,
   RefreshCw,
   AlertCircle,
@@ -248,9 +247,7 @@ interface ReviewMetrics {
   availableSources?: string[];
 }
 
-interface ReviewDrawerProps {
-  isOpen: boolean;
-  onClose: () => void;
+interface ReviewPageProps {
   metrics: ReviewMetrics | null;
 }
 
@@ -426,7 +423,7 @@ function StreamingCursor() {
 // 主组件 ReviewDrawer
 // ============================================================
 
-export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
+export function ReviewPage({ metrics }: ReviewPageProps) {
   // 核心视图切换: 'new' (新建复盘) | 'history' (任务历史) | 'detail' (详情与报告)
   const [view, setView] = useState<'new' | 'history' | 'detail'>('new');
 
@@ -517,7 +514,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
 
   // ────── 智能数据源提取指标快照 ──────
   useEffect(() => {
-    if (!isOpen || view !== 'new') return;
+    if (view !== 'new') return;
 
     let isMounted = true;
 
@@ -707,7 +704,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
     return () => {
       isMounted = false;
     };
-  }, [isOpen, reviewTimeRange, selectedIdes, view]);
+  }, [reviewTimeRange, selectedIdes, view]);
 
   // ────── 探测活跃后台任务 ──────
   const checkActiveTask = useCallback(async () => {
@@ -730,32 +727,30 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
     return false;
   }, []);
 
-  // ────── 抽屉生命周期控制 ──────
+  // ────── 页面挂载生命周期控制 ──────
   useEffect(() => {
-    if (isOpen) {
-      detectCliTools();
-      // 请求通知权限
-      if (typeof window !== 'undefined' && 'Notification' in window) {
-        if (Notification.permission === 'default') {
-          Notification.requestPermission().then((p) => {
-            setHasNotificationPermission(p === 'granted');
-          });
-        } else {
-          setHasNotificationPermission(Notification.permission === 'granted');
-        }
+    detectCliTools();
+    // 请求通知权限
+    if (typeof window !== 'undefined' && 'Notification' in window) {
+      if (Notification.permission === 'default') {
+        Notification.requestPermission().then((p) => {
+          setHasNotificationPermission(p === 'granted');
+        });
+      } else {
+        setHasNotificationPermission(Notification.permission === 'granted');
       }
-      // 优先探测是否有已经在后台运行的任务
-      checkActiveTask().then((hasActive) => {
-        if (!hasActive) {
-          // 没有活跃任务，去获取一次历史列表看看
-          setView('new');
-        }
-      });
-    } else {
-      // 抽屉关闭，清空并关闭当前的实时 SSE 连接监听（后台任务本身绝不中断！）
-      disconnectTaskEvents();
     }
-  }, [isOpen, checkActiveTask]);
+    // 优先探测是否有已经在后台运行的任务
+    checkActiveTask().then((hasActive) => {
+      if (!hasActive) {
+        setView('new');
+      }
+    });
+    // 组件卸载时关闭 SSE 连接（后台任务本身不中断）
+    return () => {
+      disconnectTaskEvents();
+    };
+  }, [checkActiveTask]);
 
   // ────── 断开 SSE ──────
   const disconnectTaskEvents = () => {
@@ -789,10 +784,10 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
   };
 
   useEffect(() => {
-    if (view === 'history' && isOpen) {
+    if (view === 'history') {
       fetchHistoryTasks();
     }
-  }, [view, statusFilter, searchKeyword, isOpen]);
+  }, [view, statusFilter, searchKeyword]);
 
   // ────── 行动项管理与解析机制 ──────
   useEffect(() => {
@@ -1254,28 +1249,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
   // ============================================================
 
   return (
-    <>
-      {/* ── 1. 半透明背景遮罩 ── */}
-      <div
-        className={`fixed inset-0 z-[100] transition-opacity duration-300 ${
-          isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
-        }`}
-        style={{ background: 'rgba(3, 7, 18, 0.45)', backdropFilter: 'blur(5px)' }}
-        onClick={onClose}
-      />
-
-      {/* ── 2. 抽屉主体 ── */}
-      <div
-        className={`fixed top-0 right-0 h-full z-[101] flex flex-col transition-transform duration-300 ease-[cubic-bezier(0.16,1,0.3,1)] ${
-          isOpen ? 'translate-x-0' : 'translate-x-full'
-        }`}
-        style={{
-          width: 'min(780px, 96vw)',
-          background: 'var(--bg-secondary)',
-          borderLeft: '1px solid var(--card-border)',
-          boxShadow: isOpen ? '-20px 0 60px rgba(0,0,0,0.3)' : 'none',
-        }}
-      >
+    <div className="w-full flex flex-col animate-fade-in" style={{ minHeight: 0 }}>
         {/* ── 头部流光渐变 Header ── */}
         <div
           className="flex items-center justify-between px-6 py-4 flex-shrink-0 relative overflow-hidden"
@@ -1340,12 +1314,6 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
               </div>
             )}
             
-            <button
-              onClick={onClose}
-              className="w-9 h-9 rounded-xl flex items-center justify-center transition-all hover:bg-black/10 dark:hover:bg-white/10"
-            >
-              <X className="w-4.5 h-4.5" style={{ color: 'var(--text-muted)' }} />
-            </button>
           </div>
         </div>
 
@@ -2369,10 +2337,10 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                 {(activeTask.status === 'running' || activeTask.status === 'pending') ? (
                   <>
                     <button
-                      onClick={onClose}
+                      onClick={() => setView('new')}
                       className="flex-1 py-3 rounded-2xl bg-neon-cyan/10 border border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/20 text-xs font-bold transition-all active:scale-[0.98] cursor-pointer"
                     >
-                      🚪 隐藏并保持后台运行
+                      📊 返回新建复盘
                     </button>
                     <button
                       onClick={handleCancelTask}
@@ -2405,6 +2373,5 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
           )}
         </div>
       </div>
-    </>
-  );
+    );
 }
