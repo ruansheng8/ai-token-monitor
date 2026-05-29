@@ -1,5 +1,6 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { apiUrl, readJsonResponse } from './lib/api';
 import {
   Cpu,
   ArrowDown,
@@ -22,10 +23,17 @@ import {
   Terminal,
   Monitor
 } from 'lucide-react';
-import { DailyTrendChart } from './components/charts/DailyTrendChart';
-import { SourceTrendChart } from './components/charts/SourceTrendChart';
-import { PerformanceChart } from './components/charts/PerformanceChart';
-import { CalendarHeatmap } from './components/charts/CalendarHeatmap';
+
+const DailyTrendChart = lazy(() => import('./components/charts/DailyTrendChart').then((module) => ({ default: module.DailyTrendChart })));
+const SourceTrendChart = lazy(() => import('./components/charts/SourceTrendChart').then((module) => ({ default: module.SourceTrendChart })));
+const PerformanceChart = lazy(() => import('./components/charts/PerformanceChart').then((module) => ({ default: module.PerformanceChart })));
+const CalendarHeatmap = lazy(() => import('./components/charts/CalendarHeatmap').then((module) => ({ default: module.CalendarHeatmap })));
+
+const ChartFallback = ({ label = '正在加载图表...' }: { label?: string }) => (
+  <div className="h-[300px] flex items-center justify-center text-text-muted text-xs italic">
+    {label}
+  </div>
+);
 
 // 官方 SVG 图标组件
 const GeminiIcon = ({ className = "w-4 h-4" }: { className?: string }) => (
@@ -296,8 +304,8 @@ export default function App() {
     setCleanLoading(true);
     setCleanMessage(null);
     try {
-      const res = await fetch('/api/db/clean', { method: 'POST' });
-      const resData = await res.json();
+      const res = await fetch(apiUrl('/db/clean'), { method: 'POST' });
+      const resData = await readJsonResponse<any>(res);
       if (resData.success) {
         setCleanMessage(`✅ ${resData.message}`);
         // 静默重新拉取大盘最新数据以刷新会话数和数据
@@ -317,9 +325,9 @@ export default function App() {
     if (isConfigOpen) {
       const loadConfig = async () => {
         try {
-          const res = await fetch(`/api/config?t=${Date.now()}`);
+          const res = await fetch(apiUrl(`/config?t=${Date.now()}`));
           if (res.ok) {
-            const data = await res.json();
+            const data = await readJsonResponse<any>(res);
             if (data.db_type) {
               setDbType(data.db_type.toLowerCase() === 'postgres' ? 'postgres' : 'sqlite');
             }
@@ -442,9 +450,9 @@ export default function App() {
   // 轮询扫描状态
   const pollScanStatus = async () => {
     try {
-      const response = await fetch(`/api/scan/status?t=${Date.now()}`);
+      const response = await fetch(apiUrl(`/scan/status?t=${Date.now()}`));
       if (response.ok) {
-        const status = await response.json();
+        const status = await readJsonResponse<NonNullable<typeof scanStatus>>(response);
         setScanStatus(status);
         if (status.is_scanning) {
           setTimeout(pollScanStatus, 1000);
@@ -461,9 +469,9 @@ export default function App() {
   // 开始扫描并触发轮询
   const startScan = async () => {
     try {
-      const response = await fetch(`/api/scan/start?t=${Date.now()}`);
+      const response = await fetch(apiUrl(`/scan/start?t=${Date.now()}`));
       if (response.ok) {
-        const status = await response.json();
+        const status = await readJsonResponse<NonNullable<typeof scanStatus>>(response);
         setScanStatus(status);
         if (status.is_scanning) {
           pollScanStatus();
@@ -501,11 +509,11 @@ export default function App() {
 
     try {
       const response = await fetch(
-        `/api/metrics?source=${currentSource}&start_date=${start}&end_date=${end}&t=${Date.now()}`,
+        apiUrl(`/metrics?source=${currentSource}&start_date=${start}&end_date=${end}&t=${Date.now()}`),
         { signal: controller.signal }
       );
       if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
-      const result: AggregatedMetrics = await response.json();
+      const result: AggregatedMetrics = await readJsonResponse(response);
       setData(result);
       const now = new Date();
       setLastUpdate(now.toTimeString().split(' ')[0]);
@@ -574,9 +582,9 @@ export default function App() {
         hide_zero: hideZeroVal ? 'true' : 'false',
         t: String(Date.now())
       });
-      const res = await fetch(`/api/sessions?${query.toString()}`);
+      const res = await fetch(apiUrl(`/sessions?${query.toString()}`));
       if (res.ok) {
-        const result = await res.json();
+        const result = await readJsonResponse<{ items: SessionItem[]; total: number }>(res);
         setSessionsData(result);
       }
     } catch (e) {
@@ -593,9 +601,9 @@ export default function App() {
     try {
       // 1. 先检查设备名称是否配置
       if (!skipDeviceCheck) {
-        const configRes = await fetch(`/api/config?t=${Date.now()}`);
+        const configRes = await fetch(apiUrl(`/config?t=${Date.now()}`));
         if (configRes.ok) {
-          const configData = await configRes.json();
+          const configData = await readJsonResponse<any>(configRes);
           // 如果没有配置设备名 (即为 null 或空字符串)
           if (!configData.device_name) {
             setDefaultDeviceName(configData.default_device_name || '');
@@ -621,9 +629,9 @@ export default function App() {
       }
 
       // 2. 启动后端扫描
-      const scanPromise = fetch(`/api/scan/start?t=${Date.now()}`);
+      const scanPromise = fetch(apiUrl(`/scan/start?t=${Date.now()}`));
       // 3. 并行获取大盘指标
-      const metricsPromise = fetch(`/api/metrics?source=${source}&start_date=${startDate}&end_date=${endDate}&t=${Date.now()}`);
+      const metricsPromise = fetch(apiUrl(`/metrics?source=${source}&start_date=${startDate}&end_date=${endDate}&t=${Date.now()}`));
       // 3. 并行获取会话列表第一页数据
       const query = new URLSearchParams({
         page: '1',
@@ -637,7 +645,7 @@ export default function App() {
         hide_zero: hideZero ? 'true' : 'false',
         t: String(Date.now())
       });
-      const sessionsPromise = fetch(`/api/sessions?${query.toString()}`);
+      const sessionsPromise = fetch(apiUrl(`/sessions?${query.toString()}`));
 
       const [scanRes, metricsRes, sessionsRes] = await Promise.all([
         scanPromise,
@@ -649,9 +657,9 @@ export default function App() {
         throw new Error(`后台服务连接异常 (Scan: ${scanRes.status}, Metrics: ${metricsRes.status}, Sessions: ${sessionsRes.status})`);
       }
 
-      const scanStatusVal = await scanRes.json();
-      const metricsVal = await metricsRes.json();
-      const sessionsVal = await sessionsRes.json();
+      const scanStatusVal = await readJsonResponse<NonNullable<typeof scanStatus>>(scanRes);
+      const metricsVal = await readJsonResponse<AggregatedMetrics>(metricsRes);
+      const sessionsVal = await readJsonResponse<{ items: SessionItem[]; total: number }>(sessionsRes);
 
       setScanStatus(scanStatusVal);
       setData(metricsVal);
@@ -1176,25 +1184,27 @@ export default function App() {
             </div>
           </div>
           <div className="w-full">
-            {source === 'all' && chartDimension === 'source' ? (
-              data?.source_trends && data.source_trends.length > 0 ? (
-                <SourceTrendChart data={data.source_trends} theme={theme} />
+            <Suspense fallback={<ChartFallback />}>
+              {source === 'all' && chartDimension === 'source' ? (
+                data?.source_trends && data.source_trends.length > 0 ? (
+                  <SourceTrendChart data={data.source_trends} theme={theme} />
+                ) : (
+                  <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+                )
+              ) : chartDimension === 'device' ? (
+                data?.device_trends && data.device_trends.length > 0 ? (
+                  <DailyTrendChart data={data.daily_trends} deviceTrends={data.device_trends} dimension="device" theme={theme} />
+                ) : (
+                  <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+                )
               ) : (
-                <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
-              )
-            ) : chartDimension === 'device' ? (
-              data?.device_trends && data.device_trends.length > 0 ? (
-                <DailyTrendChart data={data.daily_trends} deviceTrends={data.device_trends} dimension="device" theme={theme} />
-              ) : (
-                <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
-              )
-            ) : (
-              data?.daily_trends && data.daily_trends.length > 0 ? (
-                <DailyTrendChart data={data.daily_trends} dimension="type" theme={theme} />
-              ) : (
-                <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
-              )
-            )}
+                data?.daily_trends && data.daily_trends.length > 0 ? (
+                  <DailyTrendChart data={data.daily_trends} dimension="type" theme={theme} />
+                ) : (
+                  <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+                )
+              )}
+            </Suspense>
           </div>
         </section>
 
@@ -1296,7 +1306,9 @@ export default function App() {
             <div className="grid grid-cols-1 lg:grid-cols-[1.8fr_1fr] gap-6">
               {/* 性能趋势折线图 */}
               <div className="w-full bg-slate-500/5 dark:bg-white/[0.01] rounded-2xl p-4 border border-card-border/50">
-                <PerformanceChart data={data.performance_trends} theme={theme} />
+                <Suspense fallback={<ChartFallback label="正在加载效能图表..." />}>
+                  <PerformanceChart data={data.performance_trends} theme={theme} />
+                </Suspense>
               </div>
               
               {/* 模型效能排行榜 */}
@@ -1577,7 +1589,9 @@ export default function App() {
         {/* 日历热力图 */}
         {data?.daily_trends && data.daily_trends.length > 0 && (
           <section className="chart-section glass-card p-4 sm:p-5 hover:-translate-y-0.5 hover:shadow-[0_22px_56px_rgba(15,23,42,0.10)] transition-all duration-200 no-print">
-            <CalendarHeatmap data={data.daily_trends} theme={theme} />
+            <Suspense fallback={<ChartFallback label="正在加载日历热力图..." />}>
+              <CalendarHeatmap data={data.daily_trends} theme={theme} />
+            </Suspense>
           </section>
         )}
       </div>
@@ -1970,7 +1984,7 @@ export default function App() {
                     setTestLoading(true);
                     setConfigMessage(null);
                     try {
-                      const response = await fetch('/api/config/test', {
+                      const response = await fetch(apiUrl('/config/test'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -1984,7 +1998,7 @@ export default function App() {
                         })
                       });
                       if (response.ok) {
-                        const res = await response.json();
+                        const res = await readJsonResponse<any>(response);
                         setConfigMessage({ success: res.success, text: res.message });
                       } else {
                         setConfigMessage({ success: false, text: '服务器返回错误，连接测试失败。' });
@@ -2010,7 +2024,7 @@ export default function App() {
                     setSaveLoading(true);
                     setConfigMessage(null);
                     try {
-                      const response = await fetch('/api/config/save', {
+                      const response = await fetch(apiUrl('/config/save'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -2025,13 +2039,13 @@ export default function App() {
                         })
                       });
                       if (response.ok) {
-                        const res = await response.json();
+                        const res = await readJsonResponse<any>(response);
                         if (res.success) {
                           setIsConfigOpen(false);
                           if (res.need_restart) {
                             if (confirm(`${res.message}\n\n为了使新的数据库配置生效并避免数据冲突，软件需要重新启动。是否立即自动重启软件？`)) {
                               try {
-                                await fetch('/api/app/restart', { method: 'POST' });
+                                await fetch(apiUrl('/app/restart'), { method: 'POST' });
                               } catch (e) {
                                 console.error('重启请求失败:', e);
                                 alert('自动重启失败，请手动关闭并重新打开软件。');
@@ -2175,7 +2189,7 @@ export default function App() {
                     setSaveLoading(true);
                     setConfigMessage(null);
                     try {
-                      const response = await fetch('/api/config/save', {
+                      const response = await fetch(apiUrl('/config/save'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
@@ -2190,13 +2204,13 @@ export default function App() {
                         })
                       });
                       if (response.ok) {
-                        const res = await response.json();
+                        const res = await readJsonResponse<any>(response);
                         if (res.success) {
                           if (res.need_restart) {
                             setConfigMessage({ success: true, text: '配置保存成功！系统正在自动重启以使配置生效...' });
                             setTimeout(async () => {
                               try {
-                                await fetch('/api/app/restart', { method: 'POST' });
+                                await fetch(apiUrl('/app/restart'), { method: 'POST' });
                               } catch (e) {
                                 console.error('重启请求失败:', e);
                                 setConfigMessage({ success: false, text: '保存成功，但自动重启失败。请手动关闭并重新启动程序。' });

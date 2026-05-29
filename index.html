@@ -8,6 +8,104 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+      :root {
+        --startup-bg: #f8fafc;
+        --startup-card: rgba(255, 255, 255, 0.78);
+        --startup-border: rgba(148, 163, 184, 0.18);
+        --startup-text: #0f172a;
+        --startup-muted: #64748b;
+        --startup-cyan: #0891b2;
+        --startup-purple: #9333ea;
+      }
+      .dark {
+        --startup-bg: #030712;
+        --startup-card: rgba(11, 19, 36, 0.72);
+        --startup-border: rgba(255, 255, 255, 0.06);
+        --startup-text: #f3f4f6;
+        --startup-muted: #9ca3af;
+        --startup-cyan: #06b6d4;
+        --startup-purple: #a855f7;
+      }
+      html,
+      body,
+      #root {
+        min-height: 100%;
+        margin: 0;
+      }
+      body {
+        background: var(--startup-bg);
+        font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      }
+      .startup-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 24px;
+        color: var(--startup-text);
+        overflow: hidden;
+      }
+      .startup-splash::before,
+      .startup-splash::after {
+        content: "";
+        position: absolute;
+        width: 520px;
+        height: 520px;
+        border-radius: 9999px;
+        filter: blur(80px);
+        opacity: 0.16;
+      }
+      .startup-splash::before {
+        top: -220px;
+        left: -120px;
+        background: var(--startup-cyan);
+      }
+      .startup-splash::after {
+        right: -160px;
+        bottom: -260px;
+        background: var(--startup-purple);
+      }
+      .startup-card {
+        position: relative;
+        z-index: 1;
+        width: min(400px, 100%);
+        padding: 32px;
+        border: 1px solid var(--startup-border);
+        border-radius: 32px;
+        background: var(--startup-card);
+        box-shadow: 0 20px 50px rgba(15, 23, 42, 0.14);
+        text-align: center;
+        backdrop-filter: blur(20px) saturate(180%);
+        -webkit-backdrop-filter: blur(20px) saturate(180%);
+      }
+      .startup-spinner {
+        width: 64px;
+        height: 64px;
+        margin: 0 auto 24px;
+        animation: startup-spin 0.9s linear infinite;
+      }
+      .startup-title {
+        margin: 0 0 8px;
+        font-size: 20px;
+        font-weight: 700;
+        letter-spacing: -0.02em;
+        background: linear-gradient(90deg, var(--startup-cyan), var(--startup-purple));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .startup-copy {
+        margin: 0;
+        color: var(--startup-muted);
+        font-size: 12px;
+        line-height: 1.7;
+      }
+      @keyframes startup-spin {
+        to { transform: rotate(360deg); }
+      }
+    </style>
     <!-- 原生主题检测脚本，在 React 加载前立即应用 dark 类名以防闪白 -->
     <script>
       (function() {
@@ -25,7 +123,23 @@
     </script>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div class="startup-splash" aria-live="polite" aria-label="AI Token Monitor 正在初始化">
+        <div class="startup-card">
+          <svg class="startup-spinner" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12" stroke="url(#startup-spinner-grad)" stroke-width="3" stroke-linecap="round"/>
+            <defs>
+              <linearGradient id="startup-spinner-grad" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#06b6d4" />
+                <stop offset="1" stop-color="#a855f7" />
+              </linearGradient>
+            </defs>
+          </svg>
+          <h1 class="startup-title">AI Token Monitor</h1>
+          <p class="startup-copy">正在初始化后台服务并同步数据，请稍候...</p>
+        </div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
