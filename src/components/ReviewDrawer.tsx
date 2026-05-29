@@ -1282,7 +1282,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
             <div>
               <h2 className="text-base font-bold flex items-center gap-2" style={{ color: 'var(--text-primary)' }}>
                 AI 复盘与治理中心
-                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-cyan-500/20 bg-cyan-500/5 text-cyan-400">
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full border border-neon-cyan/20 bg-neon-cyan/5 text-neon-cyan">
                   v2.0
                 </span>
               </h2>
@@ -1300,7 +1300,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   onClick={() => setView('new')}
                   className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 ${
                     view === 'new'
-                      ? 'bg-gradient-to-r from-cyan-500/20 to-purple-500/20 border border-cyan-500/30 text-cyan-400 shadow-sm'
+                      ? 'bg-gradient-to-r from-neon-cyan/20 to-neon-purple/20 border border-neon-cyan/30 text-neon-cyan shadow-sm'
                       : 'text-text-secondary hover:text-text-primary border border-transparent'
                   }`}
                 >
@@ -1311,7 +1311,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   onClick={() => setView('history')}
                   className={`px-4 py-1.5 rounded-full text-xs font-semibold transition-all duration-200 ${
                     view === 'history'
-                      ? 'bg-gradient-to-r from-cyan-500/20 to-purple-500/20 border border-cyan-500/30 text-cyan-400 shadow-sm'
+                      ? 'bg-gradient-to-r from-neon-cyan/20 to-neon-purple/20 border border-neon-cyan/30 text-neon-cyan shadow-sm'
                       : 'text-text-secondary hover:text-text-primary border border-transparent'
                   }`}
                 >
@@ -1399,7 +1399,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
               {/* 核心配置表单 */}
               <div className="rounded-[24px] bg-slate-50/2 dark:bg-white/1 border border-card-border p-5 space-y-4 shadow-sm text-left">
                 <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                  <Monitor className="w-4 h-4 text-cyan-400" />
+                  <Monitor className="w-4 h-4 text-neon-cyan" />
                   第一步：指定分析统计范围
                 </h3>
 
@@ -1457,7 +1457,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                           }}
                           className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-all cursor-pointer ${
                             isSelected
-                              ? 'bg-cyan-500/15 border-cyan-500/40 text-cyan-400 font-semibold'
+                              ? 'bg-neon-cyan/15 border-neon-cyan/40 text-neon-cyan font-semibold'
                               : 'bg-white/3 hover:bg-white/5 border-card-border text-text-muted hover:text-text-secondary'
                           }`}
                         >
@@ -1476,12 +1476,12 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                     <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/5 rounded-full blur-2xl pointer-events-none" />
                     <div className="flex items-center justify-between mb-3.5 border-b border-card-border pb-2.5">
                       <div className="flex items-center gap-2">
-                        <BarChart2 className="w-4 h-4 text-cyan-400" />
+                        <BarChart2 className="w-4 h-4 text-neon-cyan" />
                         <span className="text-xs font-bold" style={{ color: 'var(--text-secondary)' }}>
                           已冻结大盘快照（分析此数据）
                         </span>
                       </div>
-                      <span className="text-[10px] font-mono text-cyan-400 uppercase tracking-wider bg-cyan-400/10 px-2 py-0.5 rounded-full">
+                      <span className="text-[10px] font-mono text-neon-cyan uppercase tracking-wider bg-neon-cyan/10 border border-neon-cyan/20 px-2 py-0.5 rounded-full">
                         snapshot ready
                       </span>
                     </div>
@@ -1489,7 +1489,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                     <div className="relative">
                       {metricsLoading && (
                         <div className="absolute inset-0 flex items-center justify-center bg-black/10 dark:bg-white/5 backdrop-blur-[1px] rounded-xl z-10">
-                          <RefreshCw className="w-5 h-5 text-cyan-400 animate-spin" />
+                          <RefreshCw className="w-5 h-5 text-neon-cyan animate-spin" />
                         </div>
                       )}
                       
@@ -1580,13 +1580,13 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
               <div className="rounded-[24px] bg-slate-50/2 dark:bg-white/1 border border-card-border p-5 space-y-4 shadow-sm text-left">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wider flex items-center gap-1.5">
-                    <Terminal className="w-4 h-4 text-purple-400" />
+                    <Terminal className="w-4 h-4 text-neon-purple" />
                     第二步：选择运行分析引擎 CLI
                   </h3>
                   <button
                     onClick={detectCliTools}
                     disabled={detectLoading}
-                    className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border border-cyan-500/25 bg-cyan-500/5 text-cyan-400 hover:bg-cyan-500/10 cursor-pointer"
+                    className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border border-neon-cyan/25 bg-neon-cyan/5 text-neon-cyan hover:bg-neon-cyan/10 cursor-pointer"
                   >
                     <RefreshCw className={`w-2.5 h-2.5 ${detectLoading ? 'animate-spin' : ''}`} />
                     重新检测
@@ -1595,7 +1595,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
 
                 {detectLoading ? (
                   <div className="flex items-center gap-2.5 py-2">
-                    <div className="w-4.5 h-4.5 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
+                    <div className="w-4.5 h-4.5 rounded-full border-2 border-neon-cyan border-t-transparent animate-spin" />
                     <span className="text-xs text-text-muted">正在扫描系统 PATH 寻找已安装的 AI CLI 引擎...</span>
                   </div>
                 ) : detectResult ? (
@@ -1607,7 +1607,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                         className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold border transition-all cursor-pointer ${
                           tool.available
                             ? selectedCli === tool.name
-                              ? 'bg-purple-500/15 border-purple-500/50 text-purple-400 font-bold'
+                              ? 'bg-neon-purple/15 border-neon-purple/50 text-neon-purple font-bold'
                               : 'bg-green-500/5 border-green-500/20 text-green-600 dark:text-green-400'
                             : 'bg-gray-500/5 border-gray-400/10 text-gray-400 opacity-60 cursor-not-allowed'
                         }`}
@@ -1627,7 +1627,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   <div className="p-4 rounded-2xl bg-orange-500/5 border border-orange-500/25 flex items-start gap-3">
                     <AlertCircle className="w-5 h-5 text-orange-500 flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="text-xs font-bold text-orange-400 mb-1">未检测到兼容的本地 AI CLI 引擎</p>
+                      <p className="text-xs font-bold text-neon-orange mb-1">未检测到兼容的本地 AI CLI 引擎</p>
                       <p className="text-[11px] text-text-secondary leading-relaxed mb-2.5">
                         本复盘大师需要调用您本机全局配置已登录的 AI 交互工具。请参考安装：
                       </p>
@@ -1636,7 +1636,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                           href="https://docs.anthropic.com/claude-code"
                           target="_blank"
                           rel="noopener noreferrer"
-                          className="text-[10px] font-bold text-orange-400 hover:underline flex items-center gap-1"
+                          className="text-[10px] font-bold text-neon-orange hover:underline flex items-center gap-1"
                         >
                           <ExternalLink className="w-3 h-3" /> 安装 Claude Code
                         </a>
@@ -1662,7 +1662,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   className="w-full flex items-center justify-between text-xs font-bold text-text-secondary uppercase tracking-wider cursor-pointer"
                 >
                   <span className="flex items-center gap-1.5">
-                    <Edit3 className="w-4 h-4 text-amber-400" />
+                    <Edit3 className="w-4 h-4 text-neon-gold" />
                     第三步：调整专家分析提示词 (可选)
                   </span>
                   {isPromptExpanded ? <ChevronUp className="w-4 h-4 text-text-muted" /> : <ChevronDown className="w-4 h-4 text-text-muted" />}
@@ -1726,9 +1726,9 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                     background: 'linear-gradient(135deg, rgba(8, 145, 178, 0.05) 0%, transparent 100%)',
                   }}
                 >
-                  <Sparkles className="w-4 h-4 text-cyan-400 mt-0.5 flex-shrink-0" />
+                  <Sparkles className="w-4 h-4 text-neon-cyan mt-0.5 flex-shrink-0" />
                   <div className="space-y-1">
-                    <h4 className="text-[11px] font-bold text-cyan-400">🛡️ 本地 AI 诊断隐私与安全边界提示</h4>
+                    <h4 className="text-[11px] font-bold text-neon-cyan">🛡️ 本地 AI 诊断隐私与安全边界提示</h4>
                     <p className="text-[10px] text-text-secondary leading-relaxed">
                       AI 诊断工具（如 Claude Code）将完全在您**本机开发环境内**离线运行，仅在生成诊断时引用您勾选的 Token 用量趋势与大盘统计。我们**绝不会**将您的源代码文件、数据库内容或本地隐私配置上传到第三方服务器。
                     </p>
@@ -1785,7 +1785,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
 
               {historyLoading ? (
                 <div className="py-20 text-center flex flex-col items-center gap-3">
-                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin" />
+                  <RefreshCw className="w-8 h-8 text-neon-cyan animate-spin" />
                   <span className="text-xs text-text-muted">正在加载历史复盘记录...</span>
                 </div>
               ) : historyTasks.length > 0 ? (
@@ -1804,22 +1804,22 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                           <div className="flex items-center gap-2 flex-wrap">
                             {/* 状态彩牌 */}
                             {task.status === 'succeeded' && (
-                              <span className="text-[9px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-2 py-0.5 rounded-full">
+                              <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-green/10 text-neon-green border border-neon-green/20 px-2 py-0.5 rounded-full">
                                 succeeded
                               </span>
                             )}
                             {task.status === 'running' && (
-                              <span className="text-[9px] font-bold uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2 py-0.5 rounded-full animate-pulse">
+                              <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20 px-2 py-0.5 rounded-full animate-pulse">
                                 running ({task.progress_percent}%)
                               </span>
                             )}
                             {task.status === 'pending' && (
-                              <span className="text-[9px] font-bold uppercase tracking-wider bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 px-2 py-0.5 rounded-full animate-pulse">
+                              <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20 px-2 py-0.5 rounded-full animate-pulse">
                                 pending
                               </span>
                             )}
                             {task.status === 'failed' && (
-                              <span className="text-[9px] font-bold uppercase tracking-wider bg-rose-500/10 text-rose-400 border border-rose-500/20 px-2 py-0.5 rounded-full">
+                              <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-pink/10 text-neon-pink border border-neon-pink/20 px-2 py-0.5 rounded-full">
                                 failed
                               </span>
                             )}
@@ -1829,7 +1829,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                               </span>
                             )}
                             {task.status === 'interrupted' && (
-                              <span className="text-[9px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/20 px-2 py-0.5 rounded-full">
+                              <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-gold/10 text-neon-gold border border-neon-gold/20 px-2 py-0.5 rounded-full">
                                 interrupted
                               </span>
                             )}
@@ -1863,7 +1863,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   <p className="text-xs text-text-muted">没有找到符合条件的复盘报告历史记录。</p>
                   <button
                     onClick={() => setView('new')}
-                    className="text-xs font-bold text-cyan-400 hover:underline bg-transparent border-none cursor-pointer"
+                    className="text-xs font-bold text-neon-cyan hover:underline bg-transparent border-none cursor-pointer"
                   >
                     👉 立即创建首份 AI 诊断报告
                   </button>
@@ -1884,7 +1884,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                     setView(activeTask.status === 'running' || activeTask.status === 'pending' ? 'new' : 'history');
                     disconnectTaskEvents();
                   }}
-                  className="flex items-center gap-1.5 text-xs text-cyan-400 hover:text-cyan-300 font-bold bg-transparent border-none cursor-pointer"
+                  className="flex items-center gap-1.5 text-xs text-neon-cyan hover:text-neon-cyan/80 font-bold bg-transparent border-none cursor-pointer"
                 >
                   <ChevronLeft className="w-4.5 h-4.5" />
                   返回{activeTask.status === 'running' || activeTask.status === 'pending' ? '新建配置' : '历史列表'}
@@ -1894,7 +1894,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   <button
                     onClick={handleCopy}
                     disabled={!outputText}
-                    className="px-3 py-1.5 rounded-xl border border-card-border bg-white/5 text-xs font-semibold text-text-secondary hover:text-cyan-400 hover:border-cyan-500/30 disabled:opacity-40 transition-all cursor-pointer"
+                    className="px-3 py-1.5 rounded-xl border border-card-border bg-white/5 text-xs font-semibold text-text-secondary hover:text-neon-cyan hover:border-neon-cyan/30 disabled:opacity-40 transition-all cursor-pointer"
                   >
                     <Copy className="w-3 h-3 inline mr-1" />
                     {copied ? '已复制！' : '复制全文'}
@@ -1902,7 +1902,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   <button
                     onClick={handleExportMarkdown}
                     disabled={!outputText}
-                    className="px-3 py-1.5 rounded-xl border border-card-border bg-white/5 text-xs font-semibold text-text-secondary hover:text-cyan-400 hover:border-cyan-500/30 disabled:opacity-40 transition-all cursor-pointer"
+                    className="px-3 py-1.5 rounded-xl border border-card-border bg-white/5 text-xs font-semibold text-text-secondary hover:text-neon-cyan hover:border-neon-cyan/30 disabled:opacity-40 transition-all cursor-pointer"
                   >
                     <Download className="w-3 h-3 inline mr-1" />
                     导出 MD
@@ -1910,7 +1910,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   {activeTask.status === 'succeeded' && (
                     <button
                       onClick={() => window.print()}
-                      className="px-3 py-1.5 rounded-xl border border-card-border bg-white/5 text-xs font-semibold text-text-secondary hover:text-cyan-400 hover:border-cyan-500/30 disabled:opacity-40 transition-all cursor-pointer"
+                      className="px-3 py-1.5 rounded-xl border border-card-border bg-white/5 text-xs font-semibold text-text-secondary hover:text-neon-cyan hover:border-neon-cyan/30 disabled:opacity-40 transition-all cursor-pointer"
                     >
                       🖨️ 打印/导出 PDF
                     </button>
@@ -1929,19 +1929,19 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
 
               {/* 运行阶段进度条面板 (仅当 pending/running 时显示) */}
               {(activeTask.status === 'running' || activeTask.status === 'pending') && (
-                <div className="p-4 rounded-2xl bg-cyan-500/5 border border-cyan-500/15 space-y-2.5">
+                <div className="p-4 rounded-2xl bg-neon-cyan/5 border border-neon-cyan/15 space-y-2.5">
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-bold text-cyan-400 animate-pulse flex items-center gap-1.5">
+                    <span className="font-bold text-neon-cyan animate-pulse flex items-center gap-1.5">
                       <RefreshCw className="w-3.5 h-3.5 animate-spin" />
                       {activeTask.status_message || '任务拉起中...'}
                     </span>
-                    <span className="font-mono font-bold text-cyan-400">{activeTask.progress_percent}%</span>
+                    <span className="font-mono font-bold text-neon-cyan">{activeTask.progress_percent}%</span>
                   </div>
 
                   {/* 进度槽 */}
                   <div className="w-full h-2 rounded-full bg-black/20 dark:bg-white/5 overflow-hidden">
                     <div
-                      className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-purple-500 transition-all duration-500"
+                      className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple transition-all duration-500"
                       style={{ width: `${activeTask.progress_percent}%` }}
                     />
                   </div>
@@ -1960,7 +1960,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   className="w-full px-4 py-2.5 bg-black/15 dark:bg-white/3 flex items-center justify-between text-xs text-text-secondary font-bold tracking-wide outline-none cursor-pointer border-none"
                 >
                   <span className="flex items-center gap-1.5">
-                    <Terminal className="w-3.5 h-3.5 text-cyan-400" />
+                    <Terminal className="w-3.5 h-3.5 text-neon-cyan" />
                     🖥️ CLI 执行控制台日志输出 (共 {logLines.length} 行)
                   </span>
                   {isLogsExpanded ? <ChevronUp className="w-4 h-4 text-text-muted" /> : <ChevronDown className="w-4 h-4 text-text-muted" />}
@@ -2003,11 +2003,11 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   }}
                 >
                   <div className="flex items-start gap-3">
-                    <div className="w-8 h-8 rounded-xl bg-rose-500/10 flex items-center justify-center flex-shrink-0 text-rose-400">
+                    <div className="w-8 h-8 rounded-xl bg-rose-500/10 flex items-center justify-center flex-shrink-0 text-rose-600 dark:text-rose-400">
                       <AlertTriangle className="w-4.5 h-4.5" />
                     </div>
                     <div className="flex-1 space-y-1">
-                      <h4 className="text-xs font-bold text-rose-400">🚨 任务诊断与修复指引</h4>
+                      <h4 className="text-xs font-bold text-rose-600 dark:text-rose-400">🚨 任务诊断与修复指引</h4>
                       <p className="text-[11px] text-text-secondary leading-relaxed">
                         {activeTask.error_type === 'CLI_NOT_FOUND' && (
                           <>未在系统 PATH 环境变量中检测到 AI 客户端引擎「{getCliDisplayName(activeTask.cli_name)}」。请确保您已全局安装该 CLI 工具。</>
@@ -2058,7 +2058,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                           await navigator.clipboard.writeText(cmd);
                           alert('修复命令已成功复制到剪贴板！');
                         }}
-                        className="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-[9px] text-rose-400 border border-rose-500/20 font-bold transition-all cursor-pointer"
+                        className="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-[9px] text-rose-600 dark:text-rose-400 border border-rose-500/20 font-bold transition-all cursor-pointer"
                       >
                         复制命令
                       </button>
@@ -2069,7 +2069,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   <div className="flex gap-2 justify-end">
                     <button
                       onClick={() => handleRetryTask(activeTask.id)}
-                      className="px-3 py-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
+                      className="px-3 py-1.5 rounded-xl border border-rose-500/30 bg-rose-500/10 hover:bg-rose-500/25 text-rose-600 dark:text-rose-400 text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5"
                     >
                       <RefreshCw className="w-3.5 h-3.5" />
                       尝试重新运行
@@ -2088,7 +2088,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                     className="w-full px-4 py-2.5 bg-black/10 dark:bg-white/3 flex items-center justify-between text-xs text-text-secondary font-bold tracking-wide outline-none cursor-pointer border-none"
                   >
                     <span className="flex items-center gap-1.5">
-                      <BarChart2 className="w-3.5 h-3.5 text-cyan-400" />
+                      <BarChart2 className="w-3.5 h-3.5 text-neon-cyan" />
                       📊 冻结的分析数据快照 (生成于 {new Date(activeTask.created_at).toLocaleString()})
                     </span>
                     {isSnapshotExpanded ? <ChevronUp className="w-4 h-4 text-text-muted" /> : <ChevronDown className="w-4 h-4 text-text-muted" />}
@@ -2126,7 +2126,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                                 <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
                                   <div className="text-[10px] text-text-muted">费用环比 (USD)</div>
                                   <div className="flex items-baseline justify-between gap-1">
-                                    <span className="text-xs font-bold text-cyan-400">${(snap.totalCostUsd ?? 0).toFixed(4)}</span>
+                                    <span className="text-xs font-bold text-neon-cyan">${(snap.totalCostUsd ?? 0).toFixed(4)}</span>
                                     {(() => {
                                       const prev = compareSnap.totalCostUsd;
                                       if (!prev) return null;
@@ -2179,7 +2179,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                               </div>
                               <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
                                 <div className="text-[10px] text-text-muted">消费估算 (USD)</div>
-                                <div className="text-xs font-bold text-cyan-400 mt-0.5">${(snap.totalCostUsd ?? 0).toFixed(4)}</div>
+                                <div className="text-xs font-bold text-neon-cyan mt-0.5">${(snap.totalCostUsd ?? 0).toFixed(4)}</div>
                               </div>
                               <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
                                 <div className="text-[10px] text-text-muted">总会话数</div>
@@ -2203,7 +2203,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
               {/* 核心 Markdown 报告渲染区域 */}
               <div className="space-y-2.5">
                 <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wider flex items-center gap-1.5">
-                  <FileText className="w-4 h-4 text-cyan-400" />
+                  <FileText className="w-4 h-4 text-neon-cyan" />
                   📝 智能复盘分析诊断报告
                 </h3>
 
@@ -2234,7 +2234,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                     </>
                   ) : (
                     <div className="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
-                      <div className="w-8 h-8 rounded-full border-2 border-cyan-400 border-t-transparent animate-spin" />
+                      <div className="w-8 h-8 rounded-full border-2 border-neon-cyan border-t-transparent animate-spin" />
                       <span className="text-xs italic">
                         正在等待 {getCliDisplayName(activeTask.cli_name)} 引擎分析中...
                       </span>
@@ -2256,10 +2256,10 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                 >
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wider flex items-center gap-1.5">
-                      <CircleDot className="w-4 h-4 text-cyan-400" />
+                      <CircleDot className="w-4 h-4 text-neon-cyan" />
                       🎯 本周行动计划执行清单 ({actionItems.filter(i => i.checked).length}/{actionItems.length})
                     </h3>
-                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
+                    <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20">
                       {Math.round((actionItems.filter(i => i.checked).length / actionItems.length) * 100)}% 完成
                     </span>
                   </div>
@@ -2308,8 +2308,8 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
 
                   <div className="flex gap-2">
                     {[
-                      { val: 'helpful', label: '👍 很有用', activeBg: 'rgba(16, 185, 129, 0.15)', activeBorder: 'rgba(16, 185, 129, 0.5)', activeText: 'text-emerald-400' },
-                      { val: 'inaccurate', label: '👎 不太准', activeBg: 'rgba(239, 68, 68, 0.15)', activeBorder: 'rgba(239, 68, 68, 0.5)', activeText: 'text-rose-400' },
+                      { val: 'helpful', label: '👍 很有用', activeBg: 'rgba(16, 185, 129, 0.15)', activeBorder: 'rgba(16, 185, 129, 0.5)', activeText: 'text-emerald-600 dark:text-emerald-400' },
+                      { val: 'inaccurate', label: '👎 不太准', activeBg: 'rgba(239, 68, 68, 0.15)', activeBorder: 'rgba(239, 68, 68, 0.5)', activeText: 'text-rose-600 dark:text-rose-400' },
                       { val: 'too_vague', label: '🤷 太泛泛', activeBg: 'rgba(107, 114, 128, 0.15)', activeBorder: 'rgba(107, 114, 128, 0.5)', activeText: 'text-text-muted' },
                     ].map((opt) => {
                       const isActive = feedback === opt.val;
@@ -2338,7 +2338,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   </div>
                   
                   {feedback && (
-                    <p className="text-[10px] text-emerald-400/90 bg-emerald-500/5 p-2 rounded-lg border border-emerald-500/10 italic leading-relaxed text-center">
+                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 p-2 rounded-lg border border-emerald-500/10 italic leading-relaxed text-center">
                       ✨ 感谢您的真实评价！我们将把此诊断偏好记录入库，持续优化大模型微调提示词。
                     </p>
                   )}
@@ -2351,13 +2351,13 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                   <>
                     <button
                       onClick={onClose}
-                      className="flex-1 py-3 rounded-2xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-400 hover:bg-cyan-500/20 text-xs font-bold transition-all active:scale-[0.98] cursor-pointer"
+                      className="flex-1 py-3 rounded-2xl bg-neon-cyan/10 border border-neon-cyan/30 text-neon-cyan hover:bg-neon-cyan/20 text-xs font-bold transition-all active:scale-[0.98] cursor-pointer"
                     >
                       🚪 隐藏并保持后台运行
                     </button>
                     <button
                       onClick={handleCancelTask}
-                      className="flex-1 py-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400 hover:bg-rose-500/20 text-xs font-bold transition-all active:scale-[0.98] cursor-pointer"
+                      className="flex-1 py-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-600 dark:text-rose-400 hover:bg-rose-500/20 text-xs font-bold transition-all active:scale-[0.98] cursor-pointer"
                     >
                       🛑 终止并取消当前分析
                     </button>

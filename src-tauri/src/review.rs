@@ -199,9 +199,14 @@ async fn probe_cli(bin: &str) -> CliToolInfo {
     let exe_path = path.unwrap();
     let path_str = exe_path.to_string_lossy().to_string();
 
+    let mut cmd = Command::new(&exe_path);
+    cmd.arg("--version");
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
     let version = tokio::time::timeout(
         Duration::from_secs(5),
-        Command::new(&exe_path).arg("--version").output(),
+        cmd.output(),
     )
     .await
     .ok()
@@ -1025,6 +1030,7 @@ pub async fn handle_cancel_task(
                 if let Some(pid) = child.id() {
                     let mut cmd = tokio::process::Command::new("taskkill");
                     cmd.args(["/F", "/T", "/PID", &pid.to_string()]);
+                    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
                     let _ = cmd.output().await;
                 } else {
                     let _ = child.kill().await;
@@ -1446,6 +1452,9 @@ async fn run_cli_task_background(
     cmd.stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
     let mut child = match cmd.spawn() {
         Ok(c) => c,

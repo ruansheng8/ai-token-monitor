@@ -1,5 +1,6 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { apiUrl, readJsonResponse } from './lib/api';
 import { ReviewDrawer } from './components/ReviewDrawer';
 import {
@@ -355,6 +356,11 @@ export default function App() {
   const [testLoading, setTestLoading] = useState(false);
   const [saveLoading, setSaveLoading] = useState(false);
   const [configMessage, setConfigMessage] = useState<{ success: boolean; text: string } | null>(null);
+  
+  // 窗口关闭行为配置状态
+  const [closeBehavior, setCloseBehavior] = useState<'prompt' | 'close' | 'minimize'>('prompt');
+  const [showCloseConfirmModal, setShowCloseConfirmModal] = useState(false);
+  const [dontPromptAgain, setDontPromptAgain] = useState(true);
 
   // 设备名称配置状态
   const [showDeviceModal, setShowDeviceModal] = useState(false);
@@ -444,6 +450,10 @@ export default function App() {
             // 加载设备名配置
             setDeviceName(data.device_name || '');
             setDefaultDeviceName(data.default_device_name || '');
+            // 加载窗口关闭行为配置
+            if (data.close_behavior) {
+              setCloseBehavior(data.close_behavior as 'prompt' | 'close' | 'minimize');
+            }
           }
         } catch (e) {
           console.error("加载数据源配置失败", e);
@@ -453,9 +463,9 @@ export default function App() {
       const loadPricing = async () => {
         setPricingLoading(true);
         try {
-          const res = await fetch(`/api/model-pricing?t=${Date.now()}`);
+          const res = await fetch(apiUrl(`/model-pricing?t=${Date.now()}`));
           if (res.ok) {
-            const pricingData = await res.json();
+            const pricingData = await readJsonResponse<any>(res);
             if (pricingData.rows) {
               setModelPricingRows(pricingData.rows);
             }
@@ -779,6 +789,9 @@ export default function App() {
         const configRes = await fetch(apiUrl(`/config?t=${Date.now()}`));
         if (configRes.ok) {
           const configData = await readJsonResponse<any>(configRes);
+          if (configData.close_behavior) {
+            setCloseBehavior(configData.close_behavior as 'prompt' | 'close' | 'minimize');
+          }
           // 如果没有配置设备名 (即为 null 或空字符串)
           if (!configData.device_name) {
             setDefaultDeviceName(configData.default_device_name || '');
@@ -904,6 +917,22 @@ export default function App() {
       }
     };
   }, [source, startDate, endDate, currentPage, pageSize, searchKeyword, sortField, sortOrder, hideZero]);
+
+  // 4. 监听窗口关闭请求事件
+  useEffect(() => {
+    let unlisten: () => void;
+    listen('close-requested', () => {
+      console.log('收到窗口关闭请求，弹出确认框');
+      setShowCloseConfirmModal(true);
+    }).then((u) => {
+      unlisten = u;
+    });
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
+    };
+  }, []);
 
   // 排序字段切换
   const handleSort = (field: keyof SessionItem | 'total') => {
@@ -2167,7 +2196,7 @@ export default function App() {
                     : 'border-transparent text-text-secondary hover:text-text-primary'
                 }`}
               >
-                🖥️ 数据源与设备名
+                🖥️ 数据源与系统设置
               </button>
               <button
                 type="button"
@@ -2217,6 +2246,23 @@ export default function App() {
                     </div>
                     <p className="text-[10px] text-text-muted leading-relaxed">
                       * 用于多设备数据同步时区分用量。如果留空，系统启动时将拦截大盘并提示配置。
+                    </p>
+                  </div>
+
+                  {/* 窗口关闭行为配置 */}
+                  <div className="flex flex-col gap-2 animate-fade-in text-left">
+                    <label className="text-xs font-semibold text-text-secondary">🚪 窗口关闭行为 (Close Behavior)</label>
+                    <select
+                      value={closeBehavior}
+                      onChange={(e) => setCloseBehavior(e.target.value as 'prompt' | 'close' | 'minimize')}
+                      className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-2.5 text-xs text-text-primary outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
+                    >
+                      <option value="prompt">每次关闭时询问确认 (默认)</option>
+                      <option value="close">直接关闭并退出程序</option>
+                      <option value="minimize">最小化隐藏到系统托盘</option>
+                    </select>
+                    <p className="text-[10px] text-text-muted leading-relaxed font-sans">
+                      * 配置点击主窗口右上角关闭按钮时的动作。若选择最小化，软件将继续在后台驻留运行。
                     </p>
                   </div>
 
@@ -2365,7 +2411,7 @@ export default function App() {
                         setTestLoading(true);
                         setConfigMessage(null);
                         try {
-                          const response = await fetch('/api/config/test', {
+                          const response = await fetch(apiUrl('/config/test'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -2379,7 +2425,7 @@ export default function App() {
                             })
                           });
                           if (response.ok) {
-                            const res = await response.json();
+                            const res = await readJsonResponse<any>(response);
                             setConfigMessage({ success: res.success, text: res.message });
                           } else {
                             setConfigMessage({ success: false, text: '服务器返回错误，连接测试失败。' });
@@ -2405,7 +2451,7 @@ export default function App() {
                         setSaveLoading(true);
                         setConfigMessage(null);
                         try {
-                          const response = await fetch('/api/config/save', {
+                          const response = await fetch(apiUrl('/config/save'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -2417,16 +2463,17 @@ export default function App() {
                               pg_password: pgPassword,
                               pg_database: pgDatabase,
                               device_name: deviceName,
+                              close_behavior: closeBehavior,
                             })
                           });
                           if (response.ok) {
-                            const res = await response.json();
+                            const res = await readJsonResponse<any>(response);
                             if (res.success) {
                               setIsConfigOpen(false);
                               if (res.need_restart) {
                                 if (confirm(`${res.message}\n\n为了使新的数据库配置生效并避免数据冲突，软件需要重新启动。是否立即自动重启软件？`)) {
                                   try {
-                                    await fetch('/api/app/restart', { method: 'POST' });
+                                    await fetch(apiUrl('/app/restart'), { method: 'POST' });
                                   } catch (e) {
                                     console.error('重启请求失败:', e);
                                     alert('自动重启失败，请手动关闭并重新打开软件。');
@@ -2520,12 +2567,12 @@ export default function App() {
                           onClick={async () => {
                             if (confirm('是否确认恢复默认的模型费率规则？这会清空你当前的自定义修改。')) {
                               try {
-                                const res = await fetch('/api/exchange-rates/refresh', { method: 'POST' });
+                                const res = await fetch(apiUrl('/exchange-rates/refresh'), { method: 'POST' });
                                 if (res.ok) {
                                   // 重载费率列表
-                                  const pricingRes = await fetch(`/api/model-pricing?t=${Date.now()}`);
+                                  const pricingRes = await fetch(apiUrl(`/model-pricing?t=${Date.now()}`));
                                   if (pricingRes.ok) {
-                                    const pricingData = await pricingRes.json();
+                                    const pricingData = await readJsonResponse<any>(pricingRes);
                                     if (pricingData.rows) {
                                       setModelPricingRows(pricingData.rows);
                                       alert('恢复默认计费规则成功！');
@@ -2681,7 +2728,7 @@ export default function App() {
                         setPricingMessage(null);
                         try {
                           // 1. 先保存币种设置 (通过 config/save 提交)
-                          await fetch('/api/config/save', {
+                          await fetch(apiUrl('/config/save'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -2694,17 +2741,18 @@ export default function App() {
                               pg_database: pgDatabase,
                               device_name: deviceName,
                               display_currency: displayCurrency,
+                              close_behavior: closeBehavior,
                             })
                           });
 
                           // 2. 保存模型费率
-                          const response = await fetch('/api/model-pricing', {
+                          const response = await fetch(apiUrl('/model-pricing'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(modelPricingRows)
                           });
                           if (response.ok) {
-                            const res = await response.json();
+                            const res = await readJsonResponse<any>(response);
                             setPricingMessage({ success: res.success, text: res.message });
                             if (res.success) {
                               // 重新加载大盘数据以应用最新计费规则
@@ -2839,6 +2887,7 @@ export default function App() {
                           pg_password: pgPassword,
                           pg_database: pgDatabase,
                           device_name: deviceName.trim(),
+                          close_behavior: closeBehavior,
                         })
                       });
                       if (response.ok) {
@@ -3017,6 +3066,123 @@ export default function App() {
                   📥 保存财务报表图片
                 </a>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 窗口关闭确认 Modal */}
+      {showCloseConfirmModal && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-md p-4 animate-fade-in select-none">
+          <div className="relative w-full max-w-md rounded-[28px] border border-card-border bg-bg-secondary/95 dark:bg-[#0f192b]/95 backdrop-blur-xl p-6 text-text-primary shadow-2xl overflow-hidden shadow-neon-cyan/5 transition-all duration-300">
+            {/* 装饰性背景光效 */}
+            <div className="absolute -top-20 -left-20 w-44 h-44 bg-neon-cyan/10 rounded-full blur-3xl pointer-events-none"></div>
+            <div className="absolute -bottom-20 -right-20 w-44 h-44 bg-neon-purple/10 rounded-full blur-3xl pointer-events-none"></div>
+
+            {/* 弹窗头部 */}
+            <div className="flex justify-between items-center pb-3 border-b border-card-border mb-4 relative z-10">
+              <h2 className="text-sm font-bold flex items-center gap-2">
+                <span className="bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent">🚪 窗口关闭行为确认</span>
+              </h2>
+              <button
+                onClick={() => setShowCloseConfirmModal(false)}
+                className="w-7 h-7 rounded-full flex items-center justify-center bg-bg-secondary/60 dark:bg-white/5 hover:bg-bg-secondary dark:hover:bg-white/10 text-text-secondary hover:text-text-primary transition-all cursor-pointer border border-card-border text-xs"
+              >
+                ×
+              </button>
+            </div>
+
+            {/* 弹窗文本描述 */}
+            <div className="relative z-10 text-left space-y-3 mb-5">
+              <p className="text-xs text-text-primary leading-relaxed font-sans font-medium">
+                您点击了主窗口的关闭按钮。为了防止程序意外中断，系统已帮您拦截此行为。
+              </p>
+              <p className="text-[11px] text-text-secondary leading-relaxed font-sans">
+                请选择您想要执行的操作。如果您希望在后台继续监视 AI 的 Token 使用量，建议选择“最小化到后台”。
+              </p>
+            </div>
+
+            {/* 复选框 - 记住选择 */}
+            <div className="relative z-10 flex items-center mb-6 text-left">
+              <label className="flex items-center gap-2.5 text-[11px] text-text-secondary cursor-pointer select-none group font-medium">
+                <input
+                  type="checkbox"
+                  checked={dontPromptAgain}
+                  onChange={(e) => setDontPromptAgain(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-card-border accent-neon-cyan cursor-pointer transition-all"
+                />
+                <span className="group-hover:text-text-primary transition-colors">记住我的选择，以后不再提示确认</span>
+              </label>
+            </div>
+
+            {/* 弹窗操作按钮 */}
+            <div className="relative z-10 flex items-center gap-3.5">
+              <button
+                type="button"
+                onClick={async () => {
+                  setShowCloseConfirmModal(false);
+                  if (dontPromptAgain) {
+                    setCloseBehavior('minimize');
+                    try {
+                      await fetch(apiUrl('/config/save'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          db_type: dbType,
+                          sqlite_path: sqlitePath,
+                          pg_host: pgHost,
+                          pg_port: pgPort,
+                          pg_user: pgUser,
+                          pg_password: pgPassword,
+                          pg_database: pgDatabase,
+                          device_name: deviceName,
+                          display_currency: displayCurrency,
+                          close_behavior: 'minimize',
+                        })
+                      });
+                    } catch (e) {
+                      console.error("保存关闭配置失败", e);
+                    }
+                  }
+                  await invoke('hide_window');
+                }}
+                className="flex-1 py-2.5 rounded-xl border border-card-border text-[11px] font-bold text-text-secondary hover:text-text-primary hover:border-neon-cyan/40 hover:bg-bg-secondary/80 active:scale-95 transition-all cursor-pointer text-center"
+              >
+                📥 最小化到托盘
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  setShowCloseConfirmModal(false);
+                  if (dontPromptAgain) {
+                    setCloseBehavior('close');
+                    try {
+                      await fetch(apiUrl('/config/save'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                          db_type: dbType,
+                          sqlite_path: sqlitePath,
+                          pg_host: pgHost,
+                          pg_port: pgPort,
+                          pg_user: pgUser,
+                          pg_password: pgPassword,
+                          pg_database: pgDatabase,
+                          device_name: deviceName,
+                          display_currency: displayCurrency,
+                          close_behavior: 'close',
+                        })
+                      });
+                    } catch (e) {
+                      console.error("保存关闭配置失败", e);
+                    }
+                  }
+                  await invoke('exit_app');
+                }}
+                className="flex-1 py-2.5 rounded-xl bg-gradient-to-r from-neon-cyan to-neon-purple hover:shadow-[0_0_15px_rgba(6,182,212,0.3)] hover:scale-105 active:scale-95 text-[11px] font-bold text-white transition-all cursor-pointer text-center"
+              >
+                🚪 直接退出程序
+              </button>
             </div>
           </div>
         </div>

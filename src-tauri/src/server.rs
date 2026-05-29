@@ -275,6 +275,7 @@ pub struct ConfigReq {
     pub device_name: Option<String>,
     pub default_device_name: Option<String>,
     pub display_currency: Option<String>,
+    pub close_behavior: Option<String>,
 }
 
 pub async fn handle_config_get() -> impl axum::response::IntoResponse {
@@ -301,6 +302,7 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
         let mut pg_user = std::env::var("DB_PG_USER").unwrap_or_default();
         let mut pg_password = std::env::var("DB_PG_PASSWORD").unwrap_or_default();
         let mut pg_database = std::env::var("DB_PG_DATABASE").unwrap_or_default();
+        let close_behavior = std::env::var("CLOSE_BEHAVIOR").unwrap_or_else(|_| "prompt".to_string());
 
         // 向上兼容：如果拆分的属性为空，但存在 DATABASE_URL，则尝试解析并回显它
         if pg_host.trim().is_empty() {
@@ -326,6 +328,7 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
             device_name,
             default_device_name: Some(default_device_name),
             display_currency,
+            close_behavior: Some(close_behavior),
         };
 
         Ok::<ConfigReq, String>(resp)
@@ -455,6 +458,7 @@ pub async fn handle_config_save(
         let new_sqlite_path = req.sqlite_path.clone().unwrap_or_default().trim().to_string();
         let new_device_name = req.device_name.clone().unwrap_or_default().trim().to_string();
         let new_display_currency = req.display_currency.clone().unwrap_or_else(|| "USD".to_string()).trim().to_string();
+        let new_close_behavior = req.close_behavior.clone().unwrap_or_else(|| "prompt".to_string()).trim().to_string();
 
         let new_pg_host = req.pg_host.clone().unwrap_or_default().trim().to_string();
         let new_pg_port = req.pg_port.clone().unwrap_or_default().trim().to_string();
@@ -513,6 +517,7 @@ pub async fn handle_config_save(
         set_env_var(&mut lines, "DB_SQLITE_PATH", &new_sqlite_path);
         set_env_var(&mut lines, "DEVICE_NAME", &new_device_name);
         set_env_var(&mut lines, "DISPLAY_CURRENCY", &new_display_currency);
+        set_env_var(&mut lines, "CLOSE_BEHAVIOR", &new_close_behavior);
 
         set_env_var(&mut lines, "DB_PG_HOST", &new_pg_host);
         set_env_var(&mut lines, "DB_PG_PORT", &new_pg_port);
@@ -539,6 +544,7 @@ pub async fn handle_config_save(
         std::env::set_var("DB_SQLITE_PATH", &new_sqlite_path);
         std::env::set_var("DEVICE_NAME", &new_device_name);
         std::env::set_var("DISPLAY_CURRENCY", &new_display_currency);
+        std::env::set_var("CLOSE_BEHAVIOR", &new_close_behavior);
         std::env::set_var("DB_PG_HOST", &new_pg_host);
         std::env::set_var("DB_PG_PORT", &new_pg_port);
         std::env::set_var("DB_PG_USER", &new_pg_user);
@@ -753,5 +759,37 @@ pub async fn handle_exchange_rate_refresh() -> impl axum::response::IntoResponse
                 .unwrap()
         }
     }
+}
+
+// ==================== CORS 全局跨域与预检中间件 ====================
+pub async fn cors_middleware(
+    request: axum::http::Request<axum::body::Body>,
+    next: axum::middleware::Next,
+) -> impl axum::response::IntoResponse {
+    let method = request.method().clone();
+    
+    // 如果是 OPTIONS 预检请求，直接返回支持 CORS 的响应，不执行后续 Handler
+    if method == axum::http::Method::OPTIONS {
+        return axum::http::Response::builder()
+            .status(axum::http::StatusCode::OK)
+            .header(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .header(axum::http::header::ACCESS_CONTROL_ALLOW_METHODS, "GET, POST, PUT, DELETE, OPTIONS")
+            .header(axum::http::header::ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type, Authorization")
+            .body(axum::body::Body::empty())
+            .unwrap();
+    }
+
+    // 调用后续 Handler 处理
+    let mut response = next.run(request).await;
+    
+    // 如果响应头里没有 Access-Control-Allow-Origin，则补上
+    if !response.headers().contains_key(axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN) {
+        response.headers_mut().insert(
+            axum::http::header::ACCESS_CONTROL_ALLOW_ORIGIN,
+            axum::http::HeaderValue::from_static("*"),
+        );
+    }
+    
+    response
 }
 

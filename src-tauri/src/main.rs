@@ -20,7 +20,7 @@ use review::{
 };
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 
 fn start_folder_watcher() {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<()>(100);
@@ -154,7 +154,8 @@ fn main() {
                 .route("/api/review/tasks/:id/retry", post(handle_retry_task))
                 .route("/api/review/tasks/:id/action-items", post(handle_save_action_items))
                 .route("/api/review/tasks/:id/feedback", post(handle_save_quality_feedback))
-                .fallback(serve_static_file_fallback);
+                .fallback(serve_static_file_fallback)
+                .layer(axum::middleware::from_fn(server::cors_middleware));
 
             // 启动文件监测与热同步服务
             start_folder_watcher();
@@ -185,14 +186,35 @@ fn main() {
 
     // 2. 启动 Tauri 应用
     tauri::Builder::default()
+        .invoke_handler(tauri::generate_handler![exit_app, hide_window])
         .setup(|app| {
             // 设置全局 AppHandle 以便后台扫描任务成功时可以 emit 广播热更新事件给前端
             db::APP_HANDLE.set(app.handle().clone()).ok();
 
-            // 创建系统托盘，使得左键点击时能重新唤起大盘窗口
+            // 创建系统托盘，使得左键点击时能重新唤起大盘窗口并支持右键退出菜单
             if let Some(icon) = app.default_window_icon().cloned() {
+                use tauri::menu::{Menu, MenuItem};
+                let quit_i = MenuItem::with_id(app, "quit", "退出程序", true, None::<&str>)?;
+                let show_i = MenuItem::with_id(app, "show", "显示主窗口", true, None::<&str>)?;
+                let tray_menu = Menu::with_items(app, &[&show_i, &quit_i])?;
+
                 let _tray = tauri::tray::TrayIconBuilder::new()
                     .icon(icon)
+                    .menu(&tray_menu)
+                    .on_menu_event(|app, event| {
+                        match event.id.as_ref() {
+                            "quit" => {
+                                app.exit(0);
+                            }
+                            "show" => {
+                                if let Some(window) = app.get_webview_window("main") {
+                                    let _ = window.show();
+                                    let _ = window.set_focus();
+                                }
+                            }
+                            _ => {}
+                        }
+                    })
                     .on_tray_icon_event(|tray, event| {
                         if let tauri::tray::TrayIconEvent::Click {
                             button: tauri::tray::MouseButton::Left,
@@ -213,11 +235,34 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                // 拦截关闭请求并隐藏窗口
-                api.prevent_close();
-                let _ = window.hide();
+                let behavior = std::env::var("CLOSE_BEHAVIOR").unwrap_or_else(|_| "prompt".to_string());
+                match behavior.as_str() {
+                    "close" => {
+                        window.app_handle().exit(0);
+                    }
+                    "minimize" => {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                    _ => {
+                        // 阻止默认关闭，并通知前端弹窗
+                        api.prevent_close();
+                        let _ = window.emit("close-requested", ());
+                    }
+                }
             }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[tauri::command]
+fn exit_app(app_handle: tauri::AppHandle) {
+    app_handle.exit(0);
+}
+
+#[tauri::command]
+fn hide_window(window: tauri::Window) {
+    let _ = window.hide();
+}
+
