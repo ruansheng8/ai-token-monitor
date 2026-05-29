@@ -372,6 +372,92 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
     conn.execute("INSERT OR IGNORE INTO exchange_rates (currency_code, rate_from_usd, updated_at) VALUES ('JPY', 155.4, ?)", [&now])?;
     conn.execute("INSERT OR IGNORE INTO exchange_rates (currency_code, rate_from_usd, updated_at) VALUES ('EUR', 0.92, ?)", [&now])?;
 
+    // 创建使用复盘与建议的后台任务与事件记录表
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS review_tasks (
+            id TEXT PRIMARY KEY,
+            title TEXT NOT NULL,
+            status TEXT NOT NULL,
+            cli_name TEXT NOT NULL,
+            cli_path TEXT,
+            time_range TEXT NOT NULL,
+            selected_ides_json TEXT NOT NULL,
+            prompt_text TEXT NOT NULL,
+            prompt_hash TEXT NOT NULL,
+            metrics_snapshot_json TEXT NOT NULL,
+            metrics_hash TEXT NOT NULL,
+            dedupe_key TEXT NOT NULL,
+            progress_stage TEXT NOT NULL,
+            progress_percent INTEGER NOT NULL DEFAULT 0,
+            status_message TEXT NOT NULL DEFAULT '',
+            output_markdown TEXT NOT NULL DEFAULT '',
+            error_message TEXT,
+            exit_code INTEGER,
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            finished_at TEXT,
+            canceled_at TEXT,
+            last_heartbeat_at TEXT,
+            error_type TEXT DEFAULT NULL,
+            quality_feedback TEXT DEFAULT NULL,
+            action_items_json TEXT DEFAULT NULL,
+            compare_metrics_snapshot_json TEXT DEFAULT NULL
+        )",
+        [],
+    )?;
+
+    // SQLite 增量升级：为 review_tasks 表添加 error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json 字段 (若已存在表)
+    {
+        let mut stmt = conn.prepare("PRAGMA table_info(review_tasks)")?;
+        let mut rows = stmt.query([])?;
+        let mut has_error_type = false;
+        let mut has_quality_feedback = false;
+        let mut has_action_items = false;
+        let mut has_compare_metrics_snapshot = false;
+        while let Some(row) = rows.next()? {
+            let name: String = row.get(1)?;
+            if name == "error_type" {
+                has_error_type = true;
+            } else if name == "quality_feedback" {
+                has_quality_feedback = true;
+            } else if name == "action_items_json" {
+                has_action_items = true;
+            } else if name == "compare_metrics_snapshot_json" {
+                has_compare_metrics_snapshot = true;
+            }
+        }
+        if !has_error_type {
+            let _ = conn.execute("ALTER TABLE review_tasks ADD COLUMN error_type TEXT DEFAULT NULL;", []);
+        }
+        if !has_quality_feedback {
+            let _ = conn.execute("ALTER TABLE review_tasks ADD COLUMN quality_feedback TEXT DEFAULT NULL;", []);
+        }
+        if !has_action_items {
+            let _ = conn.execute("ALTER TABLE review_tasks ADD COLUMN action_items_json TEXT DEFAULT NULL;", []);
+        }
+        if !has_compare_metrics_snapshot {
+            let _ = conn.execute("ALTER TABLE review_tasks ADD COLUMN compare_metrics_snapshot_json TEXT DEFAULT NULL;", []);
+        }
+    }
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS review_task_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id TEXT NOT NULL,
+            sequence INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            message TEXT NOT NULL,
+            payload_json TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(task_id) REFERENCES review_tasks(id)
+        )",
+        [],
+    )?;
+
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_tasks_status_created ON review_tasks(status, created_at DESC);", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_tasks_dedupe ON review_tasks(dedupe_key, status);", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_task_events_task_sequence ON review_task_events(task_id, sequence);", [])?;
+
     Ok(())
 }
 

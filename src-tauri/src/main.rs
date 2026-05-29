@@ -13,7 +13,11 @@ use server::{
     handle_db_clean, handle_sessions_paginated, handle_model_pricing_get,
     handle_model_pricing_save, handle_exchange_rate_refresh,
 };
-use review::{handle_review_detect, handle_review_stream};
+use review::{
+    handle_review_detect, handle_create_task, handle_list_tasks,
+    handle_get_active_task, handle_get_task, handle_task_events, handle_cancel_task,
+    handle_delete_task, handle_retry_task, handle_save_action_items, handle_save_quality_feedback,
+};
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
 use tauri::Manager;
@@ -111,6 +115,7 @@ fn start_folder_watcher() {
 fn main() {
     // 启动时初始化本地缓存数据库，确保表结构完备，避免多请求并发竞争初始化导致的数据库锁死
     let _ = db::init_cache_db();
+    let _ = review::recover_interrupted_tasks();
 
     let mut port = 19362;
     let args: Vec<String> = std::env::args().collect();
@@ -141,7 +146,14 @@ fn main() {
                 .route("/api/model-pricing", get(handle_model_pricing_get).post(handle_model_pricing_save))
                 .route("/api/exchange-rates/refresh", post(handle_exchange_rate_refresh))
                 .route("/api/review/detect", get(handle_review_detect))
-                .route("/api/review/stream", get(handle_review_stream))
+                .route("/api/review/tasks", get(handle_list_tasks).post(handle_create_task))
+                .route("/api/review/tasks/active", get(handle_get_active_task))
+                .route("/api/review/tasks/:id", get(handle_get_task).delete(handle_delete_task))
+                .route("/api/review/tasks/:id/events", get(handle_task_events))
+                .route("/api/review/tasks/:id/cancel", post(handle_cancel_task))
+                .route("/api/review/tasks/:id/retry", post(handle_retry_task))
+                .route("/api/review/tasks/:id/action-items", post(handle_save_action_items))
+                .route("/api/review/tasks/:id/feedback", post(handle_save_quality_feedback))
                 .fallback(serve_static_file_fallback);
 
             // 启动文件监测与热同步服务
