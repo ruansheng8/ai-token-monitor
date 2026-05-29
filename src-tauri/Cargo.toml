@@ -26,5 +26,6 @@ sysinfo = "0.30"
 which = "6"
 tokio-stream = "0.1"
 
-
-
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]

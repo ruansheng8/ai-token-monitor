@@ -134,15 +134,23 @@ ai-token-monitor/
 
 由于前端编译后的静态资源已使用 `rust-embed` 在编译时自动打包嵌入到 Rust 二进制程序中，因此打包后不需要携带任何静态资源文件：
 
-1. **本地编译可执行文件**：
-   在项目根目录下，运行以下命令编译 Release 版本：
+1. **标准构建生产版本（推荐）**：
+   在项目根目录下，运行以下命令来编译打包 Release 版本：
+   ```bash
+   pnpm tauri build
+   ```
+   Tauri CLI 会自动执行前端构建（`pnpm build`）、配置 Rust 生产编译特征（激活内置自定义协议 `custom-protocol`），并在 `src-tauri/target/release/bundle/` 目录下生成打包好的安装程序及可执行文件。
+
+2. **原生 Cargo 编译单可执行文件**：
+   如果您只需要编译出单个独立的 `.exe` 可执行文件（不生成安装程序），可以运行：
    ```bash
    pnpm build && cd src-tauri && cargo build --release
    ```
-   编译成功后，在 `src-tauri/target/release/` 目录下会生成一个名为 `ai-token-monitor.exe` 的可执行文件（体积仅约 4.5MB 左右）。
+   *💡 注意：我们已经在 [src-tauri/Cargo.toml](file:///d:/VibeCoding/ai-token-monitor/src-tauri/Cargo.toml) 中配置了默认特性 `default = ["custom-protocol"]`，因此无论使用 `pnpm tauri build` 还是原生 `cargo build --release`，自定义文件服务协议都会被正确启用，不会出现 production 运行版前端去连接 localhost 开发服务器（即 5173 端口拒绝连接）的问题。*
 
-2. **双击即用分发**：
-   您只需将单个 `ai-token-monitor.exe` 文件发送给其他 Windows 用户，对方直接双击运行即可，不需要附带任何 `.html`、`.css` 或 `.js` 文件。
+3. **双击即用分发**：
+   您只需将编译出的单个 `ai-token-monitor.exe`（在 `src-tauri/target/release/` 下）发送给其他 Windows 用户，对方直接双击运行即可，不需要附带任何外部 `.html`、`.css` 或 `.js` 静态资源文件。
+
 
 ---
 
