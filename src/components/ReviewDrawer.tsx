@@ -28,6 +28,7 @@ import { apiUrl, readJsonResponse } from '../lib/api';
 // ============================================================
 
 const TIME_RANGE_OPTIONS = [
+  { label: '今日', value: '今日' },
   { label: '近 7 天', value: '7天' },
   { label: '近 30 天', value: '30天' },
   { label: '周度对比 (本周 vs 上周)', value: '周度对比' },
@@ -35,11 +36,13 @@ const TIME_RANGE_OPTIONS = [
 ];
 
 const IDE_OPTIONS = [
-  { label: '全部 IDE', value: 'all' },
+  { label: '全部工具 (All)', value: 'all' },
+  { label: 'Antigravity', value: 'antigravity' },
   { label: 'Claude Code', value: 'claude_code' },
+  { label: 'Codex CLI', value: 'codex' },
   { label: 'Cursor', value: 'cursor' },
-  { label: 'Copilot', value: 'copilot' },
-  { label: 'Windsurf', value: 'windsurf' },
+  { label: 'Trae', value: 'trae' },
+  { label: 'Trae CN', value: 'trae_cn' },
 ];
 
 const DEFAULT_PROMPT_TEMPLATE = `你是一位专业的 AI 工具使用顾问。我使用 AI Token Monitor 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
@@ -318,7 +321,17 @@ function getCliDisplayName(bin: string): string {
 function getReviewDateBounds(range: string) {
   const end = new Date();
   const start = new Date();
-  if (range === '7天') {
+
+  const format = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  if (range === '今日') {
+    // 保持 start 为今天
+  } else if (range === '7天') {
     start.setDate(end.getDate() - 7);
   } else if (range === '30天') {
     start.setDate(end.getDate() - 30);
@@ -326,25 +339,28 @@ function getReviewDateBounds(range: string) {
     start.setFullYear(end.getFullYear() - 5);
   }
 
-  const format = (d: Date) => d.toISOString().slice(0, 10);
   return { start: format(start), end: format(end) };
 }
 
 function buildPromptFromTemplate(template: string, ides: string[]): string {
   let ide_display = '';
   if (ides.includes('all') || ides.length === 0) {
-    ide_display = 'Claude Code、Codex、Cursor';
+    ide_display = '全部工具 (Antigravity、Claude Code、Codex CLI、Cursor、Trae、Trae CN)';
   } else {
     const mapped = ides.map((s) => {
       switch (s) {
+        case 'antigravity':
+          return 'Antigravity';
         case 'claude_code':
           return 'Claude Code';
+        case 'codex':
+          return 'Codex CLI';
         case 'cursor':
           return 'Cursor';
-        case 'copilot':
-          return 'Copilot';
-        case 'windsurf':
-          return 'Windsurf';
+        case 'trae':
+          return 'Trae';
+        case 'trae_cn':
+          return 'Trae CN';
         default:
           return s;
       }
@@ -459,7 +475,8 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
   const lastAutoPromptRef = useRef('');
   useEffect(() => {
     const selectedPreset = TEMPLATE_PRESETS.find(p => p.id === selectedTemplateId) || TEMPLATE_PRESETS[0];
-    const templateWithTime = selectedPreset.template.replace('最近7天', `最近${reviewTimeRange}`);
+    const timeLabel = reviewTimeRange === '今日' ? '今日' : `最近${reviewTimeRange}`;
+    const templateWithTime = selectedPreset.template.replace('最近7天', timeLabel);
     const newPrompt = buildPromptFromTemplate(templateWithTime, selectedIdes);
 
     if (customPrompt === '' || customPrompt === lastAutoPromptRef.current) {
@@ -471,17 +488,19 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
   const handleSelectTemplate = (templateId: string) => {
     setSelectedTemplateId(templateId);
     const selectedPreset = TEMPLATE_PRESETS.find(p => p.id === templateId) || TEMPLATE_PRESETS[0];
-    const templateWithTime = selectedPreset.template.replace('最近7天', `最近${reviewTimeRange}`);
+    const timeLabel = reviewTimeRange === '今日' ? '今日' : `最近${reviewTimeRange}`;
+    const templateWithTime = selectedPreset.template.replace('最近7天', timeLabel);
     const newPrompt = buildPromptFromTemplate(templateWithTime, selectedIdes);
     setCustomPrompt(newPrompt);
     lastAutoPromptRef.current = newPrompt;
   };
 
   // ────── 检测宿主机 CLI ──────
-  const detectCliTools = async () => {
+  const detectCliTools = async (force = false) => {
     setDetectLoading(true);
     try {
-      const res = await fetch(apiUrl('/review/detect'));
+      const url = apiUrl(force ? '/review/detect?force=true' : '/review/detect');
+      const res = await fetch(url);
       if (res.ok) {
         const data: DetectResponse = await readJsonResponse<DetectResponse>(res);
         setDetectResult(data);
@@ -1254,7 +1273,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
           width: 'min(780px, 96vw)',
           background: 'var(--bg-secondary)',
           borderLeft: '1px solid var(--card-border)',
-          boxShadow: '-20px 0 60px rgba(0,0,0,0.3)',
+          boxShadow: isOpen ? '-20px 0 60px rgba(0,0,0,0.3)' : 'none',
         }}
       >
         {/* ── 头部流光渐变 Header ── */}
@@ -1584,7 +1603,7 @@ export function ReviewDrawer({ isOpen, onClose, metrics }: ReviewDrawerProps) {
                     第二步：选择运行分析引擎 CLI
                   </h3>
                   <button
-                    onClick={detectCliTools}
+                    onClick={() => detectCliTools(true)}
                     disabled={detectLoading}
                     className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border border-neon-cyan/25 bg-neon-cyan/5 text-neon-cyan hover:bg-neon-cyan/10 cursor-pointer"
                   >

@@ -288,7 +288,49 @@ async fn record_and_broadcast_event(
 
 /// GET /api/review/detect
 /// 检测宿主机已安装的 AI CLI 工具，返回可用列表
-pub async fn handle_review_detect() -> Response<Body> {
+pub async fn handle_review_detect(
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> Response<Body> {
+    let force = params.get("force").map(|s| s == "true").unwrap_or(false);
+
+    let cache_path = std::path::Path::new(&crate::db::get_user_profile_dir())
+        .join(".ai_token_monitor")
+        .join("cli_detect_cache.json");
+
+    #[derive(Debug, Serialize, Deserialize, Clone)]
+    pub struct CliDetectCache {
+        pub detected_at: String,
+        pub tools: Vec<CliToolInfo>,
+        pub recommended: Option<String>,
+    }
+
+    // 1. 尝试从缓存中读取 (非 force 模式)
+    if !force {
+        if let Ok(content) = std::fs::read_to_string(&cache_path) {
+            if let Ok(cache) = serde_json::from_str::<CliDetectCache>(&content) {
+                if let Ok(detected_dt) = chrono::DateTime::parse_from_rfc3339(&cache.detected_at) {
+                    let now = chrono::Utc::now();
+                    let duration = now.signed_duration_since(detected_dt.with_timezone(&chrono::Utc));
+                    if duration.num_hours() < 24 {
+                        let resp = DetectResponse {
+                            tools: cache.tools,
+                            recommended: cache.recommended,
+                        };
+                        if let Ok(body_bytes) = serde_json::to_vec(&resp) {
+                            return Response::builder()
+                                .status(StatusCode::OK)
+                                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                                .body(Body::from(body_bytes))
+                                .unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 缓存失效或 force 模式：执行真实检测
     let candidate_bins = ["claude", "codex", "gemini"];
 
     let mut tools = Vec::new();
@@ -301,7 +343,23 @@ pub async fn handle_review_detect() -> Response<Body> {
         .find(|t| t.available)
         .map(|t| t.name.clone());
 
-    let resp = DetectResponse { tools, recommended };
+    let resp = DetectResponse {
+        tools: tools.clone(),
+        recommended: recommended.clone(),
+    };
+
+    // 3. 写入最新探测数据到缓存文件
+    let cache_data = CliDetectCache {
+        detected_at: chrono::Utc::now().to_rfc3339(),
+        tools,
+        recommended,
+    };
+    if let Ok(cache_json) = serde_json::to_string(&cache_data) {
+        if let Some(parent) = cache_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(&cache_path, cache_json);
+    }
 
     let body_bytes = serde_json::to_vec(&resp).unwrap_or_default();
     Response::builder()
@@ -1826,14 +1884,16 @@ const DEFAULT_PROMPT_TEMPLATE: &str = r#"你是一位专业的 AI 工具使用�
 
 fn buildPromptFromTemplate(template: &str, ides: &[String]) -> String {
     let ide_display = if ides.contains(&"all".to_string()) || ides.is_empty() {
-        "Claude Code、Codex、Cursor".to_string()
+        "全部工具 (Antigravity、Claude Code、Codex CLI、Cursor、Trae、Trae CN)".to_string()
     } else {
         let mapped: Vec<String> = ides.iter().map(|s| {
             match s.as_str() {
+                "antigravity" => "Antigravity".to_string(),
                 "claude_code" => "Claude Code".to_string(),
+                "codex" => "Codex CLI".to_string(),
                 "cursor" => "Cursor".to_string(),
-                "copilot" => "Copilot".to_string(),
-                "windsurf" => "Windsurf".to_string(),
+                "trae" => "Trae".to_string(),
+                "trae_cn" => "Trae CN".to_string(),
                 _ => s.to_string(),
             }
         }).collect();

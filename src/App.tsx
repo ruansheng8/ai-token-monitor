@@ -380,13 +380,113 @@ export default function App() {
   const [cleanMessage, setCleanMessage] = useState<string | null>(null);
 
   // 财务报表生成与预览状态
-  const [isGeneratingReport, _setIsGeneratingReport] = useState(false);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
-  const [reportImgUrl, _setReportImgUrl] = useState('');
+  const [reportImgUrl, setReportImgUrl] = useState('');
 
-  /*
-  const _generateReportImage = async () => {
+  const generateReportImage = async () => {
     setIsGeneratingReport(true);
+    const originalGetComputedStyle = window.getComputedStyle;
+
+    const oklabToRgb = (l: number, a: number, b: number, alpha?: number): string => {
+      const l_ = l + 0.3963377774 * a + 0.2158037573 * b;
+      const m_ = l - 0.1055613458 * a - 0.0638541728 * b;
+      const s_ = l - 0.0894841775 * a - 1.2914855480 * b;
+
+      const l_3 = l_ * l_ * l_;
+      const m_3 = m_ * m_ * m_;
+      const s_3 = s_ * s_ * s_;
+
+      const r = +4.0767416621 * l_3 - 3.3077115913 * m_3 + 0.2309699292 * s_3;
+      const g = -1.2684380046 * l_3 + 2.6097574011 * m_3 - 0.3413193965 * s_3;
+      const b_val = -0.0041960863 * l_3 - 0.7034186147 * m_3 + 1.7076172314 * s_3;
+
+      const fn = (c: number) => {
+        const abs = Math.abs(c);
+        const res = abs > 0.0031308 ? 1.055 * Math.pow(abs, 1 / 2.4) - 0.055 : 12.92 * abs;
+        return Math.min(255, Math.max(0, Math.round(Math.sign(c) * res * 255)));
+      };
+
+      const red = fn(r);
+      const green = fn(g);
+      const blue = fn(b_val);
+
+      if (alpha !== undefined) {
+        return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+      }
+      return `rgb(${red}, ${green}, ${blue})`;
+    };
+
+    const oklchToRgb = (l: number, c: number, h: number, alpha?: number): string => {
+      const hueRad = (h * Math.PI) / 180;
+      const a = c * Math.cos(hueRad);
+      const b = c * Math.sin(hueRad);
+      return oklabToRgb(l, a, b, alpha);
+    };
+
+    const parsePercentOrNum = (val: string, base: number = 1): number => {
+      if (val.endsWith('%')) {
+        return (parseFloat(val) / 100) * base;
+      }
+      return parseFloat(val);
+    };
+
+    const parseAndConvertColor = (colorStr: string): string => {
+      if (!colorStr) return colorStr;
+
+      const oklabRegex = /oklab\(\s*([+-]?\d*\.?\d+%?)(?:\s+|,\s*)([+-]?\d*\.?\d+%?)(?:\s+|,\s*)([+-]?\d*\.?\d+%?)(?:\s*[/,]\s*([+-]?\d*\.?\d+%?))?\s*\)/g;
+      const oklchRegex = /oklch\(\s*([+-]?\d*\.?\d+%?)(?:\s+|,\s*)([+-]?\d*\.?\d+%?)(?:\s+|,\s*)([+-]?\d*\.?\d+%?)(?:\s*[/,]\s*([+-]?\d*\.?\d+%?))?\s*\)/g;
+
+      let result = colorStr;
+
+      result = result.replace(oklabRegex, (_, lStr, aStr, bStr, alphaStr) => {
+        const l = parsePercentOrNum(lStr, 1);
+        const a = parsePercentOrNum(aStr, 1);
+        const b = parsePercentOrNum(bStr, 1);
+        const alpha = alphaStr ? parsePercentOrNum(alphaStr, 1) : undefined;
+        return oklabToRgb(l, a, b, alpha);
+      });
+
+      result = result.replace(oklchRegex, (_, lStr, cStr, hStr, alphaStr) => {
+        const l = parsePercentOrNum(lStr, 1);
+        const c = parsePercentOrNum(cStr, 1);
+        let h = parseFloat(hStr);
+        if (hStr.endsWith('deg')) {
+          h = parseFloat(hStr);
+        } else if (hStr.endsWith('rad')) {
+          h = (parseFloat(hStr) * 180) / Math.PI;
+        } else if (hStr.endsWith('turn')) {
+          h = parseFloat(hStr) * 360;
+        }
+        const alpha = alphaStr ? parsePercentOrNum(alphaStr, 1) : undefined;
+        return oklchToRgb(l, c, h, alpha);
+      });
+
+      return result;
+    };
+
+    window.getComputedStyle = function(el: Element, pseudoElt?: string | null) {
+      const style = originalGetComputedStyle(el, pseudoElt);
+      return new Proxy(style, {
+        get(target, prop) {
+          const val = Reflect.get(target, prop);
+          if (typeof val === 'string') {
+            return parseAndConvertColor(val);
+          }
+          if (typeof val === 'function') {
+            if (prop === 'getPropertyValue') {
+              return function(property: string) {
+                const originalVal = target.getPropertyValue(property);
+                return parseAndConvertColor(originalVal);
+              };
+            }
+            return val.bind(target);
+          }
+          return val;
+        }
+      });
+    };
+
     try {
       const html2canvas = (await import('html2canvas')).default;
       const element = document.getElementById('report-container');
@@ -411,10 +511,10 @@ export default function App() {
       console.error('Failed to generate report image:', error);
       alert('生成财务报表图片失败，原因: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
+      window.getComputedStyle = originalGetComputedStyle;
       setIsGeneratingReport(false);
     }
   };
-  */
 
   const handleDbClean = async () => {
     setCleanLoading(true);
@@ -1641,7 +1741,13 @@ export default function App() {
                 >
                   📥 导出 CSV 账单
                 </button>
-                {/* 生成财务报表按钮 - 暂时隐藏 */}
+                <button
+                  onClick={generateReportImage}
+                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:from-neon-cyan/90 hover:to-neon-purple/90 text-white cursor-pointer transition-all duration-200 flex items-center gap-1 shadow-sm no-print"
+                  title="将当前大盘数据重绘为超清财务报表图片"
+                >
+                  🧾 生成财务报表
+                </button>
               </div>
 
               {/* 开关 */}
