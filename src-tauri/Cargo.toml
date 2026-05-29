@@ -23,6 +23,8 @@ rust-embed = "8.3"
 refinery = { version = "0.8.14", features = ["rusqlite", "postgres"] }
 notify = "6.1.1"
 sysinfo = "0.30"
+which = "6"
+tokio-stream = "0.1"
 
 
 

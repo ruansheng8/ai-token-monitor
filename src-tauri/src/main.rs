@@ -4,6 +4,7 @@ mod proto;
 mod db;
 mod server;
 mod db_adapter;
+mod review;
 
 use axum::{routing::{get, post}, Router};
 use server::{
@@ -12,6 +13,7 @@ use server::{
     handle_db_clean, handle_sessions_paginated, handle_model_pricing_get,
     handle_model_pricing_save, handle_exchange_rate_refresh,
 };
+use review::{handle_review_detect, handle_review_stream};
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
 use tauri::Manager;
@@ -138,6 +140,8 @@ fn main() {
                 .route("/api/db/clean", post(handle_db_clean).get(handle_db_clean))
                 .route("/api/model-pricing", get(handle_model_pricing_get).post(handle_model_pricing_save))
                 .route("/api/exchange-rates/refresh", post(handle_exchange_rate_refresh))
+                .route("/api/review/detect", get(handle_review_detect))
+                .route("/api/review/stream", get(handle_review_stream))
                 .fallback(serve_static_file_fallback);
 
             // 启动文件监测与热同步服务

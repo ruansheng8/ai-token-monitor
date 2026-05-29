@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { apiUrl, readJsonResponse } from './lib/api';
+import { ReviewDrawer } from './components/ReviewDrawer';
 import {
   Cpu,
   ArrowDown,
@@ -21,7 +22,8 @@ import {
   ChevronDown,
   Settings,
   Terminal,
-  Monitor
+  Monitor,
+  Sparkles
 } from 'lucide-react';
 const DailyTrendChart = lazy(() => import('./components/charts/DailyTrendChart').then((module) => ({ default: module.DailyTrendChart })));
 const ProjectTrendChart = lazy(() => import('./components/charts/ProjectTrendChart').then((module) => ({ default: module.ProjectTrendChart })));
@@ -266,6 +268,9 @@ const exportToCSV = (sessions: SessionItem[]) => {
 export default function App() {
   const [data, setData] = useState<AggregatedMetrics | null>(null);
 
+  // 复盘与建议抽屉状态
+  const [isReviewOpen, setIsReviewOpen] = useState(false);
+
   // 标签页切换状态
   const [activeTab, setActiveTab] = useState<'source' | 'pricing' | 'optimize'>('source');
 
@@ -343,6 +348,43 @@ export default function App() {
   // 数据库清理与优化瘦身状态
   const [cleanLoading, setCleanLoading] = useState(false);
   const [cleanMessage, setCleanMessage] = useState<string | null>(null);
+
+  // 财务报表生成与预览状态
+  const [isGeneratingReport, _setIsGeneratingReport] = useState(false);
+  const [isReportModalOpen, setIsReportModalOpen] = useState(false);
+  const [reportImgUrl, _setReportImgUrl] = useState('');
+
+  /*
+  const _generateReportImage = async () => {
+    setIsGeneratingReport(true);
+    try {
+      const html2canvas = (await import('html2canvas')).default;
+      const element = document.getElementById('report-container');
+      if (!element) {
+        throw new Error('未找到报表容器 #report-container');
+      }
+
+      const canvas = await html2canvas(element, {
+        useCORS: true,
+        allowTaint: false, // 必须为 false！否则 Canvas 会被标记为受污染，导致 toDataURL() 抛出 SecurityError
+        backgroundColor: theme === 'dark' ? '#030712' : '#f8fafc',
+        scale: 1.5, // 采用 1.5 倍缩放，兼顾高清重绘的同时，降低大面积绘图的内存压力
+        logging: false,
+        ignoreElements: (el) => {
+          return el.classList.contains('no-print');
+        }
+      });
+      const dataUrl = canvas.toDataURL('image/png');
+      setReportImgUrl(dataUrl);
+      setIsReportModalOpen(true);
+    } catch (error: any) {
+      console.error('Failed to generate report image:', error);
+      alert('生成财务报表图片失败，原因: ' + (error instanceof Error ? error.message : String(error)));
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+  */
 
   const handleDbClean = async () => {
     setCleanLoading(true);
@@ -905,9 +947,9 @@ export default function App() {
       <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse fixed -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
 
       {!appInitializing && !initError && (
-        <div className="max-w-[1400px] mx-auto p-4 sm:p-5 flex flex-col gap-4">
+        <div className="max-w-[1400px] mx-auto p-4 sm:p-5 flex flex-col gap-4" id="report-container">
         {/* 头部导航栏 */}
-        <header className="relative z-30 dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-5 py-3 gap-3">
+        <header className="relative z-30 dashboard-header-bg glass-card flex flex-col md:flex-row justify-between items-center px-5 py-3 gap-3 no-print">
           <div className="flex items-center gap-4">
             <svg className="w-9 h-9" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
               <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="url(#logo-grad)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
@@ -994,6 +1036,22 @@ export default function App() {
                 </>
               )}
             </div>
+            {/* 复盘与建议按钮 */}
+            <button
+              onClick={() => setIsReviewOpen(true)}
+              className="flex items-center gap-2 h-10 px-4 rounded-xl border transition-all duration-300 hover:scale-105 active:scale-100 cursor-pointer"
+              style={{
+                background: 'linear-gradient(135deg, rgba(8,145,178,0.12), rgba(124,58,237,0.08))',
+                borderColor: 'rgba(6,182,212,0.35)',
+                color: 'var(--neon-cyan)',
+                boxShadow: '0 2px 12px rgba(6,182,212,0.1)',
+              }}
+              title="AI 使用复盘与建议"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span className="text-xs font-semibold">复盘</span>
+            </button>
+
             {/* 数据库数据源配置按钮 */}
             <button
               onClick={() => setIsConfigOpen(true)}
@@ -1026,7 +1084,7 @@ export default function App() {
         </header>
 
         {/* 时间筛选控制栏 */}
-        <section className="glass-card p-3 flex flex-col md:flex-row justify-between items-center gap-3 border border-card-border bg-bg-secondary/20 shadow-sm backdrop-blur-md rounded-[24px]">
+        <section className="glass-card p-3 flex flex-col md:flex-row justify-between items-center gap-3 border border-card-border bg-bg-secondary/20 shadow-sm backdrop-blur-md rounded-[24px] no-print">
           <div className="flex flex-wrap items-center gap-1.5">
             <span className="text-xs font-semibold text-text-secondary mr-2">🕒 时间区间：</span>
             <div className="pill-container">
@@ -1084,7 +1142,7 @@ export default function App() {
 
         {/* 扫描进度条展示 */}
         {scanStatus && scanStatus.is_scanning && (
-          <div className="glass-card rounded-[24px] p-5 flex flex-col gap-3">
+          <div className="glass-card rounded-[24px] p-5 flex flex-col gap-3 no-print">
             <div className="flex justify-between items-center text-sm">
               <div className="flex items-center gap-2">
                 <RefreshCw className="w-4 h-4 text-neon-cyan animate-spin" />
@@ -1129,7 +1187,7 @@ export default function App() {
 
         {/* 扫描错误提示 */}
         {scanStatus && scanStatus.error && (
-          <div className="glass-card rounded-[24px] p-4 border border-red-500/20 bg-red-500/5 text-red-400 flex items-center justify-between text-sm">
+          <div className="glass-card rounded-[24px] p-4 border border-red-500/20 bg-red-500/5 text-red-400 flex items-center justify-between text-sm no-print">
             <div className="flex items-center gap-2">
               <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
               <span>同步会话数据失败: {scanStatus.error}</span>
@@ -1147,7 +1205,7 @@ export default function App() {
         <section className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-3 gap-4 animate-fade-in">
 
           {/* 估算消费额 */}
-          <div className="kpi-card kpi-orange glass-card p-3.5 flex justify-between items-center group">
+          <div className="kpi-card kpi-green glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
               <span className="text-xs text-text-secondary font-medium mb-0.5">估算消费额 ({displayCurrency})</span>
               <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? `USD $${totals.total_cost.toFixed(6)}` : '0'}>
@@ -1155,7 +1213,7 @@ export default function App() {
               </h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Estimated Cost</span>
             </div>
-            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-orange/15 text-neon-orange border border-neon-orange/30 group-hover:scale-110 transition-transform duration-300">
+            <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-neon-green/15 text-neon-green border border-neon-green/30 group-hover:scale-110 transition-transform duration-300">
               <Globe className="w-5 h-5" />
             </div>
           </div>
@@ -1329,7 +1387,7 @@ export default function App() {
         </section>
 
         {/* 项目维度消耗分析 */}
-        <section className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-6 animate-fade-in">
+        <section className="animate-fade-in">
           {/* 项目消耗大盘 */}
           <div className="chart-section glass-card p-4 sm:p-5 flex flex-col gap-4">
             <div className="pb-3 border-b border-card-border">
@@ -1348,55 +1406,7 @@ export default function App() {
               )}
             </div>
           </div>
-
-          {/* 项目消耗排行榜 */}
-          <div className="glass-card p-4 sm:p-5 flex flex-col gap-4">
-            <div className="pb-3 border-b border-card-border">
-              <h2 className="text-sm font-semibold text-text-primary">项目消耗排行榜 (Top 10)</h2>
-            </div>
-            <div className="flex flex-col gap-3 max-h-[300px] overflow-y-auto pr-1">
-              {data?.project_rankings && data.project_rankings.length > 0 ? (
-                data.project_rankings.map((p, idx) => {
-                  const maxTokens = data.project_rankings[0]?.total_tokens || 1;
-                  const pct = (p.total_tokens / maxTokens) * 100;
-                  return (
-                    <div key={p.project_name} className="flex flex-col gap-1.5 group">
-                      <div className="flex justify-between items-center text-xs">
-                        <span className="font-semibold text-text-primary flex items-center gap-1.5 truncate max-w-[180px]">
-                          <span className={`w-4 h-4 rounded flex items-center justify-center text-[10px] font-bold ${
-                            idx === 0 ? 'bg-amber-500 text-white' :
-                            idx === 1 ? 'bg-slate-400 text-white' :
-                            idx === 2 ? 'bg-amber-700 text-white' :
-                            'bg-slate-200/50 dark:bg-white/5 text-text-secondary'
-                          }`}>
-                            {idx + 1}
-                          </span>
-                          <span className="truncate" title={p.project_name}>{p.project_name}</span>
-                        </span>
-                        <div className="flex items-center gap-3 font-mono text-[10px] text-text-secondary">
-                          <span title={`${formatPreciseNum(p.total_tokens)} Tokens`}>{formatNum(p.total_tokens)} Tokens</span>
-                          <span className="font-semibold text-neon-orange">{formatCurrency(p.total_cost_usd)}</span>
-                        </div>
-                      </div>
-                      <div className="h-2 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
-                        <div
-                          className="h-full rounded-full bg-gradient-to-r from-neon-blue to-neon-teal shadow-[0_0_8px_rgba(37,99,235,0.4)] transition-all duration-1000"
-                          style={{ width: `${pct}%` }}
-                        ></div>
-                      </div>
-                      {p.project_path && (
-                        <span className="text-[9px] text-text-muted truncate font-mono hidden group-hover:block transition-all max-w-[320px]">
-                          路径: {p.project_path}
-                        </span>
-                      )}
-                    </div>
-                  );
-                })
-              ) : (
-                <div className="text-center py-6 text-text-muted italic">暂无项目排行数据</div>
-              )}
-            </div>
-          </div>
+          {/* 项目消耗排行榜 (Top 10) - 暂时隐藏 */}
         </section>
 
         {/* 分布与汇总 */}
@@ -1552,13 +1562,7 @@ export default function App() {
                 >
                   📥 导出 CSV 账单
                 </button>
-                <button
-                  onClick={() => window.print()}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-sm hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer flex items-center gap-1"
-                  title="高保真 PDF 账单/打印报表生成"
-                >
-                  🖨️ 生成财务报表
-                </button>
+                {/* 生成财务报表按钮 - 暂时隐藏 */}
               </div>
 
               {/* 开关 */}
@@ -1691,7 +1695,7 @@ export default function App() {
                         <td className="font-mono text-right py-3" title={formatPreciseNum(s.cached)}>{formatNum(s.cached)}</td>
                         <td className="font-mono text-right py-3" title={formatPreciseNum(s.thinking)}>{formatNum(s.thinking)}</td>
                         <td className="font-mono text-right font-bold text-neon-cyan py-3" title={formatPreciseNum(totalTokens)}>{formatNum(totalTokens)}</td>
-                        <td className="font-mono text-right font-bold text-neon-orange py-3" title={`USD $${s.cost_usd.toFixed(6)}`}>
+                        <td className="font-mono text-right font-bold text-neon-green py-3" title={`USD $${s.cost_usd.toFixed(6)}`}>
                           {formatCurrency(s.cost_usd)}
                         </td>
                       </tr>
@@ -1710,7 +1714,7 @@ export default function App() {
 
           {/* 分页控制栏 */}
           {paginatedSessions.length > 0 && (
-            <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-6 pt-5 border-t border-card-border select-none">
+            <div className="flex flex-col sm:flex-row justify-between items-center gap-4 mt-6 pt-5 border-t border-card-border select-none no-print">
               {/* 左侧：记录数信息 */}
               <div className="text-xs text-text-secondary font-medium order-2 sm:order-1 text-center sm:text-left">
                 显示第 <span className="font-mono text-neon-cyan font-semibold">{Math.min((currentPage - 1) * pageSize + 1, totalItems)}</span> 到 <span className="font-mono text-neon-cyan font-semibold">{Math.min(currentPage * pageSize, totalItems)}</span> 条记录，共 <span className="font-mono text-neon-cyan font-semibold">{totalItems}</span> 条记录
@@ -2513,26 +2517,6 @@ export default function App() {
                     </div>
                   </div>
 
-                          pg_password: pgPassword,
-                          pg_database: pgDatabase,
-                          device_name: deviceName,
-                        })
-                      });
-                      if (response.ok) {
-                        const res = await readJsonResponse<any>(response);
-                        if (res.success) {
-                          setIsConfigOpen(false);
-                          if (res.need_restart) {
-                            if (confirm(`${res.message}\n\n为了使新的数据库配置生效并避免数据冲突，软件需要重新启动。是否立即自动重启软件？`)) {
-                              try {
-                                await fetch(apiUrl('/app/restart'), { method: 'POST' });
-                              } catch (e) {
-                                console.error('重启请求失败:', e);
-                                alert('自动重启失败，请手动关闭并重新打开软件。');
-                              }
-                            } else {
-                              alert('配置已保存！新配置将在下次启动软件时生效。');
-=======
                   {pricingMessage && (
                     <div
                       className={`p-3 rounded-xl border text-xs leading-relaxed flex gap-2 items-start animate-fade-in ${
@@ -2585,7 +2569,6 @@ export default function App() {
                               fetchSessions(1, pageSize, searchKeyword, source, sortField, sortOrder, startDate, endDate, hideZero);
                               alert('汇率与计费规则配置已成功应用并重新计算历史数据费用！');
                               setIsConfigOpen(false);
->>>>>>> feat/project-pricing-scan-fts
                             }
                           } else {
                             setPricingMessage({ success: false, text: '服务器保存费率失败。' });
@@ -2757,6 +2740,140 @@ export default function App() {
                   )}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* 使用复盘与建议抽屉 */}
+      <ReviewDrawer
+        isOpen={isReviewOpen}
+        onClose={() => setIsReviewOpen(false)}
+        metrics={data ? {
+          timeRange: timeRange === 'all' ? '全部时间' : timeRange === 'today' ? '今天' : timeRange === 'week' ? '近7天' : timeRange === '30days' ? '近30天' : timeRange === 'month' ? '本月' : timeRange === 'quarter' ? '本季度' : `${startDate} ~ ${endDate}`,
+          totalTokens: data.totals.total_tokens,
+          totalCostUsd: data.totals.total_cost,
+          totalSessions: data.totals.total_sessions,
+          cacheHitRate: data.totals.cache_hit_rate,
+          thinkingRatio: data.totals.thinking_ratio,
+          sourceBreakdown: data.source_trends.length > 0
+            ? JSON.stringify(
+                Object.entries(
+                  data.source_trends.reduce((acc: Record<string, number>, item) => {
+                    acc[item.source] = (acc[item.source] || 0) + item.tokens;
+                    return acc;
+                  }, {})
+                ).map(([source, tokens]) => ({ source, tokens })).slice(0, 8)
+              )
+            : undefined,
+          modelDistribution: data.model_distribution.length > 0
+            ? JSON.stringify(
+                data.model_distribution.slice(0, 6).map(m => ({
+                  model: m.model,
+                  total_tokens: m.total_tokens,
+                }))
+              )
+            : undefined,
+          dailyTrendSummary: data.daily_trends.length > 0
+            ? JSON.stringify(
+                data.daily_trends.slice(-7).map(d => ({
+                  date: d.date,
+                  tokens: d.input + d.output + d.cached + d.thinking,
+                  sessions: d.sessions,
+                }))
+              )
+            : undefined,
+          availableSources: data.source_trends.length > 0
+            ? Array.from(new Set(data.source_trends.map((item) => item.source)))
+            : [],
+        } : null}
+      />
+
+      {/* 财务报表生成中的 Loading 遮罩 */}
+      {isGeneratingReport && (
+        <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-md z-[10001] flex flex-col items-center justify-center gap-6 animate-fade-in select-none">
+          <div className="relative flex flex-col items-center bg-bg-secondary/90 dark:bg-[#0f192b]/95 border border-card-border p-8 rounded-3xl shadow-2xl max-w-sm w-full mx-4 shadow-neon-cyan/5">
+            <div className="absolute -top-12 -left-12 w-24 h-24 bg-neon-cyan/15 rounded-full blur-2xl pointer-events-none"></div>
+            <div className="absolute -bottom-12 -right-12 w-24 h-24 bg-neon-purple/15 rounded-full blur-2xl pointer-events-none"></div>
+            <div className="relative mb-6">
+              <div className="w-[56px] h-[56px] border-4 border-slate-200 dark:border-white/5 rounded-full border-t-neon-cyan border-b-neon-purple animate-spin"></div>
+              <div className="absolute inset-0.5 rounded-full border border-dashed border-neon-cyan/20 animate-spin-reverse pointer-events-none"></div>
+            </div>
+            <h3 className="text-base font-bold text-text-primary mb-2 text-center tracking-wide">
+              正在生成财务报表...
+            </h3>
+            <p className="text-xs text-text-secondary text-center leading-relaxed">
+              系统正在使用 2x 超清高保真模式为您重绘大盘走势图并渲染财务账单，请稍候
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 财务报表超清图片预览 Modal */}
+      {isReportModalOpen && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/70 dark:bg-black/90 backdrop-blur-md p-4 sm:p-6 animate-fade-in">
+          <div className="relative w-full max-w-5xl rounded-[32px] border border-card-border bg-bg-secondary/95 dark:bg-[#0f192b]/95 backdrop-blur-2xl p-6 sm:p-8 text-text-primary shadow-[0_24px_60px_rgba(0,0,0,0.55)] overflow-hidden flex flex-col max-h-[90vh]">
+            {/* 装饰性背景光效 */}
+            <div className="absolute -top-24 -left-24 w-60 h-60 bg-neon-cyan/15 rounded-full blur-3xl pointer-events-none"></div>
+            <div className="absolute -bottom-24 -right-24 w-60 h-60 bg-neon-purple/15 rounded-full blur-3xl pointer-events-none"></div>
+
+            {/* 弹窗头部 */}
+            <div className="flex justify-between items-center pb-4 border-b border-card-border mb-5 relative z-10">
+              <div>
+                <h2 className="text-lg font-bold flex items-center gap-2">
+                  <span className="bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent">🧾 财务报表生成成功</span>
+                </h2>
+                <p className="text-xs text-text-secondary mt-1">
+                  已自动为您生成高清财务报表图片（已忽略交互控件，保留核心账单细节）
+                </p>
+              </div>
+              <button
+                onClick={() => setIsReportModalOpen(false)}
+                className="w-9 h-9 rounded-full flex items-center justify-center bg-bg-secondary/60 dark:bg-white/5 hover:bg-bg-secondary dark:hover:bg-white/10 text-text-secondary hover:text-text-primary transition-all duration-200 cursor-pointer border border-card-border text-lg"
+                title="关闭预览"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* 图片展示区 */}
+            <div className="flex-1 overflow-auto rounded-2xl border border-card-border bg-slate-500/5 dark:bg-black/30 p-4 flex justify-center items-start mb-6 relative z-10 shadow-inner group">
+              {reportImgUrl ? (
+                <div className="relative max-w-full">
+                  <img
+                    src={reportImgUrl}
+                    alt="AI Token Monitor 财务报表"
+                    className="rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.15)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.5)] border border-card-border max-w-full h-auto transition-transform duration-300"
+                  />
+                  <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300 rounded-xl flex items-center justify-center pointer-events-none">
+                    <span className="bg-black/75 backdrop-blur-sm text-white text-[11px] px-3 py-1.5 rounded-full opacity-0 group-hover:opacity-100 transition-opacity duration-300 shadow-lg">
+                      💡 提示：您可直接鼠标右键复制或在下方一键下载保存
+                    </span>
+                  </div>
+                </div>
+              ) : (
+                <div className="h-60 flex items-center justify-center text-text-muted italic text-xs">
+                  图片生成失败，请重试
+                </div>
+              )}
+            </div>
+
+            {/* 弹窗底部操作按钮 */}
+            <div className="flex flex-col sm:flex-row items-center justify-end gap-3 pt-4 border-t border-card-border relative z-10 shrink-0">
+              <button
+                onClick={() => setIsReportModalOpen(false)}
+                className="px-5 py-2.5 rounded-xl text-xs font-semibold bg-slate-200/60 hover:bg-slate-300/60 dark:bg-white/5 dark:hover:bg-white/10 text-text-primary border border-card-border cursor-pointer transition-all duration-200 min-w-[100px] text-center"
+              >
+                关闭预览
+              </button>
+              {reportImgUrl && (
+                <a
+                  href={reportImgUrl}
+                  download={`AI_Token_Monitor_财务报表_${new Date().toISOString().split('T')[0]}.png`}
+                  className="px-6 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_15px_rgba(6,182,212,0.25)] hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer min-w-[150px] text-center flex items-center justify-center gap-1.5"
+                >
+                  📥 保存财务报表图片
+                </a>
+              )}
             </div>
           </div>
         </div>
