@@ -291,6 +291,10 @@ export default function App() {
 
   // 应用初始化与后台握手状态
   const [appInitializing, setAppInitializing] = useState(true);
+  const appInitializingRef = useRef(appInitializing);
+  useEffect(() => {
+    appInitializingRef.current = appInitializing;
+  }, [appInitializing]);
   const [initError, setInitError] = useState<string | null>(null);
 
   // 初始化步骤进度状态
@@ -341,6 +345,10 @@ export default function App() {
   const [timeRange, setTimeRange] = useState<'all' | 'today' | 'week' | '30days' | 'month' | 'quarter' | 'custom'>('30days');
   const [startDate, setStartDate] = useState<string>(getDateBounds('30days').start);
   const [endDate, setEndDate] = useState<string>(getDateBounds('30days').end);
+  const stateRef = useRef({ source, startDate, endDate, pageSize, searchKeyword, sortField, sortOrder, hideZero, currentPage });
+  useEffect(() => {
+    stateRef.current = { source, startDate, endDate, pageSize, searchKeyword, sortField, sortOrder, hideZero, currentPage };
+  }, [source, startDate, endDate, pageSize, searchKeyword, sortField, sortOrder, hideZero, currentPage]);
   const [chartDimension, setChartDimension] = useState<'type' | 'source' | 'device'>('type');
 
   // 数据库数据源配置状态
@@ -622,8 +630,10 @@ export default function App() {
         if (status.is_scanning) {
           setTimeout(pollScanStatus, 1000);
         } else {
-          // 扫描完成，重新拉取最新数据
-          fetchData(source, startDate, endDate);
+          // 扫描完成，重新拉取最新数据（从 stateRef 中读取最新参数以防止闭包过期，且同步更新大盘与会话分页列表）
+          const { source: s, startDate: sd, endDate: ed, pageSize: ps, searchKeyword: sk, sortField: sf, sortOrder: so, hideZero: hz, currentPage: cp } = stateRef.current;
+          fetchData(s, sd, ed);
+          fetchSessions(cp, ps, sk, s, sf, so, sd, ed, hz);
         }
       }
     } catch (error) {
@@ -649,7 +659,7 @@ export default function App() {
 
   // 获取数据逻辑
   const fetchData = async (currentSource = source, start = startDate, end = endDate) => {
-    if (appInitializing) return;
+    if (appInitializingRef.current) return;
     // 1. 发起新查询前，如果先前有未完成的查询，则主动取消，保证网络竞态安全性
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
@@ -741,7 +751,7 @@ export default function App() {
     end = endDate,
     hideZeroVal = hideZero
   ) => {
-    if (appInitializing) return;
+    if (appInitializingRef.current) return;
     setSessionsLoading(true);
     try {
       const query = new URLSearchParams({
@@ -772,6 +782,7 @@ export default function App() {
   const performInitialSync = async (skipDeviceCheck = false) => {
     setInitError(null);
     setAppInitializing(true);
+    appInitializingRef.current = true;
     setInitElapsed(0);
     setInitSteps({ checkConfig: 'pending', startScan: 'pending', loadMetrics: 'pending', loadSessions: 'pending' });
 
@@ -811,6 +822,7 @@ export default function App() {
 
             setShowDeviceModal(true);
             setAppInitializing(false);
+            appInitializingRef.current = false;
             clearInterval(initElapsedRef.current);
             return; // 拦截，等配置完再继续
           }
@@ -874,6 +886,7 @@ export default function App() {
     } finally {
       clearInterval(initElapsedRef.current);
       setAppInitializing(false);
+      appInitializingRef.current = false;
     }
   };
 
