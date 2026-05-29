@@ -6,7 +6,12 @@ mod server;
 mod db_adapter;
 
 use axum::{routing::{get, post}, Router};
-use server::{handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback, handle_config_get, handle_config_test, handle_config_save, handle_app_restart, handle_db_clean, handle_sessions_paginated};
+use server::{
+    handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback,
+    handle_config_get, handle_config_test, handle_config_save, handle_app_restart,
+    handle_db_clean, handle_sessions_paginated, handle_model_pricing_get,
+    handle_model_pricing_save, handle_exchange_rate_refresh,
+};
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
 use tauri::Manager;
@@ -20,17 +25,29 @@ fn start_folder_watcher() {
         loop {
             tokio::select! {
                 _ = rx.recv() => {
-                    let debounce_ms = std::env::var("HOTSYNC_DEBOUNCE_MS")
-                        .ok()
-                        .and_then(|s| s.parse::<u64>().ok())
-                        .unwrap_or(5000); // 默认调整为 5 秒
+                    let policy = db::current_hot_sync_policy();
+                    let mut debounce_ms = policy.delay_ms;
+                    if debounce_ms == 5000 {
+                        if let Some(env_ms) = std::env::var("HOTSYNC_DEBOUNCE_MS")
+                            .ok()
+                            .and_then(|s| s.parse::<u64>().ok())
+                        {
+                            debounce_ms = env_ms;
+                        }
+                    }
                     debounce_timer = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(debounce_ms));
                 }
                 _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
                     if let Some(deadline) = debounce_timer {
                         if tokio::time::Instant::now() >= deadline {
-                            debounce_timer = None;
-                            db::start_background_scan(true);
+                            let policy = db::current_hot_sync_policy();
+                            if policy.delay_ms >= 60000 {
+                                println!("[热同步] 检测到系统处于高负载 (CPU {:.1}%)，将热同步延迟推迟 {} ms", policy.cpu_usage, policy.delay_ms);
+                                debounce_timer = Some(tokio::time::Instant::now() + tokio::time::Duration::from_millis(policy.delay_ms));
+                            } else {
+                                debounce_timer = None;
+                                db::start_background_scan(true);
+                            }
                         }
                     }
                 }
@@ -119,6 +136,8 @@ fn main() {
                 .route("/api/config/save", post(handle_config_save))
                 .route("/api/app/restart", post(handle_app_restart))
                 .route("/api/db/clean", post(handle_db_clean).get(handle_db_clean))
+                .route("/api/model-pricing", get(handle_model_pricing_get).post(handle_model_pricing_save))
+                .route("/api/exchange-rates/refresh", post(handle_exchange_rate_refresh))
                 .fallback(serve_static_file_fallback);
 
             // 启动文件监测与热同步服务

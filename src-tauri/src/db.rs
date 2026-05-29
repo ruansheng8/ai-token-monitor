@@ -363,6 +363,15 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
     conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_model ON turns(model);", [])?;
     conn.execute("CREATE INDEX IF NOT EXISTS idx_turns_latency ON turns(latency);", [])?;
 
+    // 默认费率灌种
+    seed_default_model_pricing(&conn)?;
+
+    // 默认汇率灌种
+    let now = chrono::Utc::now().to_rfc3339();
+    conn.execute("INSERT OR IGNORE INTO exchange_rates (currency_code, rate_from_usd, updated_at) VALUES ('CNY', 7.24, ?)", [&now])?;
+    conn.execute("INSERT OR IGNORE INTO exchange_rates (currency_code, rate_from_usd, updated_at) VALUES ('JPY', 155.4, ?)", [&now])?;
+    conn.execute("INSERT OR IGNORE INTO exchange_rates (currency_code, rate_from_usd, updated_at) VALUES ('EUR', 0.92, ?)", [&now])?;
+
     Ok(())
 }
 
@@ -772,8 +781,9 @@ fn load_model_pricing(conn: &rusqlite::Connection) -> Result<Vec<ModelPricingRow
 }
 
 pub fn estimate_cost(model: &str, input: i64, cached: i64, output: i64) -> Result<f64, rusqlite::Error> {
-    let conn = rusqlite::Connection::open(get_db_cache_path())?;
-    let pricing = load_model_pricing(&conn)?;
+    let pricing = rusqlite::Connection::open(get_db_cache_path())
+        .and_then(|conn| load_model_pricing(&conn))
+        .unwrap_or_default();
     let model_lower = model.to_lowercase();
     let matched = pricing
         .into_iter()
@@ -2346,6 +2356,122 @@ pub struct PerformanceTrend {
     pub avg_tps: f64,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct HotSyncPolicy {
+    pub delay_ms: u64,
+    pub cpu_usage: f32,
+    pub reason: String,
+}
+
+pub fn recommend_hot_sync_delay_ms(cpu_usage: f32) -> HotSyncPolicy {
+    if cpu_usage >= 85.0 {
+        HotSyncPolicy {
+            delay_ms: 60000,
+            cpu_usage,
+            reason: "High CPU usage (>= 85%)".to_string(),
+        }
+    } else {
+        HotSyncPolicy {
+            delay_ms: 5000,
+            cpu_usage,
+            reason: "Normal CPU usage".to_string(),
+        }
+    }
+}
+
+pub fn current_hot_sync_policy() -> HotSyncPolicy {
+    use sysinfo::System;
+    static SYSTEM: std::sync::OnceLock<std::sync::Mutex<System>> = std::sync::OnceLock::new();
+    let mutex = SYSTEM.get_or_init(|| {
+        let mut sys = System::new();
+        sys.refresh_cpu();
+        std::sync::Mutex::new(sys)
+    });
+    let cpu_usage = {
+        let mut sys = mutex.lock().unwrap();
+        sys.refresh_cpu();
+        sys.global_cpu_info().cpu_usage()
+    };
+    recommend_hot_sync_delay_ms(cpu_usage)
+}
+
+pub fn list_model_pricing_rows() -> Result<Vec<ModelPricingRow>, rusqlite::Error> {
+    let conn = rusqlite::Connection::open(get_db_cache_path())?;
+    let mut stmt = conn.prepare(
+        "SELECT id, model_pattern, input_price_per_million, cached_input_price_per_million, output_price_per_million, priority, enabled, updated_at 
+         FROM model_pricing 
+         ORDER BY priority ASC, id ASC"
+    )?;
+    let rows = stmt.query_map([], |row| {
+        Ok(ModelPricingRow {
+            id: Some(row.get(0)?),
+            model_pattern: row.get(1)?,
+            input_price_per_million: row.get(2)?,
+            cached_input_price_per_million: row.get(3)?,
+            output_price_per_million: row.get(4)?,
+            priority: row.get(5)?,
+            enabled: row.get::<_, i32>(6)? != 0,
+            updated_at: row.get(7)?,
+        })
+    })?.collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+pub fn recalculate_all_turns_costs(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    let mut stmt = conn.prepare("SELECT source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens FROM turns")?;
+    let mut rows = stmt.query([])?;
+    let mut updates = Vec::new();
+    while let Some(row) = rows.next()? {
+        let source: String = row.get(0)?;
+        let uuid: String = row.get(1)?;
+        let idx: i64 = row.get(2)?;
+        let model: String = row.get(3)?;
+        let input: i64 = row.get(4)?;
+        let cached: i64 = row.get(5)?;
+        let output: i64 = row.get(6)?;
+        
+        let cost = estimate_cost(&model, input, cached, output).unwrap_or(0.0);
+        updates.push((source, uuid, idx, cost));
+    }
+
+    let mut stmt_update = conn.prepare("UPDATE turns SET cost_usd = ? WHERE source = ? AND uuid = ? AND idx = ?")?;
+    for (source, uuid, idx, cost) in updates {
+        stmt_update.execute(rusqlite::params![cost, source, uuid, idx])?;
+    }
+    Ok(())
+}
+
+pub fn upsert_model_pricing_rows(rows: &[ModelPricingRow]) -> Result<(), rusqlite::Error> {
+    let mut conn = rusqlite::Connection::open(get_db_cache_path())?;
+    {
+        let tx = conn.transaction()?;
+        tx.execute("DELETE FROM model_pricing", [])?;
+        {
+            let mut stmt = tx.prepare(
+                "INSERT INTO model_pricing (model_pattern, input_price_per_million, cached_input_price_per_million, output_price_per_million, priority, enabled, updated_at)
+                 VALUES (?, ?, ?, ?, ?, ?, ?)"
+            )?;
+            for r in rows {
+                stmt.execute(rusqlite::params![
+                    r.model_pattern,
+                    r.input_price_per_million,
+                    r.cached_input_price_per_million,
+                    r.output_price_per_million,
+                    r.priority,
+                    if r.enabled { 1 } else { 0 },
+                    chrono::Utc::now().to_rfc3339()
+                ])?;
+            }
+        }
+        tx.commit()?;
+    }
+
+    recalculate_all_turns_costs(&conn)?;
+    rebuild_daily_stats_cache(&conn)?;
+    rebuild_project_daily_stats_cache(&conn)?;
+    Ok(())
+}
+
 #[derive(Serialize)]
 pub struct PaginatedSessions {
     pub items: Vec<SessionItem>,
@@ -2395,10 +2521,12 @@ pub fn get_sessions_paginated(
     if let Some(ref kw) = search {
         let kw_trimmed = kw.trim();
         if !kw_trimmed.is_empty() {
-            conditions.push("(s.title LIKE ? OR s.uuid LIKE ?)");
-            let like_str = format!("%{}%", kw_trimmed);
-            params.push(rusqlite::types::Value::Text(like_str.clone()));
-            params.push(rusqlite::types::Value::Text(like_str));
+            let clean_kw = kw_trimmed.replace('"', "");
+            if !clean_kw.is_empty() {
+                conditions.push("EXISTS (SELECT 1 FROM sessions_fts WHERE source = s.source AND uuid = s.uuid AND sessions_fts MATCH ?)");
+                let fts_query = format!("\"{}\"*", clean_kw);
+                params.push(rusqlite::types::Value::Text(fts_query));
+            }
         }
     }
 
@@ -2817,6 +2945,30 @@ pub fn get_aggregated_metrics_from_cache(
         format!("WHERE {}", conditions_cache.join(" AND "))
     };
 
+    // 构造针对项目走势缓存表 project_daily_stats 的动态 SQL WHERE 子句 (排除 source_filter 以防 no such column)
+    let mut conditions_project = Vec::new();
+    let mut params_project: Vec<rusqlite::types::Value> = Vec::new();
+
+    if let Some(start) = start_date {
+        if !start.is_empty() {
+            conditions_project.push("date >= ?");
+            params_project.push(rusqlite::types::Value::Text(start.to_string()));
+        }
+    }
+
+    if let Some(end) = end_date {
+        if !end.is_empty() {
+            conditions_project.push("date <= ?");
+            params_project.push(rusqlite::types::Value::Text(end.to_string()));
+        }
+    }
+
+    let where_clause_project = if conditions_project.is_empty() {
+        "".to_string()
+    } else {
+        format!("WHERE {}", conditions_project.join(" AND "))
+    };
+
     // 构造动态 SQL WHERE 子句 (面向原始关联查询 turns & sessions)
     let mut conditions_raw = Vec::new();
     let mut params_raw: Vec<rusqlite::types::Value> = Vec::new();
@@ -3151,11 +3303,11 @@ pub fn get_aggregated_metrics_from_cache(
         {}
         GROUP BY date, project_name
         ORDER BY date ASC, project_name ASC",
-        where_clause_cache
+        where_clause_project
     );
 
     let mut stmt_proj = conn.prepare(&sql_project_trends)?;
-    let mut rows_proj = stmt_proj.query(rusqlite::params_from_iter(params_cache.clone()))?;
+    let mut rows_proj = stmt_proj.query(rusqlite::params_from_iter(params_project.clone()))?;
 
     let mut project_trends = Vec::new();
     while let Some(row) = rows_proj.next()? {
@@ -3411,10 +3563,80 @@ mod tests {
         rebuild_project_daily_stats_cache(&conn).unwrap();
 
         let metrics = get_aggregated_metrics_from_cache(None, None, None).unwrap();
+        println!("DEBUG_PROJECTS: {:?}", metrics.project_rankings.iter().map(|p| &p.project_name).collect::<Vec<_>>());
         assert_eq!(metrics.project_rankings.len(), 1);
         assert_eq!(metrics.project_rankings[0].project_name, "repo-a");
         assert_eq!(metrics.project_trends.len(), 1);
         assert_eq!(metrics.project_trends[0].project_name, "repo-a");
+
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[test]
+    fn test_sqlite_session_search_uses_fts() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_fts_search_test_{}", test_id));
+        std::fs::create_dir_all(&temp_path).unwrap();
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+        std::env::set_var("DATABASE_TYPE", "sqlite");
+
+        init_cache_db().unwrap();
+        let conn = rusqlite::Connection::open(get_db_cache_path()).unwrap();
+
+        conn.execute(
+            "INSERT INTO sessions (source, uuid, title, created_at, project_path, project_name, device_name)
+             VALUES ('claude_code', 'fts-1', 'Refactor token monitor', '2026-05-28T11:00:00.000Z', 'D:/code/ai-token-monitor', 'ai-token-monitor', 'devbox')",
+            [],
+        ).unwrap();
+        rebuild_sessions_fts(&conn).unwrap();
+
+        let result = get_sessions_paginated(1, 10, Some("ai-token-monitor"), Some("all"), Some("created_at"), Some("desc"), None, None, false).unwrap();
+        assert_eq!(result.total, 1);
+        assert_eq!(result.items[0].uuid, "fts-1");
+
+        let _ = std::fs::remove_dir_all(&temp_path);
+    }
+
+    #[test]
+    fn test_recommended_hot_sync_delay_changes_with_load() {
+        let low_load = recommend_hot_sync_delay_ms(10.0);
+        assert_eq!(low_load.delay_ms, 5000);
+        assert_eq!(low_load.reason, "Normal CPU usage");
+
+        let high_load = recommend_hot_sync_delay_ms(90.0);
+        assert_eq!(high_load.delay_ms, 60000);
+        assert_eq!(high_load.reason, "High CPU usage (>= 85%)");
+    }
+
+    #[test]
+    fn test_upsert_model_pricing_rows() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_pricing_crud_test_{}", test_id));
+        std::fs::create_dir_all(&temp_path).unwrap();
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+        std::env::set_var("DATABASE_TYPE", "sqlite");
+
+        init_cache_db().unwrap();
+
+        let new_rows = vec![
+            ModelPricingRow {
+                id: None,
+                model_pattern: "gpt-4*".to_string(),
+                input_price_per_million: 10.0,
+                cached_input_price_per_million: 5.0,
+                output_price_per_million: 30.0,
+                priority: 5,
+                enabled: true,
+                updated_at: "".to_string(),
+            }
+        ];
+
+        upsert_model_pricing_rows(&new_rows).unwrap();
+
+        let loaded = list_model_pricing_rows().unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].model_pattern, "gpt-4*");
+        assert_eq!(loaded[0].input_price_per_million, 10.0);
 
         let _ = std::fs::remove_dir_all(&temp_path);
     }
