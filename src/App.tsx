@@ -292,6 +292,22 @@ export default function App() {
   const [appInitializing, setAppInitializing] = useState(true);
   const [initError, setInitError] = useState<string | null>(null);
 
+  // 初始化步骤进度状态
+  type InitStepStatus = 'pending' | 'loading' | 'done' | 'error';
+  const [initSteps, setInitSteps] = useState<{
+    checkConfig: InitStepStatus;
+    startScan:   InitStepStatus;
+    loadMetrics: InitStepStatus;
+    loadSessions: InitStepStatus;
+  }>({
+    checkConfig:  'pending',
+    startScan:    'pending',
+    loadMetrics:  'pending',
+    loadSessions: 'pending',
+  });
+  const [initElapsed, setInitElapsed] = useState(0);
+  const initElapsedRef = useRef<any>(null);
+
   // 大盘慢查询友好提示与 AbortController 取消机制
   const abortControllerRef = useRef<AbortController | null>(null);
   const loadingTimeoutRef = useRef<any>(null);
@@ -746,8 +762,19 @@ export default function App() {
   const performInitialSync = async (skipDeviceCheck = false) => {
     setInitError(null);
     setAppInitializing(true);
+    setInitElapsed(0);
+    setInitSteps({ checkConfig: 'pending', startScan: 'pending', loadMetrics: 'pending', loadSessions: 'pending' });
+
+    // 启动计时器
+    if (initElapsedRef.current) clearInterval(initElapsedRef.current);
+    const startTime = Date.now();
+    initElapsedRef.current = setInterval(() => {
+      setInitElapsed(Math.floor((Date.now() - startTime) / 1000));
+    }, 1000);
+
     try {
-      // 1. 先检查设备名称是否配置
+      // Step 1. 检查设备名称是否配置
+      setInitSteps(s => ({ ...s, checkConfig: 'loading' }));
       if (!skipDeviceCheck) {
         const configRes = await fetch(apiUrl(`/config?t=${Date.now()}`));
         if (configRes.ok) {
@@ -771,16 +798,18 @@ export default function App() {
 
             setShowDeviceModal(true);
             setAppInitializing(false);
+            clearInterval(initElapsedRef.current);
             return; // 拦截，等配置完再继续
           }
         }
       }
+      setInitSteps(s => ({ ...s, checkConfig: 'done' }));
 
-      // 2. 启动后端扫描
+      // Step 2-4. 并行启动后端扫描 + 拉取大盘指标 + 拉取会话列表
+      setInitSteps(s => ({ ...s, startScan: 'loading', loadMetrics: 'loading', loadSessions: 'loading' }));
+
       const scanPromise = fetch(apiUrl(`/scan/start?t=${Date.now()}`));
-      // 3. 并行获取大盘指标
       const metricsPromise = fetch(apiUrl(`/metrics?source=${source}&start_date=${startDate}&end_date=${endDate}&t=${Date.now()}`));
-      // 3. 并行获取会话列表第一页数据
       const query = new URLSearchParams({
         page: '1',
         page_size: String(pageSize),
@@ -795,10 +824,11 @@ export default function App() {
       });
       const sessionsPromise = fetch(apiUrl(`/sessions?${query.toString()}`));
 
+      // 用 Promise 包装，单独跟踪每个请求的完成状态
       const [scanRes, metricsRes, sessionsRes] = await Promise.all([
-        scanPromise,
-        metricsPromise,
-        sessionsPromise
+        scanPromise.then(r  => { setInitSteps(s => ({ ...s, startScan: r.ok ? 'done' : 'error' })); return r; }),
+        metricsPromise.then(r => { setInitSteps(s => ({ ...s, loadMetrics: r.ok ? 'done' : 'error' })); return r; }),
+        sessionsPromise.then(r => { setInitSteps(s => ({ ...s, loadSessions: r.ok ? 'done' : 'error' })); return r; }),
       ]);
 
       if (!scanRes.ok || !metricsRes.ok || !sessionsRes.ok) {
@@ -822,7 +852,14 @@ export default function App() {
     } catch (e: any) {
       console.error("首屏初始化同步失败:", e);
       setInitError(e.message || String(e));
+      setInitSteps(s => ({
+        checkConfig:  s.checkConfig  === 'loading' ? 'error' : s.checkConfig,
+        startScan:    s.startScan    === 'loading' ? 'error' : s.startScan,
+        loadMetrics:  s.loadMetrics  === 'loading' ? 'error' : s.loadMetrics,
+        loadSessions: s.loadSessions === 'loading' ? 'error' : s.loadSessions,
+      }));
     } finally {
+      clearInterval(initElapsedRef.current);
       setAppInitializing(false);
     }
   };
@@ -1842,33 +1879,139 @@ export default function App() {
       )}
 
       {/* 启动加载闪屏 */}
-      {appInitializing && !initError && (
-        <div className="fixed inset-0 bg-bg-app dark:bg-[#030712] z-[9999] flex flex-col items-center justify-center p-6 gap-6 select-none animate-fade-in">
-          {/* 背景光效 */}
-          <div className="background-decor-1 bg-decor-cyan animate-pulse-glow absolute -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
-          <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse absolute -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
+      {appInitializing && !initError && (() => {
+        // 计算总体进度百分比
+        const stepWeights = { checkConfig: 15, startScan: 30, loadMetrics: 30, loadSessions: 25 };
+        const totalProgress = (['checkConfig', 'startScan', 'loadMetrics', 'loadSessions'] as const).reduce((acc, key) => {
+          const st = initSteps[key];
+          if (st === 'done') return acc + stepWeights[key];
+          if (st === 'loading') return acc + stepWeights[key] * 0.5;
+          return acc;
+        }, 0);
 
-          <div className="glass-card rounded-[32px] max-w-[400px] w-full p-8 flex flex-col items-center text-center gap-6 border border-white/10 dark:border-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.3)] animate-fade-in">
-            <svg className="w-16 h-16 animate-spin text-neon-cyan mb-2" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12" stroke="url(#spinner-grad-splash)" strokeWidth="3" strokeLinecap="round"/>
-              <defs>
-                <linearGradient id="spinner-grad-splash" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
-                  <stop stopColor="#06b6d4" />
-                  <stop offset="1" stopColor="#a855f7" />
-                </linearGradient>
-              </defs>
-            </svg>
-            <div className="flex flex-col gap-2">
-              <h2 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">
-                AI Token Monitor
-              </h2>
-              <p className="text-xs text-text-secondary leading-relaxed">
-                正在初始化后台服务并同步数据，请稍候...
-              </p>
+        const INIT_STEP_DEFS = [
+          { key: 'checkConfig'  as const, label: '读取系统配置',     icon: '⚙️',  detail: '验证设备名称与数据库配置' },
+          { key: 'startScan'   as const, label: '启动后台扫描服务',  icon: '🔍', detail: '初始化 Token 数据扫描引擎' },
+          { key: 'loadMetrics' as const, label: '加载大盘统计指标',  icon: '📊', detail: '计算 Token 消耗与成本分析' },
+          { key: 'loadSessions'as const, label: '同步会话用量明细',  icon: '📋', detail: '拉取并解析历史会话记录' },
+        ];
+
+        return (
+          <div className="fixed inset-0 bg-bg-app dark:bg-[#030712] z-[9999] flex flex-col items-center justify-center p-6 select-none animate-fade-in">
+            {/* 背景光效 */}
+            <div className="background-decor-1 bg-decor-cyan animate-pulse-glow absolute -top-48 -left-24 w-[600px] h-[600px] rounded-full blur-[80px] z-[-1] pointer-events-none"></div>
+            <div className="background-decor-2 bg-decor-purple animate-pulse-glow-reverse absolute -bottom-72 -right-24 w-[700px] h-[700px] rounded-full blur-[100px] z-[-1] pointer-events-none"></div>
+
+            <div className="glass-card rounded-[32px] max-w-[420px] w-full p-8 flex flex-col items-center gap-6 border border-white/10 dark:border-white/5 shadow-[0_20px_50px_rgba(0,0,0,0.3)] animate-fade-in">
+              {/* Logo + 标题 */}
+              <div className="flex flex-col items-center gap-3">
+                <div className="relative">
+                  <svg className="w-14 h-14 animate-spin" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12" stroke="url(#spinner-grad-splash)" strokeWidth="2.5" strokeLinecap="round"/>
+                    <defs>
+                      <linearGradient id="spinner-grad-splash" x1="2" y1="2" x2="22" y2="22" gradientUnits="userSpaceOnUse">
+                        <stop stopColor="#06b6d4" />
+                        <stop offset="1" stopColor="#a855f7" />
+                      </linearGradient>
+                    </defs>
+                  </svg>
+                  <div className="absolute inset-0 flex items-center justify-center text-lg">🤖</div>
+                </div>
+                <div className="text-center">
+                  <h2 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">AI Token Monitor</h2>
+                  <p className="text-xs text-text-muted mt-1">正在初始化后台服务，请稍候...</p>
+                </div>
+              </div>
+
+              {/* 总体进度条 */}
+              <div className="w-full flex flex-col gap-1.5">
+                <div className="flex justify-between items-center text-[11px] text-text-secondary font-medium">
+                  <span>初始化进度</span>
+                  <span className="font-mono text-neon-cyan font-bold">{Math.round(totalProgress)}%</span>
+                </div>
+                <div className="h-2 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
+                  <div
+                    className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_10px_rgba(6,182,212,0.4)] transition-all duration-700 ease-out"
+                    style={{ width: `${totalProgress}%` }}
+                  >
+                    {/* 闪光扫过动画 */}
+                    <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/30 to-transparent animate-[shimmer_1.5s_infinite] pointer-events-none" />
+                  </div>
+                </div>
+              </div>
+
+              {/* 步骤列表 */}
+              <div className="w-full flex flex-col gap-2">
+                {INIT_STEP_DEFS.map(({ key, label, icon, detail }) => {
+                  const status = initSteps[key];
+                  return (
+                    <div
+                      key={key}
+                      className={`flex items-center gap-3 px-3.5 py-2.5 rounded-xl border transition-all duration-300 ${
+                        status === 'done'    ? 'bg-neon-cyan/5 border-neon-cyan/20 text-text-primary' :
+                        status === 'loading' ? 'bg-blue-500/8 border-blue-400/30 text-text-primary shadow-[0_0_12px_rgba(59,130,246,0.08)]' :
+                        status === 'error'   ? 'bg-red-500/8 border-red-500/25 text-text-secondary' :
+                                              'bg-transparent border-card-border/40 text-text-muted'
+                      }`}
+                    >
+                      {/* 状态图标 */}
+                      <div className="shrink-0 w-6 h-6 flex items-center justify-center">
+                        {status === 'done' && (
+                          <svg className="w-5 h-5 text-neon-cyan" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                        {status === 'loading' && (
+                          <svg className="w-4 h-4 text-blue-400 animate-spin" viewBox="0 0 24 24" fill="none">
+                            <path d="M12 2C6.47715 2 2 6.47715 2 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
+                            <path d="M12 22C17.5228 22 22 17.5228 22 12" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" opacity="0.3"/>
+                          </svg>
+                        )}
+                        {status === 'error' && (
+                          <svg className="w-5 h-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                          </svg>
+                        )}
+                        {status === 'pending' && (
+                          <div className="w-4 h-4 rounded-full border-2 border-card-border/60 bg-transparent" />
+                        )}
+                      </div>
+
+                      {/* 文字内容 */}
+                      <div className="flex flex-col flex-1 min-w-0">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-base leading-none">{icon}</span>
+                          <span className={`text-xs font-semibold ${
+                            status === 'loading' ? 'text-blue-300' :
+                            status === 'done'    ? 'text-text-primary' :
+                            status === 'error'   ? 'text-red-400' :
+                                                  'text-text-muted'
+                          }`}>{label}</span>
+                        </div>
+                        <span className="text-[10px] text-text-muted mt-0.5 truncate">{detail}</span>
+                      </div>
+
+                      {/* 右侧徽章 */}
+                      <div className="shrink-0">
+                        {status === 'done' && <span className="text-[10px] font-bold text-neon-cyan bg-neon-cyan/10 px-2 py-0.5 rounded-full">完成</span>}
+                        {status === 'loading' && <span className="text-[10px] font-bold text-blue-400 bg-blue-400/10 px-2 py-0.5 rounded-full animate-pulse">处理中</span>}
+                        {status === 'error' && <span className="text-[10px] font-bold text-red-400 bg-red-400/10 px-2 py-0.5 rounded-full">失败</span>}
+                        {status === 'pending' && <span className="text-[10px] text-text-muted">等待</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* 底部耗时提示 */}
+              <div className="flex items-center justify-between w-full pt-1 border-t border-card-border/50">
+                <span className="text-[10px] text-text-muted italic">首次启动或大量新会话时可能需要更长时间</span>
+                <span className="text-[10px] font-mono text-text-secondary">{initElapsed}s</span>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* 首次初始化时的全屏扫描进度遮罩 */}
       {(!data || (data.totals.total_sessions === 0 && data.sessions.length === 0)) && scanStatus && scanStatus.is_scanning && (
