@@ -175,8 +175,15 @@ pub async fn handle_scan_status() -> Response<Body> {
     }
 }
 
+#[cfg(debug_assertions)]
 #[derive(rust_embed::RustEmbed)]
-#[folder = "../dist/"]
+#[folder = "src/"] // 开发阶段：指向必存的 src 目录，防止 rust-embed 编译报错
+#[allow(dead_code)]
+struct Asset;
+
+#[cfg(not(debug_assertions))]
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../dist/"] // 生产阶段：指向打包后的 dist 目录
 struct Asset;
 
 pub async fn serve_static_file_fallback(uri: Uri) -> impl IntoResponse {
@@ -193,26 +200,29 @@ pub async fn serve_static_file_fallback(uri: Uri) -> impl IntoResponse {
     };
 
     // 优先从二进制嵌入的 Asset (即 frontend/dist) 中读取
-    if let Some(file) = Asset::get(file_name) {
-        let content_type = if file_name.ends_with(".html") {
-            "text/html; charset=utf-8"
-        } else if file_name.ends_with(".css") {
-            "text/css; charset=utf-8"
-        } else if file_name.ends_with(".js") || file_name.ends_with(".mjs") {
-            "application/javascript; charset=utf-8"
-        } else if file_name.ends_with(".svg") {
-            "image/svg+xml"
-        } else if file_name.ends_with(".png") {
-            "image/png"
-        } else {
-            "application/octet-stream"
-        };
+    #[cfg(not(debug_assertions))]
+    {
+        if let Some(file) = Asset::get(file_name) {
+            let content_type = if file_name.ends_with(".html") {
+                "text/html; charset=utf-8"
+            } else if file_name.ends_with(".css") {
+                "text/css; charset=utf-8"
+            } else if file_name.ends_with(".js") || file_name.ends_with(".mjs") {
+                "application/javascript; charset=utf-8"
+            } else if file_name.ends_with(".svg") {
+                "image/svg+xml"
+            } else if file_name.ends_with(".png") {
+                "image/png"
+            } else {
+                "application/octet-stream"
+            };
 
-        return Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, content_type)
-            .body(Body::from(file.data.into_owned()))
-            .unwrap();
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, content_type)
+                .body(Body::from(file.data.into_owned()))
+                .unwrap();
+        }
     }
 
     // 回退逻辑：如果内置文件未匹配到，则尝试从磁盘读取（为了支持本地其他图片/文件等静态资源）

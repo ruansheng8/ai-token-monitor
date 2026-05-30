@@ -520,7 +520,7 @@ export default function App() {
         backgroundColor: theme === 'dark' ? '#030712' : '#f8fafc',
         scale: 1.5, // 采用 1.5 倍缩放，兼顾高清重绘的同时，降低大面积绘图的内存压力
         logging: false,
-        ignoreElements: (el) => {
+        ignoreElements: (el: Element) => {
           if (el.tagName.toLowerCase() === 'canvas') {
             const canvasEl = el as HTMLCanvasElement;
             if (canvasEl.width === 0 || canvasEl.height === 0) {
