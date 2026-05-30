@@ -15,7 +15,7 @@ interface CalendarHeatmapProps {
   theme: 'light' | 'dark';
 }
 
-// 格式化数字，带中文大数单位（万、亿），保留最多1位有效小数
+// 格式化数字，带中文大数单位（万、亿），保留一位小数
 const formatValueWithUnit = (val: number) => {
   const precise = val.toLocaleString('zh-CN');
   if (val >= 10000) {
@@ -28,8 +28,7 @@ const formatValueWithUnit = (val: number) => {
       formatted = val / 1e4;
       unit = '万';
     }
-    const trimmed = parseFloat(formatted.toFixed(1)).toString();
-    return `${precise} (${trimmed}${unit})`;
+    return `${precise} (${formatted.toFixed(1)}${unit})`;
   }
   return precise;
 };

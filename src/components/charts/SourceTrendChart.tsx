@@ -32,20 +32,20 @@ const SOURCE_LABELS: Record<string, string> = {
 };
 
 
-// 格式化数字，带中文大数单位（万、亿），避免小数点
+// 格式化数字，带中文大数单位（万、亿），保留一位小数
 const formatValueWithUnit = (val: number) => {
   const precise = val.toLocaleString('zh-CN');
   if (val >= 10000) {
     let unit = '';
     let formatted = val;
     if (val >= 1e8) {
-      formatted = Math.round(val / 1e8);
+      formatted = val / 1e8;
       unit = '亿';
     } else if (val >= 1e4) {
-      formatted = Math.round(val / 1e4);
+      formatted = val / 1e4;
       unit = '万';
     }
-    return `${precise} (${formatted}${unit})`;
+    return `${precise} (${formatted.toFixed(1)}${unit})`;
   }
   return precise;
 };

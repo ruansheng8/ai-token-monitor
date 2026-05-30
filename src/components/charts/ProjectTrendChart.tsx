@@ -45,8 +45,7 @@ const formatValueWithUnit = (val: number) => {
       formatted = val / 1e4;
       unit = '万';
     }
-    const trimmed = parseFloat(formatted.toFixed(1)).toString();
-    return `${precise} (${trimmed}${unit})`;
+    return `${precise} (${formatted.toFixed(1)}${unit})`;
   }
   return precise;
 };
