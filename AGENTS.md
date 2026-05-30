@@ -182,6 +182,11 @@ npm run build
 
 ---
 
+## 约定/规范
+
+- 约定式提交 (Conventional Commits)：使用 `feat:`、`fix:`、`refactor:`、`test:`、`chore:` 等前缀。
+- **生成 git commit 消息的时候使用简体中文。**
+
 ## 🚫 禁止行为
 
 - **禁止**在未获用户批准前修改生产代码（非 trivial 变更）
