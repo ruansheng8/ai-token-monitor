@@ -232,39 +232,7 @@ const getDateBounds = (range: 'all' | 'today' | 'week' | '30days' | 'month' | 'q
   }
 };
 
-const exportToCSV = (sessions: SessionItem[]) => {
-  if (!sessions || sessions.length === 0) return;
-  
-  const headers = ['工具/引擎', '会话 UUID', '会话标题', '创建时间', '输入 Tokens', '输出 Tokens', '缓存 Tokens', '推理 Tokens', '产生费用 (USD)', '使用模型'];
-  const csvRows = [headers.join(',')];
-  
-  sessions.forEach(s => {
-    const row = [
-      s.source,
-      s.uuid,
-      `"${s.title.replace(/"/g, '""')}"`,
-      s.created_at,
-      s.input,
-      s.output,
-      s.cached,
-      s.thinking,
-      s.cost_usd.toFixed(6),
-      `"${s.models.join('; ')}"`
-    ];
-    csvRows.push(row.join(','));
-  });
-  
-  const csvContent = '\uFEFF' + csvRows.join('\n');
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.setAttribute('href', url);
-  link.setAttribute('download', `AI_Token_Monitor_Report_${new Date().toISOString().slice(0, 10)}.csv`);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-};
+
 
 export default function App() {
   const [data, setData] = useState<AggregatedMetrics | null>(null);
@@ -1836,13 +1804,7 @@ export default function App() {
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
               {/* 报表导出操作按钮 */}
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => exportToCSV(paginatedSessions)}
-                  className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-200/60 hover:bg-slate-300/60 dark:bg-white/5 dark:hover:bg-white/10 text-text-primary border border-card-border cursor-pointer transition-all duration-200 flex items-center gap-1 shadow-sm"
-                  title="导出当前筛选出的账单为高兼容 CSV (Excel/WPS 无缝支持)"
-                >
-                  📥 导出 CSV 账单
-                </button>
+
                 <button
                   onClick={generateReportImage}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:from-neon-cyan/90 hover:to-neon-purple/90 text-white cursor-pointer transition-all duration-200 flex items-center gap-1 shadow-sm no-print"
