@@ -3237,7 +3237,7 @@ export default function App() {
 
       {/* 窗口关闭确认 Modal */}
       {showCloseConfirmModal && (
-        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-md p-4 animate-fade-in select-none">
+        <div className="fixed inset-0 z-[30000] flex items-center justify-center bg-black/60 dark:bg-black/80 backdrop-blur-md p-4 animate-fade-in select-none">
           <div className="relative w-full max-w-md rounded-[28px] border border-card-border bg-bg-secondary/95 dark:bg-[#0f192b]/95 backdrop-blur-xl p-6 text-text-primary shadow-2xl overflow-hidden shadow-neon-cyan/5 transition-all duration-300">
             {/* 装饰性背景光效 */}
             <div className="absolute -top-20 -left-20 w-44 h-44 bg-neon-cyan/10 rounded-full blur-3xl pointer-events-none"></div>
