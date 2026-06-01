@@ -1584,7 +1584,7 @@ async fn run_cli_task_background(
 
     let mut total_chars = 0;
     let mut last_stdout_time = tokio::time::Instant::now();
-    let mut heartbeat_count = 0;
+    let mut last_heartbeat_sec = 0;
     let mut interval = tokio::time::interval(Duration::from_secs(1));
 
     let mut is_streaming_started = false;
@@ -1602,7 +1602,7 @@ async fn run_cli_task_background(
                         }
 
                         last_stdout_time = tokio::time::Instant::now();
-                        heartbeat_count = 0;
+                        last_heartbeat_sec = 0;
 
                         total_chars += line.len();
                         
@@ -1630,11 +1630,11 @@ async fn run_cli_task_background(
                 }
             }
             _ = interval.tick() => {
-                // 心跳机制：超过 15 秒无响应，发起等待通知
+                // 心跳机制：超过 15 秒无响应，且每隔 15 秒发起等待通知
                 let elapsed = last_stdout_time.elapsed().as_secs();
-                if elapsed >= 15 {
-                    heartbeat_count += 15;
-                    let hb_msg = format!("正在等待 Claude Code 响应，已等待 {} 秒", heartbeat_count);
+                if elapsed >= 15 && elapsed % 15 == 0 && elapsed != last_heartbeat_sec {
+                    last_heartbeat_sec = elapsed;
+                    let hb_msg = format!("正在等待 {} 响应，已等待 {} 秒", get_cli_display_name(cli_name), elapsed);
                     let _ = record_and_broadcast_event(&task_id_str, "heartbeat", &hb_msg, None, &tx).await;
                     
                     update_task_heartbeat(&task_id_str, &hb_msg).await;
