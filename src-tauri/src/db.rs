@@ -3,6 +3,7 @@ use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
+pub use crate::config::get_user_profile_dir;
 use std::cell::RefCell;
 use chrono::{DateTime, Utc};
 use regex::Regex;
@@ -16,15 +17,10 @@ thread_local! {
     static SCAN_HAS_CHANGES: RefCell<bool> = RefCell::new(false);
 }
 
-// 1. 动态路径获取逻辑（适配不同 Windows 用户目录）
-
-pub fn get_user_profile_dir() -> String {
-    std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\cearn".to_string())
-}
-
 pub fn get_db_cache_path() -> PathBuf {
-    Path::new(&get_user_profile_dir())
+    Path::new(&crate::config::get_user_profile_dir())
         .join(".ai_token_monitor")
+        .join("db")
         .join("token_stats.db")
 }
 

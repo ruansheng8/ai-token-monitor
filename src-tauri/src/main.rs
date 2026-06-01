@@ -5,6 +5,7 @@ mod db;
 mod server;
 mod db_adapter;
 mod review;
+mod config;
 
 use axum::{routing::{get, post}, Router};
 use server::{
@@ -113,6 +114,8 @@ fn start_folder_watcher() {
 }
 
 fn main() {
+    // 启动时优先初始化配置和环境变量注入
+    config::init_config().expect("初始化配置文件失败");
     // 启动时初始化本地缓存数据库，确保表结构完备，避免多请求并发竞争初始化导致的数据库锁死
     let _ = db::init_cache_db();
     let _ = review::recover_interrupted_tasks();

@@ -27,13 +27,10 @@ pub fn init_postgres_tables(client: &mut postgres::Client) -> Result<(), String>
 }
 
 // 获取当前默认的本地 SQLite 物理文件路径
-pub fn get_user_profile_dir() -> String {
-    std::env::var("USERPROFILE").unwrap_or_else(|_| r"C:\Users\cearn".to_string())
-}
-
 pub fn get_default_sqlite_path() -> PathBuf {
-    Path::new(&get_user_profile_dir())
+    Path::new(&crate::config::get_user_profile_dir())
         .join(".ai_token_monitor")
+        .join("db")
         .join("token_stats.db")
 }
 
