@@ -2149,9 +2149,9 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                   {outputText && (
                     <button
                       onClick={async () => {
-                        localStorage.setItem('fullscreen_task_id', activeTask.id);
                         try {
-                          await invoke('open_fullscreen_window');
+                          localStorage.setItem('fullscreen_task_id', activeTask.id);
+                          await invoke('open_fullscreen_window', { taskId: activeTask.id });
                         } catch (err) {
                           console.error("无法打开全屏窗口:", err);
                           alert("全屏窗口打开失败: " + err);

@@ -245,7 +245,8 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+                let label = window.label();
+                if label == "main" {
                     let behavior = std::env::var("CLOSE_BEHAVIOR").unwrap_or_else(|_| "prompt".to_string());
                     match behavior.as_str() {
                         "close" => {
@@ -261,6 +262,9 @@ fn main() {
                             let _ = window.emit("close-requested", ());
                         }
                     }
+                } else {
+                    // 显式销毁其他辅助窗口（如 fullscreen-report），确保其能正常关闭，避免卡死或无响应
+                    let _ = window.destroy();
                 }
             }
         })
@@ -279,28 +283,49 @@ fn hide_window(window: tauri::Window) {
 }
 
 #[tauri::command]
-fn open_fullscreen_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+fn open_fullscreen_window(app_handle: tauri::AppHandle, task_id: String) -> Result<(), String> {
     let window_label = "fullscreen-report";
     
-    // Close existing fullscreen report window if it is already open to ensure clean load
+    // 如果已经有全屏窗口打开，先关闭以确保干净地重新加载
     if let Some(w) = app_handle.get_webview_window(window_label) {
         let _ = w.close();
+        // 稍微等待旧窗口完成关闭
+        std::thread::sleep(std::time::Duration::from_millis(200));
     }
     
-    let _ = tauri::WebviewWindowBuilder::new(
+    // 创建新的全屏窗口，加载主入口（不带 query 参数，避免 Vite dev server 路由问题）
+    let new_win = tauri::WebviewWindowBuilder::new(
         &app_handle,
         window_label,
         tauri::WebviewUrl::App("index.html".into())
     )
     .title("智能复盘分析诊断报告")
-    .inner_size(1000.0, 750.0)
-    .min_inner_size(600.0, 500.0)
+    .inner_size(1100.0, 820.0)
+    .min_inner_size(700.0, 520.0)
     .resizable(true)
     .maximizable(true)
+    .minimizable(true)
+    .decorations(true)
+    .center()
     .build()
     .map_err(|e| e.to_string())?;
+
+    // 等待窗口加载完成后，通过 emit 将 task_id 推送给新窗口
+    // 新窗口前端会在 DOMContentLoaded 后监听 "fullscreen-task-id" 事件
+    let app_handle_clone = app_handle.clone();
+    let task_id_clone = task_id.clone();
+    let label_clone = window_label.to_string();
+    std::thread::spawn(move || {
+        // 等待前端初始化完成（给 Vite/React 一些时间加载）
+        std::thread::sleep(std::time::Duration::from_millis(800));
+        if let Some(win) = app_handle_clone.get_webview_window(&label_clone) {
+            let _ = win.emit("fullscreen-task-id", &task_id_clone);
+        }
+    });
+
+    // 同时把 task_id 存入临时全局状态，供窗口直接查询
+    let _ = new_win.emit("fullscreen-task-id", &task_id);
     
     Ok(())
 }
-
 

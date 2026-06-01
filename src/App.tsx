@@ -1,12 +1,30 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
-import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
+
 import { apiUrl, readJsonResponse } from './lib/api';
 import { ReviewPage } from './components/ReviewDrawer';
 import { FullscreenReportViewer } from './components/FullscreenReportViewer';
 
-const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+// ── 模块顶层检测：是否为全屏报告窗口（在任何 React 渲染之前执行）──
+// 使用官方 Tauri v2 API，getCurrentWebviewWindow() 在 v2 中是同步的
+function detectFullscreenWindow(): boolean {
+  try {
+    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
+      return false;
+    }
+    // 使用 Tauri v2 内部 metadata 同步读取当前窗口 label
+    const meta = (window as any).__TAURI_INTERNALS__?.metadata;
+    const label = meta?.currentWindow?.label ?? meta?.window?.label ?? '';
+    return label === 'fullscreen-report';
+  } catch {
+    return false;
+  }
+}
+
+const IS_FULLSCREEN_WINDOW = detectFullscreenWindow();
+
+
 import {
   Cpu,
   ArrowDown,
@@ -237,22 +255,10 @@ const getDateBounds = (range: 'all' | 'today' | 'week' | '30days' | 'month' | 'q
 };
 
 
-
 export default function App() {
-  const isFullscreenWindow = useMemo(() => {
-    if (isTauri) {
-      try {
-        const win = getCurrentWebviewWindow();
-        return win && win.label === 'fullscreen-report';
-      } catch (e) {
-        console.error('Failed to get current window label:', e);
-      }
-    }
-    return false;
-  }, []);
-
-  if (isFullscreenWindow) {
-    return <FullscreenReportViewer />;
+  // 如果是全屏报告窗口，直接渲染全屏查看器（无任何 hook 违规）
+  if (IS_FULLSCREEN_WINDOW) {
+    return <FullscreenReportViewer taskId="" />;
   }
 
   const [data, setData] = useState<AggregatedMetrics | null>(null);
