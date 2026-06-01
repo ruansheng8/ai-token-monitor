@@ -57,24 +57,35 @@ export function ProjectTrendChart({ data = [], theme }: ProjectTrendChartProps) 
     // 1. 提取所有不重复的日期并排序
     const dates = Array.from(new Set(data.map(t => t.date))).sort();
     
-    // 2. 提取所有不重复的项目名
-    const projects = Array.from(new Set(data.map(t => t.project_name || 'unknown-project')));
+    // 2. 计算各个项目的总 tokens 消耗，以进行 Top 10 过滤
+    const projectTotals = new Map<string, number>();
+    data.forEach(t => {
+      const pName = t.project_name || 'unknown-project';
+      projectTotals.set(pName, (projectTotals.get(pName) || 0) + (t.tokens || 0));
+    });
+
+    // 3. 排序并获取前 10 个项目
+    const topProjects = Array.from(projectTotals.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(entry => entry[0]);
     
     const borderColor = isDark ? '#0b1528' : '#ffffff';
 
-    // 3. 构建映射以提高数据检索性能：project_name -> Map<date, tokens>
+    // 4. 构建映射以提高数据检索性能：project_name -> Map<date, tokens>
     const projectDataMap = new Map<string, Map<string, number>>();
     data.forEach(t => {
       const pName = t.project_name || 'unknown-project';
+      if (!topProjects.includes(pName)) return; // 仅处理 Top 10 项目
       if (!projectDataMap.has(pName)) {
         projectDataMap.set(pName, new Map<string, number>());
       }
       projectDataMap.get(pName)!.set(t.date, t.tokens);
     });
 
-    const colors = projects.map((_, idx) => PALETTE_COLORS[idx % PALETTE_COLORS.length]);
+    const colors = topProjects.map((_, idx) => PALETTE_COLORS[idx % PALETTE_COLORS.length]);
 
-    const series = projects.map((project, idx) => {
+    const series = topProjects.map((project, idx) => {
       const seriesData = dates.map(date => projectDataMap.get(project)?.get(date) || 0);
       const color = PALETTE_COLORS[idx % PALETTE_COLORS.length];
       return {

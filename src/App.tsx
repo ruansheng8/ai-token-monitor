@@ -1647,7 +1647,7 @@ export default function App() {
           {/* 项目消耗大盘 */}
           <div className="chart-section glass-card p-4 sm:p-5 flex flex-col gap-4">
             <div className="pb-3 border-b border-card-border">
-              <h2 className="text-sm font-semibold text-text-primary">项目消耗大盘走势 (Token 折线图)</h2>
+              <h2 className="text-sm font-semibold text-text-primary">项目消耗大盘走势 (Token 折线图 - Top 10)</h2>
             </div>
             <div className="w-full">
               {data?.project_trends && data.project_trends.length > 0 ? (
