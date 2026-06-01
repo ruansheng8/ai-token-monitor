@@ -38,7 +38,7 @@ pub fn get_user_profile_dir() -> String {
 
 pub fn get_config_path() -> PathBuf {
     Path::new(&get_user_profile_dir())
-        .join(".ai_token_monitor")
+        .join(".token-insight")
         .join("config")
         .join("config.json")
 }

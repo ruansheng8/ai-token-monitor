@@ -45,7 +45,7 @@ const IDE_OPTIONS = [
   { label: 'Trae CN', value: 'trae_cn' },
 ];
 
-const DEFAULT_PROMPT_TEMPLATE = `你是一位专业的 AI 工具使用顾问。我使用 AI Token Monitor 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
+const DEFAULT_PROMPT_TEMPLATE = `你是一位专业的 AI 工具使用顾问。我使用 Token Insight 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
 
 请根据下方我的使用数据，为我提供一份**深度使用复盘报告**，用中文回答。
 
@@ -101,7 +101,7 @@ const TEMPLATE_PRESETS = [
     id: 'cost_saving',
     name: '🔍 成本节流专项',
     description: '主攻降本增效，提供低配模型平替、高消耗 Turn 拦截、缓存提升建议。',
-    template: `你是一位精通成本优化的 AI 治理专家。我使用 AI Token Monitor 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
+    template: `你是一位精通成本优化的 AI 治理专家。我使用 Token Insight 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
 请根据下方我的使用数据，为我提供一份**成本优化专项复盘报告**，用中文回答。
 
 ---
@@ -141,7 +141,7 @@ const TEMPLATE_PRESETS = [
     id: 'collaboration',
     name: '⚡ 开发协作质量',
     description: '主攻提问艺术、代码迭代轮数合理性、上下文复用情况。',
-    template: `你是一位敏捷开发与效能教练。我使用 AI Token Monitor 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
+    template: `你是一位敏捷开发与效能教练。我使用 Token Insight 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
 请根据下方我的使用数据，为我提供一份**人机协作质量诊断报告**，用中文回答。
 
 ---
@@ -181,7 +181,7 @@ const TEMPLATE_PRESETS = [
     id: 'project_review',
     name: '💼 项目全景复盘',
     description: '分析跨项目用量分布、Token 集中度风险，为研发管理提供战略建议。',
-    template: `你是一位技术总监。我使用 AI Token Monitor 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
+    template: `你是一位技术总监。我使用 Token Insight 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
 请根据下方我的使用数据，为我提供一份**项目全景效能复盘报告**，用中文回答。
 
 ---

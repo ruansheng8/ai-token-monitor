@@ -1120,7 +1120,7 @@ export default function App() {
       {/* 离线脱机模式微光横幅 */}
       {!isOnline && (
         <div className="bg-gradient-to-r from-amber-600/95 to-orange-500/95 text-white text-xs font-semibold py-2 px-4 shadow-[0_4px_20px_rgba(249,115,22,0.15)] flex items-center justify-center gap-2 border-b border-orange-500/50 backdrop-blur-sm z-[9999] animate-pulse-glow no-print">
-          <span>⚠️ 物理网络已断开。AI Token Monitor 已平滑启用「本地脱机容灾模式」，自动拦截云端延迟，保障本地大盘 100% 极速可用！</span>
+          <span>⚠️ 物理网络已断开。Token Insight 已平滑启用「本地脱机容灾模式」，自动拦截云端延迟，保障本地大盘 100% 极速可用！</span>
         </div>
       )}
       {/* 背景光效 */}
@@ -1144,7 +1144,7 @@ export default function App() {
               </defs>
             </svg>
             <div className="flex flex-col items-start">
-              <h1 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">AI Token Monitor</h1>
+              <h1 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">Token Insight</h1>
               <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-neon-cyan/15 border border-neon-cyan/35 text-neon-cyan leading-none">Multi-Engine Dashboard</span>
             </div>
 
@@ -2139,7 +2139,7 @@ export default function App() {
                   <div className="absolute inset-0 flex items-center justify-center text-lg">🤖</div>
                 </div>
                 <div className="text-center">
-                  <h2 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">AI Token Monitor</h2>
+                  <h2 className="text-xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">Token Insight</h2>
                   <p className="text-xs text-text-muted mt-1">正在初始化后台服务，请稍候...</p>
                 </div>
               </div>
@@ -2462,7 +2462,7 @@ export default function App() {
                   <div className="flex flex-col gap-2 animate-fade-in text-left">
                     <label className="text-xs font-semibold text-text-secondary">🏷️ 系统版本 (System Version)</label>
                     <div className="w-full bg-bg-secondary/40 dark:bg-white/3 border border-card-border rounded-xl px-4 py-3 flex items-center justify-between">
-                      <span className="text-xs font-medium text-text-primary">AI Token Monitor</span>
+                      <span className="text-xs font-medium text-text-primary">Token Insight</span>
                       <span className="px-2.5 py-1 text-xs font-mono font-semibold rounded-lg bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20 shadow-[0_0_10px_rgba(6,182,212,0.1)]">
                         v{appVersion || "0.1.0"}
                       </span>
@@ -2517,7 +2517,7 @@ export default function App() {
                         className="w-full bg-bg-secondary/60 dark:bg-black/35 border border-card-border rounded-xl px-4 py-3 text-xs text-text-primary placeholder-text-muted outline-none focus:border-neon-cyan focus:shadow-[0_0_10px_rgba(6,182,212,0.25)] transition-all duration-300"
                       />
                       <p className="text-[10px] text-text-muted leading-relaxed">
-                        * 默认路径：<code className="bg-bg-secondary dark:bg-black/30 px-1.5 py-0.5 rounded text-neon-cyan font-mono">USERPROFILE\.ai_token_monitor\token_stats.db</code>。如果留空或使用默认位置，系统会自动管理。若修改为新路径，系统将自动在该目录下创建表。
+                        * 默认路径：<code className="bg-bg-secondary dark:bg-black/30 px-1.5 py-0.5 rounded text-neon-cyan font-mono">USERPROFILE\.token-insight\token_stats.db</code>。如果留空或使用默认位置，系统会自动管理。若修改为新路径，系统将自动在该目录下创建表。
                       </p>
                     </div>
                   ) : (
@@ -3196,7 +3196,7 @@ export default function App() {
                 <div className="relative max-w-full">
                   <img
                     src={reportImgUrl}
-                    alt="AI Token Monitor 财务报表"
+                    alt="Token Insight 财务报表"
                     className="rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.15)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.5)] border border-card-border max-w-full h-auto transition-transform duration-300"
                   />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300 rounded-xl flex items-center justify-center pointer-events-none">
@@ -3236,7 +3236,7 @@ export default function App() {
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = url;
-                      a.download = `AI_Token_Monitor_财务报表_${new Date().toISOString().split('T')[0]}.png`;
+                      a.download = `Token_Insight_财务报表_${new Date().toISOString().split('T')[0]}.png`;
                       document.body.appendChild(a);
                       a.click();
                       document.body.removeChild(a);

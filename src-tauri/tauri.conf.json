@@ -1,7 +1,7 @@
 {
-  "productName": "ai-token-monitor",
+  "productName": "token-insight",
   "version": "0.2.5",
-  "identifier": "com.aitokenmonitor.app",
+  "identifier": "com.tokeninsight.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",

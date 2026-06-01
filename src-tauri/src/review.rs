@@ -294,7 +294,7 @@ pub async fn handle_review_detect(
     let force = params.get("force").map(|s| s == "true").unwrap_or(false);
 
     let cache_path = std::path::Path::new(&crate::db::get_user_profile_dir())
-        .join(".ai_token_monitor")
+        .join(".token-insight")
         .join("cli_detect_cache.json");
 
     #[derive(Debug, Serialize, Deserialize, Clone)]

@@ -29,7 +29,7 @@ pub fn init_postgres_tables(client: &mut postgres::Client) -> Result<(), String>
 // 获取当前默认的本地 SQLite 物理文件路径
 pub fn get_default_sqlite_path() -> PathBuf {
     Path::new(&crate::config::get_user_profile_dir())
-        .join(".ai_token_monitor")
+        .join(".token-insight")
         .join("db")
         .join("token_stats.db")
 }

@@ -1,4 +1,4 @@
-# 📊 AI Token Monitor — 多终端 AI IDE Token 用量统计仪表盘
+# 📊 Token Insight — 多终端 AI IDE Token 用量统计仪表盘
 
 <p align="center">
   <strong>监控本地 AI IDE 的 Token 消耗，支持多个本地终端合并统计，让 AI 治理与用量一目了然。</strong>
@@ -16,7 +16,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
-**AI Token 用量统计仪表盘 (AI Token Monitor)** 是一款专为本地 AI 助手打造的 *Token 消耗用量统计仪表盘*（完美适配 Antigravity/Gemini、Claude Code、Codex、Cursor 等主流 AI 编程工具）。
+**Token Insight** 是一款专为本地 AI 助手打造的 *Token 消耗用量统计仪表盘*（完美适配 Antigravity/Gemini、Claude Code、Codex、Cursor 等主流 AI 编程工具）。
 
 它通过动态解码本地用量文件，直观呈现 API 用量明细、每日/月度使用趋势以及模型用量占比。
 
@@ -70,8 +70,8 @@
 
 ```bash
 # 克隆仓库
-git clone https://github.com/your-username/ai-token-monitor.git
-cd ai-token-monitor
+git clone https://github.com/your-username/token-insight.git
+cd token-insight
 
 # 安装前端依赖
 pnpm install  # 或 npm install
@@ -107,7 +107,7 @@ cargo run --release -- 8080
 ## 📂 项目结构
 
 ```
-ai-token-monitor/
+token-insight/
 ├── src/                  # 前端核心代码 (React + TS + Tailwind CSS)
 │   ├── components/       # 前端复用组件 (如 ECharts 图表组件)
 │   ├── App.tsx           # 前端数据交互、图表渲染、会话搜索/排序主页面
@@ -146,10 +146,10 @@ ai-token-monitor/
    ```bash
    pnpm build && cd src-tauri && cargo build --release
    ```
-   *💡 注意：我们已经在 [src-tauri/Cargo.toml](file:///d:/VibeCoding/ai-token-monitor/src-tauri/Cargo.toml) 中配置了默认特性 `default = ["custom-protocol"]`，因此无论使用 `pnpm tauri build` 还是原生 `cargo build --release`，自定义文件服务协议都会被正确启用，不会出现 production 运行版前端去连接 localhost 开发服务器（即 5173 端口拒绝连接）的问题。*
+   *💡 注意：我们已经在 [src-tauri/Cargo.toml](src-tauri/Cargo.toml) 中配置了默认特性 `default = ["custom-protocol"]`，因此无论使用 `pnpm tauri build` 还是原生 `cargo build --release`，自定义文件服务协议都会被正确启用，不会出现 production 运行版前端去连接 localhost 开发服务器（即 5173 端口拒绝连接）的问题。*
 
 3. **双击即用分发**：
-   您只需将编译出的单个 `ai-token-monitor.exe`（在 `src-tauri/target/release/` 下）发送给其他 Windows 用户，对方直接双击运行即可，不需要附带任何外部 `.html`、`.css` 或 `.js` 静态资源文件。
+   您只需将编译出的单个 `token-insight.exe`（在 `src-tauri/target/release/` 下）发送给其他 Windows 用户，对方直接双击运行即可，不需要附带任何外部 `.html`、`.css` 或 `.js` 静态资源文件。
 
 
 ---
@@ -165,7 +165,7 @@ ai-token-monitor/
 DATABASE_TYPE=sqlite
 
 # SQLite 本地数据库路径 (DATABASE_TYPE=sqlite 时有效)
-# 留空则默认使用路径: C:\Users\<Username>\.ai_token_monitor\token_stats.db
+# 留空则默认使用路径: C:\Users\<Username>\.token-insight\token_stats.db
 DB_SQLITE_PATH=
 
 # PostgreSQL 分项配置 (DATABASE_TYPE=postgres 时有效)

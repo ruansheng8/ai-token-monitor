@@ -19,7 +19,7 @@ thread_local! {
 
 pub fn get_db_cache_path() -> PathBuf {
     Path::new(&crate::config::get_user_profile_dir())
-        .join(".ai_token_monitor")
+        .join(".token-insight")
         .join("db")
         .join("token_stats.db")
 }
@@ -3471,7 +3471,7 @@ mod tests {
     #[test]
     fn test_init_cache_db_creates_project_and_pricing_structures() {
         let test_id = chrono::Utc::now().timestamp_millis();
-        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_schema_test_{}", test_id));
+        let temp_path = std::env::temp_dir().join(format!("token_insight_schema_test_{}", test_id));
         std::fs::create_dir_all(&temp_path).unwrap();
         std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
         std::env::set_var("DATABASE_TYPE", "sqlite");
@@ -3517,7 +3517,7 @@ mod tests {
     #[test]
     fn test_sync_populates_project_name_fts_and_project_daily_stats() {
         let test_id = chrono::Utc::now().timestamp_millis();
-        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_project_cache_test_{}", test_id));
+        let temp_path = std::env::temp_dir().join(format!("token_insight_project_cache_test_{}", test_id));
         std::fs::create_dir_all(&temp_path).unwrap();
 
         std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
@@ -3591,7 +3591,7 @@ mod tests {
     #[test]
     fn test_estimate_cost_prefers_model_pricing_table() {
         let test_id = chrono::Utc::now().timestamp_millis();
-        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_pricing_test_{}", test_id));
+        let temp_path = std::env::temp_dir().join(format!("token_insight_pricing_test_{}", test_id));
         std::fs::create_dir_all(&temp_path).unwrap();
         std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
         std::env::set_var("DATABASE_TYPE", "sqlite");
@@ -3622,7 +3622,7 @@ mod tests {
     #[test]
     fn test_aggregated_metrics_include_project_rankings_and_trends() {
         let test_id = chrono::Utc::now().timestamp_millis();
-        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_metrics_project_test_{}", test_id));
+        let temp_path = std::env::temp_dir().join(format!("token_insight_metrics_project_test_{}", test_id));
         std::fs::create_dir_all(&temp_path).unwrap();
         std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
         std::env::set_var("DATABASE_TYPE", "sqlite");
@@ -3657,7 +3657,7 @@ mod tests {
     #[test]
     fn test_sqlite_session_search_uses_fts() {
         let test_id = chrono::Utc::now().timestamp_millis();
-        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_fts_search_test_{}", test_id));
+        let temp_path = std::env::temp_dir().join(format!("token_insight_fts_search_test_{}", test_id));
         std::fs::create_dir_all(&temp_path).unwrap();
         std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
         std::env::set_var("DATABASE_TYPE", "sqlite");
@@ -3667,12 +3667,12 @@ mod tests {
 
         conn.execute(
             "INSERT INTO sessions (source, uuid, title, created_at, project_path, project_name, device_name)
-             VALUES ('claude_code', 'fts-1', 'Refactor token monitor', '2026-05-28T11:00:00.000Z', 'D:/code/ai-token-monitor', 'ai-token-monitor', 'devbox')",
+             VALUES ('claude_code', 'fts-1', 'Refactor token monitor', '2026-05-28T11:00:00.000Z', 'D:/code/token-insight', 'token-insight', 'devbox')",
             [],
         ).unwrap();
         rebuild_sessions_fts(&conn).unwrap();
 
-        let result = get_sessions_paginated(1, 10, Some("ai-token-monitor"), Some("all"), Some("created_at"), Some("desc"), None, None, false).unwrap();
+        let result = get_sessions_paginated(1, 10, Some("token-insight"), Some("all"), Some("created_at"), Some("desc"), None, None, false).unwrap();
         assert_eq!(result.total, 1);
         assert_eq!(result.items[0].uuid, "fts-1");
 
@@ -3693,7 +3693,7 @@ mod tests {
     #[test]
     fn test_upsert_model_pricing_rows() {
         let test_id = chrono::Utc::now().timestamp_millis();
-        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_pricing_crud_test_{}", test_id));
+        let temp_path = std::env::temp_dir().join(format!("token_insight_pricing_crud_test_{}", test_id));
         std::fs::create_dir_all(&temp_path).unwrap();
         std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
         std::env::set_var("DATABASE_TYPE", "sqlite");
@@ -3775,7 +3775,7 @@ mod tests {
     #[test]
     fn test_sync_and_aggregate_integration() {
         let test_id = chrono::Utc::now().timestamp_millis();
-        let temp_path = std::env::temp_dir().join(format!("ai_token_monitor_test_{}", test_id));
+        let temp_path = std::env::temp_dir().join(format!("token_insight_test_{}", test_id));
         fs::create_dir_all(&temp_path).unwrap();
         
         std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());

@@ -1,4 +1,4 @@
-# AGENTS.md — AI Token Monitor 智能体协作规范
+# AGENTS.md — Token Insight 智能体协作规范
 
 > 本文件为 AI 编程助手（Antigravity、Claude Code、Codex、Cursor 等）提供操作本项目时的上下文、约束与最佳实践。读取此文件后，应严格遵循以下所有规范。
 
@@ -6,7 +6,7 @@
 
 ## 📐 项目概览
 
-**AI Token Monitor** 是一款面向本地 AI IDE 的 Token 消耗统计仪表盘，采用：
+**Token Insight** 是一款面向本地 AI IDE 的 Token 消耗统计仪表盘，采用：
 
 - **前端**：React 19 + TypeScript + Tailwind CSS v4 + ECharts — 位于 `src/`
 - **后端**：Rust + Tauri v2 + Axum Web 服务器 — 位于 `src-tauri/src/`

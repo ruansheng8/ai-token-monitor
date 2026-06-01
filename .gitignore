@@ -2,8 +2,8 @@
 /src-tauri/target/
 /src-tauri/gen/
 /dist/
-ai-token-monitor
-ai-token-monitor.exe
+token-insight
+token-insight.exe
 *.db
 *.log
 .DS_Store
