@@ -3031,9 +3031,13 @@ export default function App() {
                 <div className="space-y-5 animate-fade-in text-center py-4">
                   <div className="flex flex-col items-center gap-2">
                     <RefreshCw className={`w-8 h-8 text-neon-pink ${cleanLoading ? 'animate-spin' : ''}`} />
-                    <h3 className="text-xs font-semibold text-text-primary">SQLite 本地缓存优化瘦身</h3>
+                     <h3 className="text-xs font-semibold text-text-primary">SQLite 本地缓存优化瘦身</h3>
                     <p className="text-[10px] text-text-muted max-w-[320px] mx-auto leading-relaxed">
                       本操作将执行 SQLite VACUUM 整理数据库物理空间碎片，重新计算预聚合历史统计，并重建 FTS5 会话索引（Sessions Full-Text Search），极致提升大盘加载与关键字搜索速度！
+                      <br />
+                      <span className="text-neon-pink font-semibold mt-1 inline-block">
+                        *注：此操作仅重组数据库空间并清理无效记录，绝对不会删除任何本地磁盘文件（如数据库文件、原始日志或工程文件等）。
+                      </span>
                     </p>
                   </div>
 

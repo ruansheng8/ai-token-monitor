@@ -5057,7 +5057,7 @@ pub fn clean_cache_db() -> Result<String, String> {
         ).map_err(|e| e.to_string())?;
 
         return Ok(format!(
-            "远程 PostgreSQL 数据库优化完成！\n共清理无效交互: {} 轮\n共删除僵尸空会话: {} 个",
+            "远程 PostgreSQL 数据库优化完成（此操作仅重组数据库空间，未删除任何本地或远程磁盘文件）！\n共清理无效交互: {} 轮\n共删除僵尸空会话: {} 个",
             deleted_turns, deleted_sessions
         ));
     }
@@ -5089,7 +5089,7 @@ pub fn clean_cache_db() -> Result<String, String> {
         .map_err(|e| format!("SQLite VACUUM 空间收紧失败: {}", e))?;
 
     Ok(format!(
-        "本地 SQLite 缓存数据库优化瘦身成功！\n共清理无效交互: {} 轮\n共删除僵尸空会话: {} 个\n物理磁盘碎片整理已生效 (VACUUM)",
+        "本地 SQLite 缓存数据库优化瘦身成功（此操作仅重组数据库空间，未删除任何本地磁盘文件）！\n共清理无效交互: {} 轮\n共删除僵尸空会话: {} 个\n物理磁盘碎片整理已生效 (VACUUM)",
         deleted_turns, deleted_sessions
     ))
 }
