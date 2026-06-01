@@ -464,13 +464,216 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
         [],
     )?;
 
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_tasks_status_created ON review_tasks(status, created_at DESC);", [])?;
-    conn.execute("CREATE INDEX IF NOT EXISTS idx_review_tasks_dedupe ON review_tasks(dedupe_key, status);", [])?;
     conn.execute("CREATE INDEX IF NOT EXISTS idx_review_task_events_task_sequence ON review_task_events(task_id, sequence);", [])?;
     conn.execute("CREATE INDEX IF NOT EXISTS idx_turn_details_lookup ON turn_details(source, uuid, idx);", [])?;
 
+    // 初始化提示词模板表
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS prompt_templates (
+            id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            description TEXT,
+            template TEXT NOT NULL,
+            is_builtin INTEGER DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    seed_default_prompt_templates(&conn)?;
+
     Ok(())
 }
+
+fn seed_default_prompt_templates(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let presets = [
+        (
+            "comprehensive",
+            "📊 综合效能评估",
+            "对用量、开销、缓存与提问质量进行全面、通用的效能诊断。",
+            r#"你是一位专业的 AI 工具使用顾问。我使用 Token Insight 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
+
+请根据下方我的使用数据，为我提供一份**深度使用复盘报告**，用中文回答。
+
+---
+
+## 我的使用数据（最近7天）
+
+| 指标 | 数值 |
+|------|------|
+| 总 Token 消耗 | {{TOTAL_TOKENS}} tokens |
+| 总费用 | ${{TOTAL_COST}} USD |
+| 总会话数 | {{TOTAL_SESSIONS}} 次 |
+| 缓存命中率 | {{CACHE_HIT_RATE}}% |
+| 推理（Thinking）Token 占比 | {{THINKING_RATIO}}% |
+{{SOURCE_BREAKDOWN}}{{MODEL_DISTRIBUTION}}{{DAILY_TREND_SUMMARY}}
+
+---
+
+## 请按以下结构输出分析报告（使用 Markdown 格式）：
+
+### 1. 使用模式诊断
+分析我的 AI 工具使用习惯，包括：
+- 主要使用哪些工具/模型？
+- 使用频率是否均匀，有无明显的高峰/低谷？
+- 缓存命中率 {{CACHE_HIT_RATE}}% 是否合理？（业界参考：>30% 较好）
+- 推理 Token 占比 {{THINKING_RATIO}}% 说明什么？
+
+### 2. 成本优化建议
+基于以上数据，给出 3~5 条具体、可操作的成本优化建议，例如：
+- 哪些场景可以换用更便宜的模型？
+- 如何提升缓存命中率？
+- 是否存在明显的低效会话模式？
+
+### 3. 效率评估
+- 综合评价我的 AI 使用效率（满分100分，给出评分与理由）
+- 与一般开发者的平均水平相比，我的数据表现如何？
+
+### 4. 本周行动清单
+列出 3 条我这周可以立刻执行的具体优化行动（要具体到操作步骤，不要泛泛而谈）。
+
+---
+
+请直接开始输出报告，不需要前言。保持语言简洁专业，使用 Markdown 格式。"#
+        ),
+        (
+            "cost_saving",
+            "🔍 成本节流专项",
+            "主攻降本增效，提供低配模型平替、高消耗 Turn 拦截、缓存提升建议。",
+            r#"你是一位精通成本优化的 AI 治理专家。我使用 Token Insight 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
+请根据下方我的使用数据，为我提供一份**成本优化专项复盘报告**，用中文回答。
+
+---
+
+## 我的使用数据（最近7天）
+
+| 指标 | 数值 |
+|------|------|
+| 总 Token 消耗 | {{TOTAL_TOKENS}} tokens |
+| 总费用 | ${{TOTAL_COST}} USD |
+| 总会话数 | {{TOTAL_SESSIONS}} 次 |
+| 缓存命中率 | {{CACHE_HIT_RATE}}% |
+| 推理（Thinking）Token 占比 | {{THINKING_RATIO}}% |
+{{SOURCE_BREAKDOWN}}{{MODEL_DISTRIBUTION}}{{DAILY_TREND_SUMMARY}}
+
+---
+
+## 请按以下结构输出分析报告（使用 Markdown 格式）：
+
+### 1. 成本与用量分布诊断
+分析本次分析周期中最昂贵的消耗项、最高频的模型偏好，以及费用分布的合理性。
+
+### 2. 核心痛点与降本瓶颈
+找出模型配比不合理（如在简单任务上过度使用昂贵模型）、缓存利用率低下、或者存在超长会话（Context 膨胀导致 Token 浪费）的瓶颈。
+
+### 3. 降本增效平替建议
+评估有哪些高频场景可以使用更轻量、更低成本的模型平替，或者如何更好地利用提示词缓存（Prompt Caching）。
+
+### 4. 本周行动清单
+针对上述发现，给出 3 条具体、可立即执行的降低 AI 成本的行动项，包括推荐的缓存策略和提问控制。
+
+---
+
+请直接开始输出报告，不需要前言。保持语言简洁专业，使用 Markdown 格式。"#
+        ),
+        (
+            "collaboration",
+            "⚡ 开发协作质量",
+            "主攻提问艺术、代码迭代轮数合理性、上下文复用情况。",
+            r#"你是一位敏捷开发与效能教练。我使用 Token Insight 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
+请根据下方我的使用数据，为我提供一份**人机协作质量诊断报告**，用中文回答。
+
+---
+
+## 我的使用数据（最近7天）
+
+| 指标 | 数值 |
+|------|------|
+| 总 Token 消耗 | {{TOTAL_TOKENS}} tokens |
+| 总费用 | ${{TOTAL_COST}} USD |
+| 总会话数 | {{TOTAL_SESSIONS}} 次 |
+| 缓存命中率 | {{CACHE_HIT_RATE}}% |
+| 推理（Thinking）Token 占比 | {{THINKING_RATIO}}% |
+{{SOURCE_BREAKDOWN}}{{MODEL_DISTRIBUTION}}{{DAILY_TREND_SUMMARY}}
+
+---
+
+## 请按以下结构输出分析报告（使用 Markdown 格式）：
+
+### 1. 协同深度与频次诊断
+总结我与 AI 协同的频次、单会话平均消耗和整体交互深度，分析使用习惯的健康度。
+
+### 2. 效率瓶颈与低效会话
+找出提问流中是否存在多次无效重试、提示词清晰度不足、或者单次会话包含太多不相关改动导致上下文负荷过重。
+
+### 3. 提问艺术与上下文优化
+评估我在提示词编写和 IDE 交互时，是否有效利用了上下文切片，以及如果改进提问习惯可以带来多大的效率增益。
+
+### 4. 本周行动清单
+给出 3 条提高提问效率和人机协作质量的黄金行动项（例如，推荐单次会话只关注单一职责，利用更清晰的任务边界等）。
+
+---
+
+请直接开始输出报告，不需要前言。保持语言简洁专业，使用 Markdown 格式。"#
+        ),
+        (
+            "project_review",
+            "💼 项目全景复盘",
+            "分析跨项目用量分布、Token 集中度风险，为研发管理提供战略建议。",
+            r#"你是一位技术总监。我使用 Token Insight 追踪了我在 {{IDE}} 等工具上的 Token 消耗情况。
+请根据下方我的使用数据，为我提供一份**项目全景效能复盘报告**，用中文回答。
+
+---
+
+## 我的使用数据（最近7天）
+
+| 指标 | 数值 |
+|------|------|
+| 总 Token 消耗 | {{TOTAL_TOKENS}} tokens |
+| 总费用 | ${{TOTAL_COST}} USD |
+| 总会话数 | {{TOTAL_SESSIONS}} 次 |
+| 缓存命中率 | {{CACHE_HIT_RATE}}% |
+| 推理（Thinking）Token 占比 | {{THINKING_RATIO}}% |
+{{SOURCE_BREAKDOWN}}{{MODEL_DISTRIBUTION}}{{DAILY_TREND_SUMMARY}}
+
+---
+
+## 请按以下结构输出分析报告（使用 Markdown 格式）：
+
+### 1. 工具集成与渗透度诊断
+从全局视角概括我的项目使用分布、高频工具依赖和 AI 在不同开发环境的渗透情况。
+
+### 2. 项目集中度风险分析
+分析是否存在某单一 IDE/项目过度消耗导致资源倾斜，或者某些项目几乎没有使用 AI 辅助的效率断层。
+
+### 3. 研发效能与资产化评估
+评估跨工具协同的顺畅度，以及当模型或工具发生切换时，对整体交付速度和成本的战略性影响。
+
+### 4. 本周行动清单
+给出 3 条适用于团队或个人在跨项目开发时，规范 AI 工具使用和保护技术资产的宏观行动项。
+
+---
+
+请直接开始输出报告，不需要前言。保持语言简洁专业，使用 Markdown 格式。"#
+        )
+    ];
+
+    for (id, name, desc, template) in presets {
+        conn.execute(
+            "INSERT INTO prompt_templates (id, name, description, template, is_builtin, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 1, ?, ?)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                description = excluded.description,
+                template = excluded.template",
+            rusqlite::params![id, name, desc, template, now, now],
+        )?;
+    }
+    Ok(())
+}
+
 
 // 3.5. 每日预聚合缓存重建助手方法 (方案二高性能预计算核心)
 

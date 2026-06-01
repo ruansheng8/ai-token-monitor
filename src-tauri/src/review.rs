@@ -2118,4 +2118,272 @@ pub async fn handle_get_turn_details(
     }
 }
 
+// ============================================================
+// 专家分析提示词模板 CRUD
+// ============================================================
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PromptTemplate {
+    pub id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub template: String,
+    pub is_builtin: i32,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CreatePromptTemplateReq {
+    pub name: String,
+    pub description: Option<String>,
+    pub template: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct UpdatePromptTemplateReq {
+    pub name: String,
+    pub description: Option<String>,
+    pub template: String,
+}
+
+/// GET /api/review/prompt_templates
+pub async fn handle_list_prompt_templates() -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(crate::db::get_db_cache_path())
+            .map_err(|e| e.to_string())?;
+        
+        let mut stmt = conn.prepare(
+            "SELECT id, name, description, template, is_builtin, created_at, updated_at 
+             FROM prompt_templates 
+             ORDER BY is_builtin DESC, created_at ASC"
+        ).map_err(|e| e.to_string())?;
+
+        let rows = stmt.query_map([], |row| {
+            Ok(PromptTemplate {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                description: row.get(2)?,
+                template: row.get(3)?,
+                is_builtin: row.get(4)?,
+                created_at: row.get(5)?,
+                updated_at: row.get(6)?,
+            })
+        }).map_err(|e| e.to_string())?;
+
+        let mut list = Vec::new();
+        for r in rows {
+            list.push(r.map_err(|e| e.to_string())?);
+        }
+        Ok::<_, String>(list)
+    }).await;
+
+    match result {
+        Ok(Ok(list)) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_string(&list).unwrap()))
+                .unwrap()
+        }
+        Ok(Err(e)) => {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": false, "message": e }).to_string()))
+                .unwrap()
+        }
+        Err(e) => {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": false, "message": format!("Server thread error: {}", e) }).to_string()))
+                .unwrap()
+        }
+    }
+}
+
+/// POST /api/review/prompt_templates
+pub async fn handle_create_prompt_template(
+    axum::Json(req): axum::Json<CreatePromptTemplateReq>,
+) -> impl IntoResponse {
+    let name_trimmed = req.name.trim().to_string();
+    let template_trimmed = req.template.trim().to_string();
+
+    if name_trimmed.is_empty() || template_trimmed.is_empty() {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from(serde_json::json!({ "success": false, "message": "模板名称和内容不能为空" }).to_string()))
+            .unwrap();
+    }
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(crate::db::get_db_cache_path())
+            .map_err(|e| e.to_string())?;
+
+        let template_id = format!("template_{}", chrono::Utc::now().timestamp_nanos_opt().unwrap_or(0));
+        let now = chrono::Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO prompt_templates (id, name, description, template, is_builtin, created_at, updated_at)
+             VALUES (?, ?, ?, ?, 0, ?, ?)",
+            rusqlite::params![template_id, name_trimmed, req.description, template_trimmed, now, now],
+        ).map_err(|e| e.to_string())?;
+
+        Ok::<String, String>(template_id)
+    }).await;
+
+    match result {
+        Ok(Ok(id)) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": true, "id": id }).to_string()))
+                .unwrap()
+        }
+        _ => {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": false, "message": "创建模板失败" }).to_string()))
+                .unwrap()
+        }
+    }
+}
+
+/// PUT /api/review/prompt_templates/:id
+pub async fn handle_update_prompt_template(
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::Json(req): axum::Json<UpdatePromptTemplateReq>,
+) -> impl IntoResponse {
+    let name_trimmed = req.name.trim().to_string();
+    let template_trimmed = req.template.trim().to_string();
+
+    if name_trimmed.is_empty() || template_trimmed.is_empty() {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from(serde_json::json!({ "success": false, "message": "模板名称和内容不能为空" }).to_string()))
+            .unwrap();
+    }
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(crate::db::get_db_cache_path())
+            .map_err(|e| e.to_string())?;
+
+        // 校验是否是内置模板
+        let is_builtin: i32 = conn.query_row(
+            "SELECT is_builtin FROM prompt_templates WHERE id = ?",
+            [&id],
+            |row| row.get(0),
+        ).map_err(|e| format!("模板不存在: {}", e))?;
+
+        if is_builtin == 1 {
+            return Err("系统内置模板不支持直接修改".to_string());
+        }
+
+        let now = chrono::Utc::now().to_rfc3339();
+
+        conn.execute(
+            "UPDATE prompt_templates 
+             SET name = ?, description = ?, template = ?, updated_at = ?
+             WHERE id = ?",
+            rusqlite::params![name_trimmed, req.description, template_trimmed, now, id],
+        ).map_err(|e| e.to_string())?;
+
+        Ok::<(), String>(())
+    }).await;
+
+    match result {
+        Ok(Ok(())) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": true }).to_string()))
+                .unwrap()
+        }
+        Ok(Err(e)) => {
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": false, "message": e }).to_string()))
+                .unwrap()
+        }
+        _ => {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": false, "message": "修改模板失败" }).to_string()))
+                .unwrap()
+        }
+    }
+}
+
+/// DELETE /api/review/prompt_templates/:id
+pub async fn handle_delete_prompt_template(
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(crate::db::get_db_cache_path())
+            .map_err(|e| e.to_string())?;
+
+        // 校验是否是内置模板
+        let is_builtin: i32 = conn.query_row(
+            "SELECT is_builtin FROM prompt_templates WHERE id = ?",
+            [&id],
+            |row| row.get(0),
+        ).map_err(|e| format!("模板不存在: {}", e))?;
+
+        if is_builtin == 1 {
+            return Err("系统内置模板不支持直接删除".to_string());
+        }
+
+        conn.execute(
+            "DELETE FROM prompt_templates WHERE id = ?",
+            [&id],
+        ).map_err(|e| e.to_string())?;
+
+        Ok::<(), String>(())
+    }).await;
+
+    match result {
+        Ok(Ok(())) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": true }).to_string()))
+                .unwrap()
+        }
+        Ok(Err(e)) => {
+            Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": false, "message": e }).to_string()))
+                .unwrap()
+        }
+        _ => {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::json!({ "success": false, "message": "删除模板失败" }).to_string()))
+                .unwrap()
+        }
+    }
+}
+
+
 

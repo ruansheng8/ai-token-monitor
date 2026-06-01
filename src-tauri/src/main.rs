@@ -7,7 +7,7 @@ mod db_adapter;
 mod review;
 mod config;
 
-use axum::{routing::{get, post}, Router};
+use axum::{routing::{get, post, put}, Router};
 use server::{
     handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback,
     handle_config_get, handle_config_test, handle_config_save, handle_app_restart,
@@ -18,7 +18,8 @@ use review::{
     handle_review_detect, handle_create_task, handle_list_tasks,
     handle_get_active_task, handle_get_task, handle_task_events, handle_cancel_task,
     handle_delete_task, handle_retry_task, handle_save_action_items, handle_save_quality_feedback,
-    handle_get_turn_details,
+    handle_get_turn_details, handle_list_prompt_templates, handle_create_prompt_template,
+    handle_update_prompt_template, handle_delete_prompt_template,
 };
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
@@ -159,6 +160,8 @@ fn main() {
                 .route("/api/review/tasks/:id/action-items", post(handle_save_action_items))
                 .route("/api/review/tasks/:id/feedback", post(handle_save_quality_feedback))
                 .route("/api/review/turns/details", get(handle_get_turn_details))
+                .route("/api/review/prompt_templates", get(handle_list_prompt_templates).post(handle_create_prompt_template))
+                .route("/api/review/prompt_templates/:id", put(handle_update_prompt_template).delete(handle_delete_prompt_template))
                 .fallback(serve_static_file_fallback)
                 .layer(axum::middleware::from_fn(server::cors_middleware));
 

@@ -25,6 +25,7 @@ import {
 import { apiUrl, readJsonResponse } from '../lib/api';
 import { Markdown } from './Markdown';
 import { TurnDetailsDrawer } from './TurnDetailsDrawer';
+import { PromptTemplate, PromptTemplateManagerModal } from './PromptTemplateManagerModal';
 
 // ============================================================
 // 常量与辅助配置
@@ -404,6 +405,27 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('comprehensive');
   const [compareMetrics, setCompareMetrics] = useState<ReviewMetrics | null>(null);
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>(
+    TEMPLATE_PRESETS.map(p => ({
+      ...p,
+      is_builtin: 1,
+      created_at: '',
+      updated_at: ''
+    }))
+  );
+  const [isManagerOpen, setIsManagerOpen] = useState(false);
+
+  const fetchTemplates = async () => {
+    try {
+      const res = await fetch(apiUrl('/review/prompt_templates'));
+      if (res.ok) {
+        const data = await readJsonResponse<PromptTemplate[]>(res);
+        setPromptTemplates(data);
+      }
+    } catch (e) {
+      console.error('获取提示词模板失败', e);
+    }
+  };
 
 
   // 指标快照与异步请求状态
@@ -445,22 +467,24 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
   // ────── 自动定位与提示词模板填充 ──────
   const lastAutoPromptRef = useRef('');
   useEffect(() => {
-    const selectedPreset = TEMPLATE_PRESETS.find(p => p.id === selectedTemplateId) || TEMPLATE_PRESETS[0];
+    const selectedPreset = promptTemplates.find(p => p.id === selectedTemplateId) || promptTemplates[0] || TEMPLATE_PRESETS[0];
     const timeLabel = reviewTimeRange === '今日' ? '今日' : `最近${reviewTimeRange}`;
-    const templateWithTime = selectedPreset.template.replace('最近7天', timeLabel);
+    const templateText = selectedPreset?.template || '';
+    const templateWithTime = templateText.replace('最近7天', timeLabel);
     const newPrompt = buildPromptFromTemplate(templateWithTime, selectedIdes);
 
     if (customPrompt === '' || customPrompt === lastAutoPromptRef.current) {
       setCustomPrompt(newPrompt);
       lastAutoPromptRef.current = newPrompt;
     }
-  }, [selectedIdes, reviewTimeRange, customPrompt, selectedTemplateId]);
+  }, [selectedIdes, reviewTimeRange, customPrompt, selectedTemplateId, promptTemplates]);
 
   const handleSelectTemplate = (templateId: string) => {
     setSelectedTemplateId(templateId);
-    const selectedPreset = TEMPLATE_PRESETS.find(p => p.id === templateId) || TEMPLATE_PRESETS[0];
+    const selectedPreset = promptTemplates.find(p => p.id === templateId) || promptTemplates[0] || TEMPLATE_PRESETS[0];
     const timeLabel = reviewTimeRange === '今日' ? '今日' : `最近${reviewTimeRange}`;
-    const templateWithTime = selectedPreset.template.replace('最近7天', timeLabel);
+    const templateText = selectedPreset?.template || '';
+    const templateWithTime = templateText.replace('最近7天', timeLabel);
     const newPrompt = buildPromptFromTemplate(templateWithTime, selectedIdes);
     setCustomPrompt(newPrompt);
     lastAutoPromptRef.current = newPrompt;
@@ -704,6 +728,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
   // ────── 页面挂载生命周期控制 ──────
   useEffect(() => {
     detectCliTools();
+    fetchTemplates();
     // 请求通知权限
     if (typeof window !== 'undefined' && 'Notification' in window) {
       if (Notification.permission === 'default') {
@@ -1620,14 +1645,23 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                   <div className="mt-3.5 border-t border-card-border pt-3.5 space-y-4">
                     {/* 模板选择预设 */}
                     <div className="space-y-2">
-                      <label className="block text-[11px] font-bold text-text-secondary uppercase tracking-wider">📋 选择专家分析切入点/模板</label>
+                      <div className="flex justify-between items-center mb-1">
+                        <label className="block text-[11px] font-bold text-text-secondary uppercase tracking-wider">📋 选择专家分析切入点/模板</label>
+                        <button
+                          type="button"
+                          onClick={() => setIsManagerOpen(true)}
+                          className="px-2.5 py-0.5 text-[10px] font-medium border border-card-border rounded-lg text-text-secondary hover:text-cyan-400 hover:border-cyan-500/30 transition-all flex items-center gap-1 cursor-pointer bg-white/[0.01]"
+                        >
+                          ⚙️ 管理模板
+                        </button>
+                      </div>
                       <div className="grid grid-cols-2 gap-2">
-                        {TEMPLATE_PRESETS.map((preset) => (
+                        {promptTemplates.map((preset) => (
                           <button
                             key={preset.id}
                             type="button"
                             onClick={() => handleSelectTemplate(preset.id)}
-                            className="p-3 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.01] duration-150"
+                            className="p-3 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.01] duration-150 relative overflow-hidden"
                             style={
                               selectedTemplateId === preset.id
                                 ? {
@@ -1641,7 +1675,12 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                                   }
                             }
                           >
-                            <span className="text-[11px] font-bold text-text-primary block mb-0.5">{preset.name}</span>
+                            <span className="text-[11px] font-bold text-text-primary flex justify-between items-center w-full mb-0.5">
+                              {preset.name}
+                              <span className="text-[8px] text-text-muted opacity-60">
+                                {preset.is_builtin === 1 ? '系统' : '自定义'}
+                              </span>
+                            </span>
                             <span className="text-[9px] text-text-muted leading-relaxed block">{preset.description}</span>
                           </button>
                         ))}
@@ -2297,6 +2336,21 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
         source={drawerInfo.source}
         uuid={drawerInfo.uuid}
         idx={drawerInfo.idx}
+      />
+      <PromptTemplateManagerModal
+        isOpen={isManagerOpen}
+        onClose={() => {
+          setIsManagerOpen(false);
+          fetchTemplates();
+        }}
+        onSelectTemplate={(templateId, templateContent) => {
+          setSelectedTemplateId(templateId);
+          const timeLabel = reviewTimeRange === '今日' ? '今日' : `最近${reviewTimeRange}`;
+          const templateWithTime = templateContent.replace('最近7天', timeLabel);
+          const newPrompt = buildPromptFromTemplate(templateWithTime, selectedIdes);
+          setCustomPrompt(newPrompt);
+          lastAutoPromptRef.current = newPrompt;
+        }}
       />
     </>
   );
