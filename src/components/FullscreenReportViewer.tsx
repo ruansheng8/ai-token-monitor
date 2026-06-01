@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { apiUrl, readJsonResponse } from '../lib/api';
 import { Markdown } from './Markdown';
+import { TurnDetailsDrawer } from './TurnDetailsDrawer';
 
 interface ReviewTask {
   id: string;
@@ -30,6 +31,13 @@ export function FullscreenReportViewer({ taskId: initialTaskId }: FullscreenRepo
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const unlistenRef = useRef<(() => void) | null>(null);
+
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerInfo, setDrawerInfo] = useState<{ source: string; uuid: string; idx: number }>({
+    source: '',
+    uuid: '',
+    idx: 0,
+  });
 
   // 强制移出暗黑模式 class 以开启纯净亮色主题
   useEffect(() => {
@@ -248,7 +256,13 @@ export function FullscreenReportViewer({ taskId: initialTaskId }: FullscreenRepo
           </h2>
           
           <div className="text-slate-800 leading-relaxed font-sans text-sm">
-            <Markdown content={task.output_markdown} />
+            <Markdown
+              content={task.output_markdown}
+              onTurnDetailsClick={(source, uuid, idx) => {
+                setDrawerInfo({ source, uuid, idx });
+                setDrawerOpen(true);
+              }}
+            />
           </div>
         </div>
       </main>
@@ -256,6 +270,14 @@ export function FullscreenReportViewer({ taskId: initialTaskId }: FullscreenRepo
       <footer className="py-5 text-center text-[10px] text-slate-400 border-t border-slate-100 bg-slate-50/50 no-print select-none">
         提示：您可以按下 Ctrl+P 快捷键或点击顶栏「打印/PDF」按钮将此报告保存为 PDF 电子文档。
       </footer>
+
+      <TurnDetailsDrawer
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        source={drawerInfo.source}
+        uuid={drawerInfo.uuid}
+        idx={drawerInfo.idx}
+      />
     </div>
   );
 }

@@ -18,6 +18,7 @@ use review::{
     handle_review_detect, handle_create_task, handle_list_tasks,
     handle_get_active_task, handle_get_task, handle_task_events, handle_cancel_task,
     handle_delete_task, handle_retry_task, handle_save_action_items, handle_save_quality_feedback,
+    handle_get_turn_details,
 };
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
@@ -157,6 +158,7 @@ fn main() {
                 .route("/api/review/tasks/:id/retry", post(handle_retry_task))
                 .route("/api/review/tasks/:id/action-items", post(handle_save_action_items))
                 .route("/api/review/tasks/:id/feedback", post(handle_save_quality_feedback))
+                .route("/api/review/turns/details", get(handle_get_turn_details))
                 .fallback(serve_static_file_fallback)
                 .layer(axum::middleware::from_fn(server::cors_middleware));
 

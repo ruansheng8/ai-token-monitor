@@ -24,6 +24,7 @@ import {
 import { invoke } from '@tauri-apps/api/core';
 import { apiUrl, readJsonResponse } from '../lib/api';
 import { Markdown } from './Markdown';
+import { TurnDetailsDrawer } from './TurnDetailsDrawer';
 
 // ============================================================
 // 常量与辅助配置
@@ -423,6 +424,14 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
   const [_hasNotificationPermission, setHasNotificationPermission] = useState(false);
   const [outputText, setOutputText] = useState('');
   const [copied, setCopied] = useState(false);
+
+  // 调试细节抽屉状态
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerInfo, setDrawerInfo] = useState<{ source: string; uuid: string; idx: number }>({
+    source: '',
+    uuid: '',
+    idx: 0,
+  });
 
   // 去重匹配警告与强制启动控制
   const [dupWarningId, setDupWarningId] = useState<string | null>(null);
@@ -1199,7 +1208,8 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
   // ============================================================
 
   return (
-    <div className="w-full flex flex-col animate-fade-in" style={{ minHeight: 0 }}>
+    <>
+      <div className="w-full flex flex-col animate-fade-in" style={{ minHeight: 0 }}>
         {/* ── 头部流光渐变 Header ── */}
         <div
           className="flex items-center justify-between px-6 py-4 flex-shrink-0 relative overflow-hidden"
@@ -2183,7 +2193,13 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                 >
                   {outputText ? (
                     <>
-                      <Markdown content={outputText} />
+                      <Markdown
+                        content={outputText}
+                        onTurnDetailsClick={(source, uuid, idx) => {
+                          setDrawerInfo({ source, uuid, idx });
+                          setDrawerOpen(true);
+                        }}
+                      />
                       {(activeTask.status === 'running' || activeTask.status === 'pending') && <StreamingCursor />}
                     </>
                   ) : (
@@ -2285,5 +2301,13 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
           )}
         </div>
       </div>
-    );
+      <TurnDetailsDrawer
+        isOpen={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        source={drawerInfo.source}
+        uuid={drawerInfo.uuid}
+        idx={drawerInfo.idx}
+      />
+    </>
+  );
 }

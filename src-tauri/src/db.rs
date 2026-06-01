@@ -450,9 +450,24 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
         [],
     )?;
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS turn_details (
+            source TEXT NOT NULL,
+            uuid TEXT NOT NULL,
+            idx INTEGER NOT NULL,
+            user_prompt TEXT,
+            executed_commands TEXT,
+            failed_commands TEXT,
+            modified_files TEXT,
+            PRIMARY KEY (source, uuid, idx)
+        )",
+        [],
+    )?;
+
     conn.execute("CREATE INDEX IF NOT EXISTS idx_review_tasks_status_created ON review_tasks(status, created_at DESC);", [])?;
     conn.execute("CREATE INDEX IF NOT EXISTS idx_review_tasks_dedupe ON review_tasks(dedupe_key, status);", [])?;
     conn.execute("CREATE INDEX IF NOT EXISTS idx_review_task_events_task_sequence ON review_task_events(task_id, sequence);", [])?;
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_turn_details_lookup ON turn_details(source, uuid, idx);", [])?;
 
     Ok(())
 }
@@ -1187,6 +1202,12 @@ pub fn sync_claude_code(
                 let reader = BufReader::new(file);
                 let mut line_idx = 0i64;
                 let mut new_turns = Vec::new();
+                let mut new_details = Vec::new();
+
+                let mut current_user_prompt = None;
+                let mut current_failed_commands = Vec::new();
+                let mut current_modified_files = std::collections::HashSet::new();
+                let mut current_executed_commands = Vec::new();
 
                 for line in reader.lines() {
                     if let Ok(line_str) = line {
@@ -1199,6 +1220,49 @@ pub fn sync_claude_code(
                         }
 
                         if let Ok(val) = serde_json::from_str::<serde_json::Value>(&line_str) {
+                            // 1. 抓取用户原始提问
+                            if val.get("type").and_then(|t| t.as_str()) == Some("user") {
+                                if let Some(msg) = val.get("message") {
+                                    if let Some(content) = msg.get("content").and_then(|c| c.as_str()) {
+                                        current_user_prompt = Some(content.to_string());
+                                    }
+                                }
+                            }
+
+                            // 2. 抓取执行命令与失败命令
+                            if let Some(attachment) = val.get("attachment") {
+                                if let Some(cmd) = attachment.get("command").and_then(|c| c.as_str()) {
+                                    current_executed_commands.push(cmd.to_string());
+                                    let exit_code = attachment.get("exitCode").and_then(|e| e.as_i64()).unwrap_or(0);
+                                    if exit_code != 0 {
+                                        let stderr = attachment.get("stderr").and_then(|s| s.as_str()).unwrap_or("");
+                                        // 限制 stderr 大小在 2000 字符内，避免膨胀
+                                        let stderr_trunc = if stderr.len() > 2000 {
+                                            format!("{}... [truncated]", &stderr[0..2000])
+                                        } else {
+                                            stderr.to_string()
+                                        };
+                                        let item = serde_json::json!({
+                                            "command": cmd,
+                                            "exit_code": exit_code,
+                                            "stderr": stderr_trunc
+                                        });
+                                        current_failed_commands.push(item);
+                                    }
+                                }
+                            }
+
+                            // 3. 抓取修改的文件
+                            if val.get("type").and_then(|t| t.as_str()) == Some("file-history-snapshot") {
+                                if let Some(snapshot) = val.get("snapshot") {
+                                    if let Some(backups) = snapshot.get("trackedFileBackups").and_then(|b| b.as_object()) {
+                                        for file_key in backups.keys() {
+                                            current_modified_files.insert(file_key.clone());
+                                        }
+                                    }
+                                }
+                            }
+
                             let (input, _cache_creation, cache_read, output, thinking) = extract_claude_tokens(&val);
                             if input > 0 || output > 0 {
                                 let model = extract_claude_model(&val);
@@ -1219,6 +1283,28 @@ pub fn sync_claude_code(
                                     request_id,
                                     timestamp,
                                 ));
+
+                                // 智能抓取异常 (如果当前轮次发生了命令报错)
+                                if !current_failed_commands.is_empty() {
+                                    let exec_cmds_json = serde_json::to_string(&current_executed_commands).unwrap_or_else(|_| "[]".to_string());
+                                    let fail_cmds_json = serde_json::to_string(&current_failed_commands).unwrap_or_else(|_| "[]".to_string());
+                                    let mod_files_vec: Vec<String> = current_modified_files.iter().cloned().collect();
+                                    let mod_files_json = serde_json::to_string(&mod_files_vec).unwrap_or_else(|_| "[]".to_string());
+
+                                    new_details.push((
+                                        line_idx - 1,
+                                        current_user_prompt.clone(),
+                                        exec_cmds_json,
+                                        fail_cmds_json,
+                                        mod_files_json,
+                                    ));
+                                }
+
+                                // 转入下一轮，清空当前轮次的累加缓存
+                                current_user_prompt = None;
+                                current_failed_commands.clear();
+                                current_modified_files.clear();
+                                current_executed_commands.clear();
                             }
                         }
                     }
@@ -1257,6 +1343,14 @@ pub fn sync_claude_code(
                         "INSERT OR REPLACE INTO turns (source, uuid, idx, model, input_tokens, cached_input_tokens, output_tokens, thinking_tokens, cost_usd, message_id, request_id, timestamp)
                          VALUES ('claude_code', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         rusqlite::params![uuid, turn.0, turn.1, turn.2, turn.3, turn.4, turn.5, turn.6, turn.7, turn.8, turn.9],
+                    )?;
+                }
+
+                for details in &new_details {
+                    tx.execute(
+                        "INSERT OR REPLACE INTO turn_details (source, uuid, idx, user_prompt, executed_commands, failed_commands, modified_files)
+                         VALUES ('claude_code', ?, ?, ?, ?, ?, ?)",
+                        rusqlite::params![uuid, details.0, details.1, details.2, details.3, details.4],
                     )?;
                 }
             }
@@ -3590,7 +3684,7 @@ mod tests {
         drop(file);
 
         let mut conn = rusqlite::Connection::open(get_db_cache_path()).unwrap();
-        sync_claude_code(&mut conn, 0, 1, &|_, _| {}).unwrap();
+        sync_claude_code(&mut conn, 0, 1, &|_, _| {}, &mut None).unwrap();
         rebuild_daily_stats_cache(&conn).unwrap();
         rebuild_project_daily_stats_cache(&conn).unwrap();
         rebuild_sessions_fts(&conn).unwrap();
@@ -3854,7 +3948,7 @@ mod tests {
         drop(file);
 
         let mut conn = rusqlite::Connection::open(&db_cache_path).unwrap();
-        sync_claude_code(&mut conn, 0, 1, &|_, _| {}).unwrap();
+        sync_claude_code(&mut conn, 0, 1, &|_, _| {}, &mut None).unwrap();
         rebuild_daily_stats_cache(&conn).unwrap();
 
         let metrics_all = get_aggregated_metrics_from_cache(None, None, None).unwrap();
@@ -3887,7 +3981,7 @@ mod tests {
         writeln!(file_append, "{}", line_2.to_string()).unwrap();
         drop(file_append);
 
-        sync_claude_code(&mut conn, 0, 1, &|_, _| {}).unwrap();
+        sync_claude_code(&mut conn, 0, 1, &|_, _| {}, &mut None).unwrap();
         rebuild_daily_stats_cache(&conn).unwrap();
 
         let metrics_all_2 = get_aggregated_metrics_from_cache(None, None, None).unwrap();
@@ -3932,7 +4026,7 @@ mod tests {
         writeln!(file_codex, "{}", codex_line_real.to_string()).unwrap();
         drop(file_codex);
 
-        sync_codex(&mut conn, 0, 1, &|_, _| {}).unwrap();
+        sync_codex(&mut conn, 0, 1, &|_, _| {}, &mut None).unwrap();
         rebuild_daily_stats_cache(&conn).unwrap();
 
         let metrics_all_3 = get_aggregated_metrics_from_cache(None, None, None).unwrap();
@@ -3943,6 +4037,40 @@ mod tests {
 
         drop(conn);
         let _ = fs::remove_dir_all(&temp_path);
+    }
+
+    #[test]
+    fn test_turn_details_table() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("token_insight_turn_details_test_{}", test_id));
+        std::fs::create_dir_all(&temp_path).unwrap();
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+        std::env::set_var("DATABASE_TYPE", "sqlite");
+
+        init_cache_db().unwrap();
+
+        let conn = rusqlite::Connection::open(get_db_cache_path()).unwrap();
+        conn.execute(
+            "INSERT INTO turn_details (source, uuid, idx, user_prompt, executed_commands, failed_commands, modified_files)
+             VALUES ('claude_code', 'test-uuid-123', 3, 'hello prompt', '[\"git status\"]', '[]', '[\"src/main.rs\"]')",
+            []
+        ).unwrap();
+
+        {
+            let mut stmt = conn.prepare("SELECT user_prompt, executed_commands, modified_files FROM turn_details WHERE source = 'claude_code' AND uuid = 'test-uuid-123' AND idx = 3").unwrap();
+            let mut rows = stmt.query([]).unwrap();
+            let row = rows.next().unwrap().unwrap();
+            let prompt: String = row.get(0).unwrap();
+            let exec_cmds: String = row.get(1).unwrap();
+            let mod_files: String = row.get(2).unwrap();
+
+            assert_eq!(prompt, "hello prompt");
+            assert_eq!(exec_cmds, "[\"git status\"]");
+            assert_eq!(mod_files, "[\"src/main.rs\"]");
+        }
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&temp_path);
     }
 }
 

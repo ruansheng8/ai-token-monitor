@@ -113,6 +113,18 @@ pub struct TaskEvent {
     pub created_at: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TurnDetails {
+    pub source: String,
+    pub uuid: String,
+    pub idx: i64,
+    pub user_prompt: Option<String>,
+    pub executed_commands: Option<String>,
+    pub failed_commands: Option<String>,
+    pub modified_files: Option<String>,
+}
+
+
 // 从前端传入的指标摘要（用于旧兼容性，保留定义）
 #[derive(Debug, Deserialize)]
 pub struct ReviewRequest {
@@ -559,6 +571,56 @@ pub async fn handle_create_task(
                 }
             }
         };
+
+        let mut prompt_text = prompt_text;
+        // 抓取并追加最近的调试与终端异常记录
+        let recent_errors: Vec<(String, i64, String, String)> = {
+            let mut stmt = conn.prepare(
+                "SELECT uuid, idx, user_prompt, failed_commands FROM turn_details 
+                 ORDER BY idx DESC LIMIT 15"
+            ).unwrap();
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0).unwrap_or_default(),
+                    row.get::<_, i64>(1).unwrap_or_default(),
+                    row.get::<_, Option<String>>(2).unwrap_or_default().unwrap_or_default(),
+                    row.get::<_, Option<String>>(3).unwrap_or_default().unwrap_or_default()
+                ))
+            }).unwrap();
+            let mut errs = Vec::new();
+            for r in rows {
+                if let Ok(item) = r {
+                    if !item.3.is_empty() && item.3 != "[]" {
+                        errs.push(item);
+                    }
+                }
+            }
+            errs
+        };
+
+        if !recent_errors.is_empty() {
+            prompt_text.push_str("\n\n---\n\n## 诊断调试轨迹与终端异常事件（请结合具体报错进行精准诊断。如果报告中分析到了对应的事件，必须在结论后加上超链接 `[点击查看详情及错误日志](turn-details://claude_code/会话ID/轮次ID)`，其中会话ID和轮次ID必须与提供的数据严格匹配）：\n");
+            for (idx, (uuid, turn_idx, prompt, fails_json)) in recent_errors.iter().enumerate() {
+                if let Ok(fails) = serde_json::from_str::<serde_json::Value>(&fails_json) {
+                    if let Some(arr) = fails.as_array() {
+                        for f in arr {
+                            let cmd = f.get("command").and_then(|c| c.as_str()).unwrap_or("");
+                            let stderr = f.get("stderr").and_then(|s| s.as_str()).unwrap_or("");
+                            let err_line = stderr.lines().next().unwrap_or("");
+                            let prompt_summary = if prompt.len() > 35 {
+                                format!("{}...", &prompt[0..35])
+                            } else {
+                                prompt.clone()
+                            };
+                            prompt_text.push_str(&format!(
+                                "{}. **会话ID**: `{}` | **轮次ID**: `{}` | **提问**: \"{}\" | **执行失败指令**: `{}` | **报错**: `{}`\n",
+                                idx + 1, uuid, turn_idx, prompt_summary.replace('\n', " "), cmd, err_line
+                            ));
+                        }
+                    }
+                }
+            }
+        }
 
         let prompt_hash = calculate_hash(&prompt_text);
         let metrics_snapshot_json = serde_json::to_string(&req.metrics_snapshot).unwrap_or_default();
@@ -1998,6 +2060,59 @@ pub async fn handle_save_quality_feedback(
                 .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
                 .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                 .body(Body::from("更新反馈失败"))
+                .unwrap()
+        }
+    }
+}
+
+/// GET /api/review/turns/details
+pub async fn handle_get_turn_details(
+    axum::extract::Query(params): axum::extract::Query<HashMap<String, String>>,
+) -> impl IntoResponse {
+    let source = params.get("source").cloned().unwrap_or_default();
+    let uuid = params.get("uuid").cloned().unwrap_or_default();
+    let idx: i64 = params.get("idx").and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    let result = tokio::task::spawn_blocking(move || {
+        let conn = rusqlite::Connection::open(crate::db::get_db_cache_path())
+            .map_err(|e| e.to_string())?;
+
+        let details = conn.query_row(
+            "SELECT source, uuid, idx, user_prompt, executed_commands, failed_commands, modified_files 
+             FROM turn_details 
+             WHERE source = ? AND uuid = ? AND idx = ?",
+            rusqlite::params![source, uuid, idx],
+            |row| {
+                Ok(TurnDetails {
+                    source: row.get(0)?,
+                    uuid: row.get(1)?,
+                    idx: row.get(2)?,
+                    user_prompt: row.get(3)?,
+                    executed_commands: row.get(4)?,
+                    failed_commands: row.get(5)?,
+                    modified_files: row.get(6)?,
+                })
+            },
+        ).map_err(|e| e.to_string())?;
+
+        Ok::<_, String>(details)
+    }).await;
+
+    match result {
+        Ok(Ok(details)) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_string(&details).unwrap()))
+                .unwrap()
+        }
+        _ => {
+            Response::builder()
+                .status(StatusCode::NOT_FOUND)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from("未找到该轮次的执行细节"))
                 .unwrap()
         }
     }

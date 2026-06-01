@@ -4,26 +4,52 @@ import remarkGfm from 'remark-gfm';
 interface MarkdownProps {
   content: string;
   className?: string;
+  onTurnDetailsClick?: (source: string, uuid: string, idx: number) => void;
 }
 
-export function Markdown({ content, className = '' }: MarkdownProps) {
+export function Markdown({ content, className = '', onTurnDetailsClick }: MarkdownProps) {
   return (
     <div className={`prose-custom max-w-none text-left ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
-          // 安全外部链接打开
-          a: ({ node, href, children, ...props }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-neon-cyan hover:underline inline-flex items-center gap-0.5"
-              {...props}
-            >
-              {children}
-            </a>
-          ),
+          // 安全外部链接打开与调试溯源链接拦截
+          a: ({ node, href, children, ...props }) => {
+            if (href && href.startsWith('turn-details://')) {
+              // 协议格式: turn-details://claude_code/session_uuid/idx
+              const rest = href.substring('turn-details://'.length);
+              const parts = rest.split('/');
+              if (parts.length >= 3) {
+                const source = parts[0];
+                const uuid = parts[1];
+                const idx = parseInt(parts[2], 10);
+                const { onClick: _, ...buttonProps } = props as any;
+                return (
+                  <button
+                    onClick={(e) => {
+                      e.preventDefault();
+                      onTurnDetailsClick?.(source, uuid, idx);
+                    }}
+                    className="text-neon-cyan hover:underline hover:opacity-80 transition-opacity inline-flex items-center gap-0.5 bg-transparent border-none p-0 cursor-pointer font-semibold font-mono"
+                    {...buttonProps}
+                  >
+                    {children}
+                  </button>
+                );
+              }
+            }
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-neon-cyan hover:underline inline-flex items-center gap-0.5"
+                {...props}
+              >
+                {children}
+              </a>
+            );
+          },
           // 玻璃拟态表格设计，数值使用 monospace 字体以对齐
           table: ({ node, children, ...props }) => (
             <div className="table-responsive my-4 rounded-xl border border-white/10 dark:border-white/5 overflow-hidden shadow-sm" {...props}>
