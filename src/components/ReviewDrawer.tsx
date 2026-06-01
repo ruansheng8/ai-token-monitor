@@ -20,8 +20,8 @@ import {
   AlertTriangle,
   Download,
   Maximize2,
-  Minimize2,
 } from 'lucide-react';
+import { invoke } from '@tauri-apps/api/core';
 import { apiUrl, readJsonResponse } from '../lib/api';
 import { Markdown } from './Markdown';
 
@@ -431,30 +431,6 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
   const esRef = useRef<EventSource | null>(null);
   const outputRef = useRef<HTMLDivElement>(null);
   const logsRef = useRef<HTMLDivElement>(null);
-
-  // 全屏查看与字号控制
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [fullscreenFontSize, setFullscreenFontSize] = useState(14);
-
-  // 监听全屏 ESC 键和滚动锁定
-  useEffect(() => {
-    if (!isFullscreen) return;
-
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsFullscreen(false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = originalOverflow;
-    };
-  }, [isFullscreen]);
 
   // ────── 自动定位与提示词模板填充 ──────
   const lastAutoPromptRef = useRef('');
@@ -1855,14 +1831,6 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
 
                 <div className="flex gap-2">
                   <button
-                    onClick={() => setIsFullscreen(true)}
-                    disabled={!outputText}
-                    className="px-3 py-1.5 rounded-xl border border-neon-cyan/20 bg-neon-cyan/5 text-xs font-semibold text-neon-cyan hover:bg-neon-cyan/15 hover:border-neon-cyan/30 disabled:opacity-40 transition-all cursor-pointer flex items-center gap-1"
-                  >
-                    <Maximize2 className="w-3.5 h-3.5" />
-                    全屏查看
-                  </button>
-                  <button
                     onClick={handleCopy}
                     disabled={!outputText}
                     className="px-3 py-1.5 rounded-xl border border-card-border bg-white/5 text-xs font-semibold text-text-secondary hover:text-neon-cyan hover:border-neon-cyan/30 disabled:opacity-40 transition-all cursor-pointer"
@@ -2180,12 +2148,19 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                   </h3>
                   {outputText && (
                     <button
-                      onClick={() => setIsFullscreen(true)}
-                      className="p-1 rounded-lg border border-transparent hover:border-neon-cyan/20 hover:bg-neon-cyan/10 text-text-muted hover:text-neon-cyan transition-all cursor-pointer flex items-center gap-1 text-[10px] font-semibold"
-                      title="全屏阅读报告"
+                      onClick={async () => {
+                        localStorage.setItem('fullscreen_task_id', activeTask.id);
+                        try {
+                          await invoke('open_fullscreen_window');
+                        } catch (err) {
+                          console.error("无法打开全屏窗口:", err);
+                          alert("全屏窗口打开失败: " + err);
+                        }
+                      }}
+                      className="flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-lg border border-neon-cyan/25 bg-neon-cyan/5 text-neon-cyan hover:bg-neon-cyan/10 cursor-pointer transition-all duration-200"
                     >
-                      <Maximize2 className="w-3.5 h-3.5" />
-                      全屏
+                      <Maximize2 className="w-3 h-3" />
+                      全屏查看 ↗
                     </button>
                   )}
                 </div>
@@ -2308,112 +2283,6 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
               </div>
             </div>
           )}
-        {/* 全屏查看蒙层 Overlay */}
-        {isFullscreen && activeTask && outputText && (
-          <div 
-            className="fixed inset-0 z-[100] backdrop-blur-xl bg-black/65 flex flex-col items-center justify-center p-4 sm:p-10 animate-fade-in"
-            onClick={(e) => {
-              // 点击蒙层背景（且不是内部卡片）时退出全屏
-              if (e.target === e.currentTarget) {
-                setIsFullscreen(false);
-              }
-            }}
-          >
-            <div className="max-w-[1000px] w-full h-[calc(100vh-80px)] rounded-[24px] bg-[#0c101e]/95 border border-white/10 flex flex-col overflow-hidden shadow-2xl select-text">
-              {/* 顶部控制栏 (毛玻璃) */}
-              <div 
-                className="flex items-center justify-between px-6 py-4 flex-shrink-0 border-b border-white/5"
-                style={{
-                  background: 'linear-gradient(135deg, rgba(8,145,178,0.08) 0%, rgba(124,58,237,0.04) 50%, transparent 100%)',
-                }}
-              >
-                <div className="flex items-center gap-2.5">
-                  <div className="w-8 h-8 rounded-xl flex items-center justify-center bg-gradient-to-br from-cyan-500 to-purple-600 shadow-lg shadow-cyan-500/10">
-                    <FileText className="w-4 h-4 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="text-xs font-bold text-text-primary flex items-center gap-2">
-                      {activeTask.title}
-                      <span className="text-[9px] font-mono px-2 py-0.5 rounded-full border border-neon-cyan/20 bg-neon-cyan/5 text-neon-cyan uppercase">
-                        {getCliDisplayName(activeTask.cli_name)}
-                      </span>
-                    </h3>
-                    <p className="text-[10px] text-text-muted mt-0.5">
-                      🕒 生成时间: {new Date(activeTask.created_at).toLocaleString()}
-                    </p>
-                  </div>
-                </div>
-
-                {/* 各种操作按钮 */}
-                <div className="flex items-center gap-2.5">
-                  {/* 字号调节 */}
-                  <div className="flex items-center rounded-xl border border-white/5 p-0.5 bg-black/20 mr-1.5">
-                    <button
-                      onClick={() => setFullscreenFontSize(prev => Math.max(12, prev - 1))}
-                      className="px-2.5 py-1 text-[10px] font-bold text-text-secondary hover:text-neon-cyan transition-colors bg-transparent border-none cursor-pointer"
-                      title="减小字号"
-                    >
-                      A-
-                    </button>
-                    <span className="text-[10px] font-mono px-1.5 text-text-muted select-none border-x border-white/5">
-                      {fullscreenFontSize}px
-                    </span>
-                    <button
-                      onClick={() => setFullscreenFontSize(prev => Math.min(18, prev + 1))}
-                      className="px-2.5 py-1 text-[10px] font-bold text-text-secondary hover:text-neon-cyan transition-colors bg-transparent border-none cursor-pointer"
-                      title="增大字号"
-                    >
-                      A+
-                    </button>
-                  </div>
-
-                  <button
-                    onClick={handleCopy}
-                    className="px-3 py-1.5 rounded-xl border border-white/5 bg-white/5 text-xs font-semibold text-text-secondary hover:text-neon-cyan hover:border-neon-cyan/30 transition-all cursor-pointer"
-                  >
-                    <Copy className="w-3 h-3 inline mr-1" />
-                    {copied ? '已复制！' : '复制全文'}
-                  </button>
-                  <button
-                    onClick={handleExportMarkdown}
-                    className="px-3 py-1.5 rounded-xl border border-white/5 bg-white/5 text-xs font-semibold text-text-secondary hover:text-neon-cyan hover:border-neon-cyan/30 transition-all cursor-pointer"
-                  >
-                    <Download className="w-3 h-3 inline mr-1" />
-                    导出 MD
-                  </button>
-                  {activeTask.status === 'succeeded' && (
-                    <button
-                      onClick={() => window.print()}
-                      className="px-3 py-1.5 rounded-xl border border-white/5 bg-white/5 text-xs font-semibold text-text-secondary hover:text-neon-cyan hover:border-neon-cyan/30 transition-all cursor-pointer"
-                    >
-                      🖨️ 打印
-                    </button>
-                  )}
-                  <button
-                    onClick={() => setIsFullscreen(false)}
-                    className="p-1.5 rounded-xl border border-rose-500/10 hover:border-rose-500/25 bg-rose-500/5 text-rose-400 hover:bg-rose-500/10 transition-all cursor-pointer ml-1"
-                    title="退出全屏 (ESC)"
-                  >
-                    <Minimize2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-
-              {/* 核心 Markdown 报告阅读区 */}
-              <div 
-                className="flex-1 overflow-y-auto p-8 select-text text-left"
-                style={{
-                  background: 'linear-gradient(to bottom, #070913 0%, #0d111d 100%)',
-                }}
-              >
-                <div style={{ fontSize: `${fullscreenFontSize}px` }}>
-                  <Markdown content={outputText} />
-                  {(activeTask.status === 'running' || activeTask.status === 'pending') && <StreamingCursor />}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
         </div>
       </div>
     );

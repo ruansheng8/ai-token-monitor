@@ -1,8 +1,23 @@
 import { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { invoke } from '@tauri-apps/api/core';
+import { getCurrentWebviewWindow } from '@tauri-apps/api/webviewWindow';
 import { apiUrl, readJsonResponse } from './lib/api';
 import { ReviewPage } from './components/ReviewDrawer';
+import { FullscreenReportViewer } from './components/FullscreenReportViewer';
+
+const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+let isFullscreenWindow = false;
+if (isTauri) {
+  try {
+    const win = getCurrentWebviewWindow();
+    if (win && win.label === 'fullscreen-report') {
+      isFullscreenWindow = true;
+    }
+  } catch (e) {
+    console.error('Failed to get current window label:', e);
+  }
+}
 import {
   Cpu,
   ArrowDown,
@@ -235,6 +250,10 @@ const getDateBounds = (range: 'all' | 'today' | 'week' | '30days' | 'month' | 'q
 
 
 export default function App() {
+  if (isFullscreenWindow) {
+    return <FullscreenReportViewer />;
+  }
+
   const [data, setData] = useState<AggregatedMetrics | null>(null);
 
   // 模式切换状态：'monitor' = 监控仓表盘，'review' = 复盘全屏页

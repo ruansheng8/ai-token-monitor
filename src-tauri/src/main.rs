@@ -196,7 +196,7 @@ fn main() {
                 let _ = window.set_focus();
             }
         }))
-        .invoke_handler(tauri::generate_handler![exit_app, hide_window])
+        .invoke_handler(tauri::generate_handler![exit_app, hide_window, open_fullscreen_window])
         .setup(|app| {
             // 设置全局 AppHandle 以便后台扫描任务成功时可以 emit 广播热更新事件给前端
             db::APP_HANDLE.set(app.handle().clone()).ok();
@@ -275,4 +275,29 @@ fn exit_app(app_handle: tauri::AppHandle) {
 fn hide_window(window: tauri::Window) {
     let _ = window.hide();
 }
+
+#[tauri::command]
+fn open_fullscreen_window(app_handle: tauri::AppHandle) -> Result<(), String> {
+    let window_label = "fullscreen-report";
+    
+    // Close existing fullscreen report window if it is already open to ensure clean load
+    if let Some(w) = app_handle.get_webview_window(window_label) {
+        let _ = w.close();
+    }
+    
+    let _ = tauri::WebviewWindowBuilder::new(
+        &app_handle,
+        window_label,
+        tauri::WebviewUrl::App("index.html".into())
+    )
+    .title("智能复盘分析诊断报告")
+    .inner_size(1000.0, 750.0)
+    .min_inner_size(600.0, 500.0)
+    .resizable(true)
+    .build()
+    .map_err(|e| e.to_string())?;
+    
+    Ok(())
+}
+
 
