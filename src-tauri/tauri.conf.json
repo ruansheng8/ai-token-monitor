@@ -1,11 +1,10 @@
 {
   "productName": "token-insight",
-  "version": "0.2.10",
   "identifier": "com.tokeninsight.app",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:5173",
-    "beforeBuildCommand": "node scripts/bump-version.cjs && npm run build",
+    "beforeBuildCommand": "npm run build",
     "frontendDist": "../dist"
   },
   "app": {
