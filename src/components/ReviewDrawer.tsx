@@ -315,7 +315,9 @@ function getCliDisplayName(bin: string): string {
     case 'codex':
       return 'Codex CLI';
     case 'gemini':
-      return 'Gemini CLI';
+      return 'Gemini CLI (旧版)';
+    case 'agy':
+      return 'Antigravity CLI (新版)';
     default:
       return 'AI CLI';
   }
@@ -1604,7 +1606,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                       <p className="text-[11px] text-text-secondary leading-relaxed mb-2.5">
                         本复盘大师需要调用您本机全局配置已登录的 AI 交互工具。请参考安装：
                       </p>
-                      <div className="flex gap-3">
+                      <div className="flex flex-wrap gap-x-3 gap-y-1">
                         <a
                           href="https://docs.anthropic.com/claude-code"
                           target="_blank"
@@ -1622,6 +1624,10 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                         >
                           <ExternalLink className="w-3 h-3" /> 安装 Codex CLI
                         </a>
+                        <span className="text-[10px] text-text-muted">|</span>
+                        <div className="text-[10px] font-bold text-[#8b5cf6] flex items-center gap-1" title="配置 agy.exe 到系统的 PATH 环境变量中">
+                          💡 部署 Antigravity (agy)
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -2013,39 +2019,39 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                     </div>
                   </div>
 
-                  {/* 提供可复制命令 */}
-                  {(activeTask.error_type === 'CLI_NOT_FOUND' || activeTask.error_type === 'CLI_NOT_LOGGED_IN') && (
-                    <div className="p-2.5 rounded-xl bg-black/30 border border-white/5 flex items-center justify-between gap-3 text-[10px] font-mono select-text">
-                      <span className="text-gray-400 truncate flex-1">
-                        {activeTask.error_type === 'CLI_NOT_FOUND' && (
-                          activeTask.cli_name === 'claude' 
-                            ? 'npm install -g @anthropic-ai/claude-code' 
-                            : activeTask.cli_name === 'gemini' 
-                              ? 'npm install -g @google/gemini-cli' 
-                              : 'npm install -g codex-cli'
-                        )}
-                        {activeTask.error_type === 'CLI_NOT_LOGGED_IN' && (
-                          activeTask.cli_name === 'claude' 
-                            ? 'claude login' 
-                            : activeTask.cli_name === 'gemini' 
-                              ? 'gemini login' 
-                              : 'codex login'
-                        )}
-                      </span>
-                      <button
-                        onClick={async () => {
-                          const cmd = activeTask.error_type === 'CLI_NOT_FOUND'
-                            ? (activeTask.cli_name === 'claude' ? 'npm install -g @anthropic-ai/claude-code' : 'npm install -g codex-cli')
-                            : (activeTask.cli_name === 'claude' ? 'claude login' : 'codex login');
-                          await navigator.clipboard.writeText(cmd);
-                          alert('修复命令已成功复制到剪贴板！');
-                        }}
-                        className="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-[9px] text-rose-600 dark:text-rose-400 border border-rose-500/20 font-bold transition-all cursor-pointer"
-                      >
-                        复制命令
-                      </button>
-                    </div>
-                  )}
+                  {(activeTask.error_type === 'CLI_NOT_FOUND' || activeTask.error_type === 'CLI_NOT_LOGGED_IN') && (() => {
+                    const resolvedCmd = activeTask.error_type === 'CLI_NOT_FOUND'
+                      ? (activeTask.cli_name === 'claude'
+                        ? 'npm install -g @anthropic-ai/claude-code'
+                        : activeTask.cli_name === 'agy'
+                          ? 'npm install -g @google/agy'
+                          : activeTask.cli_name === 'gemini'
+                            ? 'npm install -g @google/gemini-cli'
+                            : 'npm install -g codex-cli')
+                      : (activeTask.cli_name === 'claude'
+                        ? 'claude login'
+                        : activeTask.cli_name === 'agy'
+                          ? 'agy login'
+                          : activeTask.cli_name === 'gemini'
+                            ? 'gemini login'
+                            : 'codex login');
+                    return (
+                      <div className="p-2.5 rounded-xl bg-black/30 border border-white/5 flex items-center justify-between gap-3 text-[10px] font-mono select-text">
+                        <span className="text-gray-400 truncate flex-1">
+                          {resolvedCmd}
+                        </span>
+                        <button
+                          onClick={async () => {
+                            await navigator.clipboard.writeText(resolvedCmd);
+                            alert('修复命令已成功复制到剪贴板！');
+                          }}
+                          className="px-2 py-1 rounded bg-rose-500/10 hover:bg-rose-500/20 text-[9px] text-rose-600 dark:text-rose-400 border border-rose-500/20 font-bold transition-all cursor-pointer"
+                        >
+                          复制命令
+                        </button>
+                      </div>
+                    );
+                  })()}
 
                   {/* 一键重试按钮 */}
                   <div className="flex gap-2 justify-end">

@@ -343,7 +343,7 @@ pub async fn handle_review_detect(
     }
 
     // 2. 缓存失效或 force 模式：执行真实检测
-    let candidate_bins = ["claude", "codex", "gemini"];
+    let candidate_bins = ["claude", "codex", "gemini", "agy"];
 
     let mut tools = Vec::new();
     for bin in &candidate_bins {
@@ -1565,6 +1565,8 @@ async fn run_cli_task_background(
         ]);
     } else if cli_name.starts_with("codex") {
         cmd.args(["--full-auto", "-q"]);
+    } else if cli_name.starts_with("agy") {
+        // agy.exe 新版 CLI 不带 -p 参数，通过 stdin 接收输入
     } else {
         cmd.arg("-p");
     }
@@ -1892,7 +1894,8 @@ fn get_cli_display_name(bin: &str) -> &'static str {
     match bin {
         "claude" => "Claude Code",
         "codex" => "Codex CLI",
-        "gemini" => "Gemini CLI",
+        "gemini" => "Gemini CLI (旧版)",
+        "agy" => "Antigravity CLI (新版)",
         _ => "AI CLI",
     }
 }
