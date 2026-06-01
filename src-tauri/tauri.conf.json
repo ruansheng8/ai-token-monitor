@@ -1,6 +1,6 @@
 {
   "productName": "ai-token-monitor",
-  "version": "0.2.0",
+  "version": "0.2.5",
   "identifier": "com.aitokenmonitor.app",
   "build": {
     "beforeDevCommand": "npm run dev",
