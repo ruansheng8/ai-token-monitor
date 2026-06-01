@@ -286,6 +286,7 @@ pub struct ConfigReq {
     pub default_device_name: Option<String>,
     pub display_currency: Option<String>,
     pub close_behavior: Option<String>,
+    pub app_version: Option<String>,
 }
 
 pub async fn handle_config_get() -> impl axum::response::IntoResponse {
@@ -310,6 +311,7 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
             default_device_name: Some(default_device_name),
             display_currency: Some(config.display_currency),
             close_behavior: Some(config.close_behavior),
+            app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         };
 
         Ok::<ConfigReq, String>(resp)

@@ -342,6 +342,7 @@ export default function App() {
   const [showDeviceModal, setShowDeviceModal] = useState(false);
   const [deviceName, setDeviceName] = useState('');
   const [defaultDeviceName, setDefaultDeviceName] = useState('');
+  const [appVersion, setAppVersion] = useState('');
 
   // 数据库清理与优化瘦身状态
   const [cleanLoading, setCleanLoading] = useState(false);
@@ -556,6 +557,9 @@ export default function App() {
             // 加载窗口关闭行为配置
             if (data.close_behavior) {
               setCloseBehavior(data.close_behavior as 'prompt' | 'close' | 'minimize');
+            }
+            if (data.app_version) {
+              setAppVersion(data.app_version);
             }
           }
         } catch (e) {
@@ -897,6 +901,9 @@ export default function App() {
           const configData = await readJsonResponse<any>(configRes);
           if (configData.close_behavior) {
             setCloseBehavior(configData.close_behavior as 'prompt' | 'close' | 'minimize');
+          }
+          if (configData.app_version) {
+            setAppVersion(configData.app_version);
           }
           // 如果没有配置设备名 (即为 null 或空字符串)
           if (!configData.device_name) {
@@ -2448,6 +2455,20 @@ export default function App() {
                     </select>
                     <p className="text-[10px] text-text-muted leading-relaxed font-sans">
                       * 配置点击主窗口右上角关闭按钮时的动作。若选择最小化，软件将继续在后台驻留运行。
+                    </p>
+                  </div>
+
+                  {/* 项目版本信息 */}
+                  <div className="flex flex-col gap-2 animate-fade-in text-left">
+                    <label className="text-xs font-semibold text-text-secondary">🏷️ 系统版本 (System Version)</label>
+                    <div className="w-full bg-bg-secondary/40 dark:bg-white/3 border border-card-border rounded-xl px-4 py-3 flex items-center justify-between">
+                      <span className="text-xs font-medium text-text-primary">AI Token Monitor</span>
+                      <span className="px-2.5 py-1 text-xs font-mono font-semibold rounded-lg bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20 shadow-[0_0_10px_rgba(6,182,212,0.1)]">
+                        v{appVersion || "0.1.0"}
+                      </span>
+                    </div>
+                    <p className="text-[10px] text-text-muted leading-relaxed font-sans">
+                      * 每次使用构建打包时，版本号补丁位会自动递增（除非手动修改了主/次版本号）。
                     </p>
                   </div>
 
