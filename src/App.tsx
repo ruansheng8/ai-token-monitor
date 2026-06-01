@@ -6,23 +6,7 @@ import { apiUrl, readJsonResponse } from './lib/api';
 import { ReviewPage } from './components/ReviewDrawer';
 import { FullscreenReportViewer } from './components/FullscreenReportViewer';
 
-// ── 模块顶层检测：是否为全屏报告窗口（在任何 React 渲染之前执行）──
-// 使用官方 Tauri v2 API，getCurrentWebviewWindow() 在 v2 中是同步的
-function detectFullscreenWindow(): boolean {
-  try {
-    if (typeof window === 'undefined' || !('__TAURI_INTERNALS__' in window)) {
-      return false;
-    }
-    // 使用 Tauri v2 内部 metadata 同步读取当前窗口 label
-    const meta = (window as any).__TAURI_INTERNALS__?.metadata;
-    const label = meta?.currentWindow?.label ?? meta?.window?.label ?? '';
-    return label === 'fullscreen-report';
-  } catch {
-    return false;
-  }
-}
 
-const IS_FULLSCREEN_WINDOW = detectFullscreenWindow();
 
 
 import {
@@ -256,15 +240,13 @@ const getDateBounds = (range: 'all' | 'today' | 'week' | '30days' | 'month' | 'q
 
 
 export default function App() {
-  // 如果是全屏报告窗口，直接渲染全屏查看器（无任何 hook 违规）
-  if (IS_FULLSCREEN_WINDOW) {
-    return <FullscreenReportViewer taskId="" />;
-  }
 
   const [data, setData] = useState<AggregatedMetrics | null>(null);
 
   // 模式切换状态：'monitor' = 监控仓表盘，'review' = 复盘全屏页
   const [activeMode, setActiveMode] = useState<'monitor' | 'review'>('monitor');
+  // 全屏查看报告的任务 ID 状态
+  const [fullscreenTaskId, setFullscreenTaskId] = useState<string | null>(null);
 
   // 标签页切换状态
   const [activeTab, setActiveTab] = useState<'source' | 'pricing' | 'optimize'>('source');
@@ -1327,6 +1309,7 @@ export default function App() {
 
         {activeMode === 'review' ? (
           <ReviewPage
+            onFullscreenView={(taskId) => setFullscreenTaskId(taskId)}
             metrics={data ? {
               timeRange: timeRange === 'all' ? '全部时间' : timeRange === 'today' ? '今天' : timeRange === 'week' ? '近7天' : timeRange === '30days' ? '近30天' : timeRange === 'month' ? '本月' : timeRange === 'quarter' ? '本季度' : `${startDate} ~ ${endDate}`,
               totalTokens: data.totals.total_tokens,
@@ -3428,6 +3411,11 @@ export default function App() {
               </button>
             </div>
           </div>
+        </div>
+      )}
+      {fullscreenTaskId && (
+        <div className="fixed inset-0 z-[9999] overflow-auto bg-slate-50 text-slate-800">
+          <FullscreenReportViewer taskId={fullscreenTaskId} onClose={() => setFullscreenTaskId(null)} />
         </div>
       )}
     </div>

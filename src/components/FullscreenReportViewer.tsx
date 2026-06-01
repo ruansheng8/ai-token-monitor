@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Copy,
   Download,
@@ -20,17 +20,15 @@ interface ReviewTask {
 }
 
 interface FullscreenReportViewerProps {
-  // 初始 taskId（可为空字符串，等待 Tauri 事件推送）
   taskId: string;
+  onClose: () => void;
 }
 
-export function FullscreenReportViewer({ taskId: initialTaskId }: FullscreenReportViewerProps) {
-  const [resolvedTaskId, setResolvedTaskId] = useState<string>(initialTaskId);
+export function FullscreenReportViewer({ taskId, onClose }: FullscreenReportViewerProps) {
   const [task, setTask] = useState<ReviewTask | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
-  const unlistenRef = useRef<(() => void) | null>(null);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerInfo, setDrawerInfo] = useState<{ source: string; uuid: string; idx: number }>({
@@ -39,84 +37,56 @@ export function FullscreenReportViewer({ taskId: initialTaskId }: FullscreenRepo
     idx: 0,
   });
 
-  // 强制移出暗黑模式 class 以开启纯净亮色主题
+  // 主题检测与平滑恢复（全屏查看报告为亮色背景，退出时还原用户本来的主题）
   useEffect(() => {
-    document.documentElement.classList.remove('dark');
+    const isDark = document.documentElement.classList.contains('dark');
+    if (isDark) {
+      document.documentElement.classList.remove('dark');
+    }
+    return () => {
+      if (isDark) {
+        document.documentElement.classList.add('dark');
+      }
+    };
   }, []);
 
-  // 通过 Tauri 事件监听获取 task_id（处理跨 WebviewWindow 通信）
+  // 监听 ESC 键退出全屏
   useEffect(() => {
-    let cancelled = false;
-
-    const setupListener = async () => {
-      try {
-        const { listen } = await import('@tauri-apps/api/event');
-        const unlisten = await listen<string>('fullscreen-task-id', (event) => {
-          if (!cancelled && event.payload) {
-            setResolvedTaskId(event.payload);
-          }
-        });
-        unlistenRef.current = unlisten;
-      } catch (err) {
-        console.warn('[FullscreenViewer] 无法注册 Tauri 事件监听:', err);
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
       }
     };
-
-    // 如果初始 taskId 为空，则等待 Tauri 事件推送
-    if (!initialTaskId) {
-      // 优先从本地缓存中直接读取，秒开且 100% 可靠
-      const cachedTaskId = localStorage.getItem('fullscreen_task_id');
-      if (cachedTaskId) {
-        setResolvedTaskId(cachedTaskId);
-      }
-
-      setupListener();
-
-      // 超时兜底：如果 4 秒内还没收到事件，显示错误
-      const timeout = setTimeout(() => {
-        if (!cancelled) {
-          setResolvedTaskId((prev) => {
-            if (!prev) {
-              setError('报告 ID 获取超时，请返回主界面重新点击「全屏查看」。');
-              setLoading(false);
-            }
-            return prev;
-          });
-        }
-      }, 4000);
-
-      return () => {
-        cancelled = true;
-        clearTimeout(timeout);
-        unlistenRef.current?.();
-      };
-    }
-
+    window.addEventListener('keydown', handleKeyDown);
     return () => {
-      cancelled = true;
-      unlistenRef.current?.();
+      window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [initialTaskId]);
+  }, [onClose]);
 
-  // 当 resolvedTaskId 确定后，加载报告数据
+  // 当 taskId 确定后，直接加载报告数据
   useEffect(() => {
-    if (!resolvedTaskId) return;
+    if (!taskId) return;
 
     let cancelled = false;
-    setLoading(true);
-    setError(null);
+    Promise.resolve().then(() => {
+      if (!cancelled) {
+        setLoading(true);
+        setError(null);
+      }
+    });
 
     const loadTask = async () => {
       try {
-        const res = await fetch(apiUrl(`/review/tasks/${resolvedTaskId}`));
+        const res = await fetch(apiUrl(`/review/tasks/${taskId}`));
         if (!res.ok) {
           throw new Error(`加载报告详情失败 (状态码: ${res.status})`);
         }
         const data = await readJsonResponse<ReviewTask>(res);
         if (!cancelled) setTask(data);
-      } catch (err: any) {
+      } catch (err: unknown) {
         console.error('加载全屏报告错误:', err);
-        if (!cancelled) setError(err.message || '加载报告时发生未知错误');
+        const errMsg = err instanceof Error ? err.message : String(err);
+        if (!cancelled) setError(errMsg);
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -124,7 +94,7 @@ export function FullscreenReportViewer({ taskId: initialTaskId }: FullscreenRepo
 
     loadTask();
     return () => { cancelled = true; };
-  }, [resolvedTaskId]);
+  }, [taskId]);
 
   const handleCopy = async () => {
     if (!task?.output_markdown) return;
@@ -157,17 +127,11 @@ export function FullscreenReportViewer({ taskId: initialTaskId }: FullscreenRepo
 
   const handlePrint = () => window.print();
 
-  const handleClose = async () => {
-    try {
-      const { getCurrentWebviewWindow } = await import('@tauri-apps/api/webviewWindow');
-      await getCurrentWebviewWindow().close();
-    } catch {
-      window.close();
-    }
+  const handleClose = () => {
+    onClose();
   };
 
-  // 等待 task_id 从事件中到来
-  if (!resolvedTaskId && loading) {
+  if (!taskId && loading) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-slate-50 text-slate-800 gap-3">
         <RefreshCw className="w-8 h-8 text-blue-500 animate-spin" />
@@ -194,7 +158,7 @@ export function FullscreenReportViewer({ taskId: initialTaskId }: FullscreenRepo
           onClick={handleClose}
           className="px-6 py-2.5 bg-rose-50 border border-rose-200 text-rose-600 rounded-xl font-semibold text-xs hover:bg-rose-100 transition-all cursor-pointer"
         >
-          关闭窗口
+          关闭
         </button>
       </div>
     );

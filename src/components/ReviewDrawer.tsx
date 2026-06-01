@@ -21,7 +21,7 @@ import {
   Download,
   Maximize2,
 } from 'lucide-react';
-import { invoke } from '@tauri-apps/api/core';
+
 import { apiUrl, readJsonResponse } from '../lib/api';
 import { Markdown } from './Markdown';
 import { TurnDetailsDrawer } from './TurnDetailsDrawer';
@@ -253,6 +253,7 @@ interface ReviewMetrics {
 
 interface ReviewPageProps {
   metrics: ReviewMetrics | null;
+  onFullscreenView?: (taskId: string) => void;
 }
 
 
@@ -388,7 +389,7 @@ function StreamingCursor() {
 // 主组件 ReviewDrawer
 // ============================================================
 
-export function ReviewPage({ metrics }: ReviewPageProps) {
+export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
   // 核心视图切换: 'new' (新建复盘) | 'history' (任务历史) | 'detail' (详情与报告)
   const [view, setView] = useState<'new' | 'history' | 'detail'>('new');
 
@@ -2158,13 +2159,9 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                   </h3>
                   {outputText && (
                     <button
-                      onClick={async () => {
-                        try {
-                          localStorage.setItem('fullscreen_task_id', activeTask.id);
-                          await invoke('open_fullscreen_window', { taskId: activeTask.id });
-                        } catch (err) {
-                          console.error("无法打开全屏窗口:", err);
-                          alert("全屏窗口打开失败: " + err);
+                      onClick={() => {
+                        if (onFullscreenView) {
+                          onFullscreenView(activeTask.id);
                         }
                       }}
                       className="flex items-center gap-1.5 text-[10px] font-bold px-2 py-1 rounded-lg border border-neon-cyan/25 bg-neon-cyan/5 text-neon-cyan hover:bg-neon-cyan/10 cursor-pointer transition-all duration-200"
