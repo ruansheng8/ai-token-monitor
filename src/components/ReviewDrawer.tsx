@@ -21,6 +21,7 @@ import {
   Download,
 } from 'lucide-react';
 import { apiUrl, readJsonResponse } from '../lib/api';
+import { Markdown } from './Markdown';
 
 // ============================================================
 // 常量与辅助配置
@@ -367,45 +368,6 @@ function buildPromptFromTemplate(template: string, ides: string[]): string {
   return template.replace('{{IDE}}', ide_display);
 }
 
-// XSS 安全 Markdown 极简转义与渲染器
-function renderMarkdown(text: string): string {
-  if (!text) return '';
-
-  // 1. 强制转义危险 HTML 字符，防止 XSS 注入
-  let safeText = text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#039;');
-
-  // 2. 依次恢复安全的 Markdown 格式标记
-  return safeText
-    // 代码块 (``` ... ```)
-    .replace(/```[\w]*\n([\s\S]*?)```/g, (_, code) => `<pre class="md-code"><code>${code}</code></pre>`)
-    // 行内代码 (`...`)
-    .replace(/`([^`\n]+)`/g, '<code class="md-inline-code">$1</code>')
-    // ### 标题
-    .replace(/^### (.+)$/gm, '<h3 class="md-h3">$1</h3>')
-    // ## 标题
-    .replace(/^## (.+)$/gm, '<h2 class="md-h2">$1</h2>')
-    // # 标题
-    .replace(/^# (.+)$/gm, '<h1 class="md-h1">$1</h1>')
-    // **加粗**
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    // *斜体*
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    // 无序列表项 (- 或 * 开头)
-    .replace(/^[-*] (.+)$/gm, '<li class="md-li">$1</li>')
-    // 有序列表项 (数字. 开头)
-    .replace(/^\d+\. (.+)$/gm, '<li class="md-li md-oli">$1</li>')
-    // 分割线 (---)
-    .replace(/^---$/gm, '<hr class="md-hr"/>')
-    // 段落换行
-    .replace(/\n\n/g, '</p><p class="md-p">')
-    // 单个换行换成 br
-    .replace(/\n/g, '<br/>');
-}
 
 // ============================================================
 // 子组件：流式打字机效果光标
@@ -2212,11 +2174,7 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                 >
                   {outputText ? (
                     <>
-                      <div
-                        dangerouslySetInnerHTML={{
-                          __html: `<p class="md-p">${renderMarkdown(outputText)}</p>`,
-                        }}
-                      />
+                      <Markdown content={outputText} />
                       {(activeTask.status === 'running' || activeTask.status === 'pending') && <StreamingCursor />}
                     </>
                   ) : (
