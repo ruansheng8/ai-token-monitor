@@ -1127,8 +1127,8 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
       } else {
         alert(data.message);
       }
-    } catch (err: any) {
-      alert(`删除异常: ${err.message}`);
+    } catch (err) {
+      alert(`删除异常: ${err instanceof Error ? err.message : String(err)}`);
     }
   };
 
@@ -1155,8 +1155,8 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
         const text = await res.text();
         alert(`重试分析失败: ${text}`);
       }
-    } catch (e: any) {
-      alert(`重试异常: ${e.message}`);
+    } catch (e) {
+      alert(`重试异常: ${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
@@ -1180,7 +1180,7 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
     link.href = url;
     
     // 生成人性化文件名
-    const safeTitle = activeTask.title.replace(/[\/\\:*?"<>|·]/g, '_').trim();
+    const safeTitle = activeTask.title.replace(new RegExp('[\\\\/:*?"<>|·]', 'g'), '_').trim();
     link.setAttribute('download', `${safeTitle}_AI复盘报告.md`);
     document.body.appendChild(link);
     link.click();
@@ -1720,6 +1720,8 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                     <option value="failed">❌ 失败任务</option>
                     <option value="canceled">⚪ 已取消</option>
                     <option value="running">🔄 运行中</option>
+                    <option value="pending">⏳ 排队中</option>
+                    <option value="interrupted">⚠️ 已中断</option>
                   </select>
                 </div>
                 
@@ -1754,32 +1756,32 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                             {/* 状态彩牌 */}
                             {task.status === 'succeeded' && (
                               <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-green/10 text-neon-green border border-neon-green/20 px-2 py-0.5 rounded-full">
-                                succeeded
+                                分析完成
                               </span>
                             )}
                             {task.status === 'running' && (
                               <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20 px-2 py-0.5 rounded-full animate-pulse">
-                                running ({task.progress_percent}%)
+                                运行中 ({task.progress_percent}%)
                               </span>
                             )}
                             {task.status === 'pending' && (
                               <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-cyan/10 text-neon-cyan border border-neon-cyan/20 px-2 py-0.5 rounded-full animate-pulse">
-                                pending
+                                排队中
                               </span>
                             )}
                             {task.status === 'failed' && (
                               <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-pink/10 text-neon-pink border border-neon-pink/20 px-2 py-0.5 rounded-full">
-                                failed
+                                分析失败
                               </span>
                             )}
                             {task.status === 'canceled' && (
                               <span className="text-[9px] font-bold uppercase tracking-wider bg-gray-500/10 text-text-muted border border-gray-500/10 px-2 py-0.5 rounded-full">
-                                canceled
+                                已取消
                               </span>
                             )}
                             {task.status === 'interrupted' && (
                               <span className="text-[9px] font-bold uppercase tracking-wider bg-neon-gold/10 text-neon-gold border border-neon-gold/20 px-2 py-0.5 rounded-full">
-                                interrupted
+                                已中断
                               </span>
                             )}
                             
@@ -1866,7 +1868,7 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                   )}
                   {activeTask.status !== 'running' && activeTask.status !== 'pending' && (
                     <button
-                      onClick={(e) => handleDeleteTask(activeTask.id, e as any)}
+                      onClick={(e) => handleDeleteTask(activeTask.id, e)}
                       className="px-3 py-1.5 rounded-xl border border-transparent hover:border-rose-500/20 bg-rose-500/10 text-xs font-semibold text-rose-400 hover:bg-rose-500/20 transition-all cursor-pointer"
                     >
                       <Trash2 className="w-3 h-3 inline mr-1" />
