@@ -400,7 +400,7 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
   const [isPromptExpanded, setIsPromptExpanded] = useState(false);
   const [selectedTemplateId, setSelectedTemplateId] = useState<string>('comprehensive');
   const [compareMetrics, setCompareMetrics] = useState<ReviewMetrics | null>(null);
-  const [feedback, setFeedback] = useState<string | null>(null);
+
 
   // 指标快照与异步请求状态
   const [activeMetrics, setActiveMetrics] = useState<ReviewMetrics | null>(null);
@@ -830,19 +830,7 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
     }
   };
 
-  const handleToggleFeedback = async (val: string) => {
-    if (!activeTask) return;
-    setFeedback(val);
-    try {
-      await fetch(apiUrl(`/review/tasks/${activeTask.id}/feedback`), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ feedback: val }),
-      });
-    } catch (e) {
-      console.error('提交反馈失败', e);
-    }
-  };
+
 
   // ────── 从已有任务初始化控制台日志 ──────
   const setupLogLinesFromTask = (task: ReviewTask) => {
@@ -1001,7 +989,6 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
         const task: ReviewTask = await res.json();
         setActiveTask(task);
         setOutputText(task.output_markdown || '');
-        setFeedback(task.quality_feedback || null);
       }
     } catch (e) {
       console.error(e);
@@ -1192,7 +1179,6 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
     setView('detail');
     setActiveTask(task);
     setOutputText(task.output_markdown || '');
-    setFeedback(task.quality_feedback || null);
     setupLogLinesFromTask(task);
 
     // 如果任务仍在运行中，无缝接入 SSE 续连
@@ -2235,62 +2221,7 @@ export function ReviewPage({ metrics }: ReviewPageProps) {
                 </div>
               )}
 
-              {/* ========================================== */}
-              {/* 报告质量反馈面板 */}
-              {/* ========================================== */}
-              {activeTask.status === 'succeeded' && (
-                <div 
-                  className="p-4 rounded-[22px] border text-left space-y-3.5 shadow-sm transition-all"
-                  style={{
-                    border: '1px solid rgba(245, 158, 11, 0.15)',
-                    background: 'linear-gradient(135deg, rgba(245, 158, 11, 0.04) 0%, transparent 100%)',
-                  }}
-                >
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles className="w-4 h-4 text-amber-400 mt-0.5 flex-shrink-0" />
-                    <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wider">
-                      💡 这份 AI 效能诊断报告对您有帮助吗？
-                    </h3>
-                  </div>
 
-                  <div className="flex gap-2">
-                    {[
-                      { val: 'helpful', label: '👍 很有用', activeBg: 'rgba(16, 185, 129, 0.15)', activeBorder: 'rgba(16, 185, 129, 0.5)', activeText: 'text-emerald-600 dark:text-emerald-400' },
-                      { val: 'inaccurate', label: '👎 不太准', activeBg: 'rgba(239, 68, 68, 0.15)', activeBorder: 'rgba(239, 68, 68, 0.5)', activeText: 'text-rose-600 dark:text-rose-400' },
-                      { val: 'too_vague', label: '🤷 太泛泛', activeBg: 'rgba(107, 114, 128, 0.15)', activeBorder: 'rgba(107, 114, 128, 0.5)', activeText: 'text-text-muted' },
-                    ].map((opt) => {
-                      const isActive = feedback === opt.val;
-                      return (
-                        <button
-                          key={opt.val}
-                          type="button"
-                          onClick={() => handleToggleFeedback(opt.val)}
-                          className="flex-1 py-2.5 rounded-xl text-xs font-semibold cursor-pointer border transition-all hover:scale-[1.01]"
-                          style={
-                            isActive
-                              ? {
-                                  background: opt.activeBg,
-                                  borderColor: opt.activeBorder,
-                                }
-                              : {
-                                  background: 'var(--card-bg)',
-                                  borderColor: 'var(--card-border)',
-                                }
-                          }
-                        >
-                          <span className={isActive ? opt.activeText : 'text-text-muted'}>{opt.label}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                  
-                  {feedback && (
-                    <p className="text-[10px] text-emerald-600 dark:text-emerald-400 bg-emerald-500/5 p-2 rounded-lg border border-emerald-500/10 italic leading-relaxed text-center">
-                      ✨ 感谢您的真实评价！我们将把此诊断偏好记录入库，持续优化大模型微调提示词。
-                    </p>
-                  )}
-                </div>
-              )}
 
               {/* 动作区 */}
               <div className="pt-2 flex gap-3">
