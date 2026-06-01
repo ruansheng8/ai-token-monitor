@@ -16,3 +16,4 @@ src-tauri/.env
 scratch/
 release/
 
+scripts/change-icon.ps1

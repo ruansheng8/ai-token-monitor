@@ -189,6 +189,13 @@ fn main() {
 
     // 2. 启动 Tauri 应用
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .invoke_handler(tauri::generate_handler![exit_app, hide_window])
         .setup(|app| {
             // 设置全局 AppHandle 以便后台扫描任务成功时可以 emit 广播热更新事件给前端
