@@ -245,19 +245,21 @@ fn main() {
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let behavior = std::env::var("CLOSE_BEHAVIOR").unwrap_or_else(|_| "prompt".to_string());
-                match behavior.as_str() {
-                    "close" => {
-                        window.app_handle().exit(0);
-                    }
-                    "minimize" => {
-                        api.prevent_close();
-                        let _ = window.hide();
-                    }
-                    _ => {
-                        // 阻止默认关闭，并通知前端弹窗
-                        api.prevent_close();
-                        let _ = window.emit("close-requested", ());
+                if window.label() == "main" {
+                    let behavior = std::env::var("CLOSE_BEHAVIOR").unwrap_or_else(|_| "prompt".to_string());
+                    match behavior.as_str() {
+                        "close" => {
+                            window.app_handle().exit(0);
+                        }
+                        "minimize" => {
+                            api.prevent_close();
+                            let _ = window.hide();
+                        }
+                        _ => {
+                            // 阻止默认关闭，并通知前端弹窗
+                            api.prevent_close();
+                            let _ = window.emit("close-requested", ());
+                        }
                     }
                 }
             }
@@ -294,6 +296,7 @@ fn open_fullscreen_window(app_handle: tauri::AppHandle) -> Result<(), String> {
     .inner_size(1000.0, 750.0)
     .min_inner_size(600.0, 500.0)
     .resizable(true)
+    .maximizable(true)
     .build()
     .map_err(|e| e.to_string())?;
     

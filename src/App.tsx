@@ -7,17 +7,6 @@ import { ReviewPage } from './components/ReviewDrawer';
 import { FullscreenReportViewer } from './components/FullscreenReportViewer';
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
-let isFullscreenWindow = false;
-if (isTauri) {
-  try {
-    const win = getCurrentWebviewWindow();
-    if (win && win.label === 'fullscreen-report') {
-      isFullscreenWindow = true;
-    }
-  } catch (e) {
-    console.error('Failed to get current window label:', e);
-  }
-}
 import {
   Cpu,
   ArrowDown,
@@ -250,6 +239,18 @@ const getDateBounds = (range: 'all' | 'today' | 'week' | '30days' | 'month' | 'q
 
 
 export default function App() {
+  const isFullscreenWindow = useMemo(() => {
+    if (isTauri) {
+      try {
+        const win = getCurrentWebviewWindow();
+        return win && win.label === 'fullscreen-report';
+      } catch (e) {
+        console.error('Failed to get current window label:', e);
+      }
+    }
+    return false;
+  }, []);
+
   if (isFullscreenWindow) {
     return <FullscreenReportViewer />;
   }
