@@ -287,6 +287,7 @@ pub struct ConfigReq {
     pub display_currency: Option<String>,
     pub close_behavior: Option<String>,
     pub app_version: Option<String>,
+    pub developer_mode: Option<bool>,
 }
 
 pub async fn handle_config_get() -> impl axum::response::IntoResponse {
@@ -312,6 +313,7 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
             display_currency: Some(config.display_currency),
             close_behavior: Some(config.close_behavior),
             app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+            developer_mode: Some(config.developer_mode),
         };
 
         Ok::<ConfigReq, String>(resp)
@@ -434,6 +436,7 @@ pub async fn handle_config_save(
         let new_device_name = req.device_name.clone().unwrap_or_default().trim().to_string();
         let new_display_currency = req.display_currency.clone().unwrap_or_else(|| "USD".to_string()).trim().to_string();
         let new_close_behavior = req.close_behavior.clone().unwrap_or_else(|| "prompt".to_string()).trim().to_string();
+        let new_developer_mode = req.developer_mode.unwrap_or(false);
 
         let new_pg_host = req.pg_host.clone().unwrap_or_default().trim().to_string();
         let new_pg_port = req.pg_port.clone().unwrap_or_default().trim().to_string();
@@ -473,6 +476,7 @@ pub async fn handle_config_save(
             db_pg_user: new_pg_user,
             db_pg_password: new_pg_password,
             db_pg_database: new_pg_database,
+            developer_mode: new_developer_mode,
         };
 
         crate::config::save_config(&new_config)

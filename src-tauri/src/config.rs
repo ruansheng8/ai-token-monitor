@@ -13,6 +13,8 @@ pub struct AppConfig {
     pub db_pg_user: String,
     pub db_pg_password: String,
     pub db_pg_database: String,
+    #[serde(default)]
+    pub developer_mode: bool,
 }
 
 impl Default for AppConfig {
@@ -28,6 +30,7 @@ impl Default for AppConfig {
             db_pg_user: "".to_string(),
             db_pg_password: "".to_string(),
             db_pg_database: "".to_string(),
+            developer_mode: false,
         }
     }
 }
@@ -77,6 +80,7 @@ pub fn sync_to_env(config: &AppConfig) {
     std::env::set_var("DB_PG_USER", &config.db_pg_user);
     std::env::set_var("DB_PG_PASSWORD", &config.db_pg_password);
     std::env::set_var("DB_PG_DATABASE", &config.db_pg_database);
+    std::env::set_var("DEVELOPER_MODE", if config.developer_mode { "true" } else { "false" });
 
     // 适配现有的 DATABASE_URL 环境变量注入逻辑
     if !config.db_pg_host.is_empty() {

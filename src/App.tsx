@@ -337,6 +337,7 @@ export default function App() {
   const [closeBehavior, setCloseBehavior] = useState<'prompt' | 'close' | 'minimize'>('prompt');
   const [showCloseConfirmModal, setShowCloseConfirmModal] = useState(false);
   const [dontPromptAgain, setDontPromptAgain] = useState(true);
+  const [developerMode, setDeveloperMode] = useState(false);
 
   // 设备名称配置状态
   const [showDeviceModal, setShowDeviceModal] = useState(false);
@@ -558,6 +559,7 @@ export default function App() {
             if (data.close_behavior) {
               setCloseBehavior(data.close_behavior as 'prompt' | 'close' | 'minimize');
             }
+            setDeveloperMode(!!data.developer_mode);
             if (data.app_version) {
               setAppVersion(data.app_version);
             }
@@ -902,6 +904,7 @@ export default function App() {
           if (configData.close_behavior) {
             setCloseBehavior(configData.close_behavior as 'prompt' | 'close' | 'minimize');
           }
+          setDeveloperMode(!!configData.developer_mode);
           if (configData.app_version) {
             setAppVersion(configData.app_version);
           }
@@ -2458,6 +2461,30 @@ export default function App() {
                     </p>
                   </div>
 
+                  {/* 开发者模式 */}
+                  <div className="flex flex-col gap-2 animate-fade-in text-left">
+                    <div className="flex items-center justify-between bg-bg-secondary/40 dark:bg-white/3 border border-card-border rounded-xl px-4 py-3">
+                      <div className="flex flex-col">
+                        <span className="text-xs font-semibold text-text-primary">🛠️ 调试开发者模式 (Developer Mode)</span>
+                        <span className="text-[10px] text-text-muted">限制扫描量为 20 个会话以提升本地调试速度</span>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={developerMode}
+                          onChange={(e) => setDeveloperMode(e.target.checked)}
+                          className="sr-only peer"
+                        />
+                        <div className="w-9 h-5 bg-slate-300 dark:bg-white/10 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-gradient-to-r peer-checked:from-neon-cyan peer-checked:to-neon-purple"></div>
+                      </label>
+                    </div>
+                    {developerMode && (
+                      <div className="text-[10px] text-amber-500 bg-amber-500/10 border border-amber-500/20 rounded-xl p-3 leading-relaxed font-semibold animate-fade-in">
+                        ⚠️ 开发者模式下仅扫描前20个会话，用于调试，不会扫描全量数据
+                      </div>
+                    )}
+                  </div>
+
                   {/* 项目版本信息 */}
                   <div className="flex flex-col gap-2 animate-fade-in text-left">
                     <label className="text-xs font-semibold text-text-secondary">🏷️ 系统版本 (System Version)</label>
@@ -2670,6 +2697,7 @@ export default function App() {
                               pg_database: pgDatabase,
                               device_name: deviceName,
                               close_behavior: closeBehavior,
+                              developer_mode: developerMode,
                             })
                           });
                           if (response.ok) {
@@ -2948,6 +2976,7 @@ export default function App() {
                               device_name: deviceName,
                               display_currency: displayCurrency,
                               close_behavior: closeBehavior,
+                              developer_mode: developerMode,
                             })
                           });
 
@@ -3094,6 +3123,7 @@ export default function App() {
                           pg_database: pgDatabase,
                           device_name: deviceName.trim(),
                           close_behavior: closeBehavior,
+                          developer_mode: developerMode,
                         })
                       });
                       if (response.ok) {
@@ -3323,6 +3353,7 @@ export default function App() {
                           device_name: deviceName,
                           display_currency: displayCurrency,
                           close_behavior: 'minimize',
+                          developer_mode: developerMode,
                         })
                       });
                     } catch (e) {
@@ -3356,6 +3387,7 @@ export default function App() {
                           device_name: deviceName,
                           display_currency: displayCurrency,
                           close_behavior: 'close',
+                          developer_mode: developerMode,
                         })
                       });
                     } catch (e) {

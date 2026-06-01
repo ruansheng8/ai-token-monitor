@@ -1116,6 +1116,7 @@ pub fn sync_claude_code(
     progress_offset: usize,
     total_files: usize,
     progress_cb: &impl Fn(usize, usize),
+    remaining_limit: &mut Option<usize>,
 ) -> Result<(), rusqlite::Error> {
     let projects_dir = get_claude_projects_dir();
     if !projects_dir.exists() {
@@ -1145,6 +1146,13 @@ pub fn sync_claude_code(
     let tx = conn_cache.transaction()?;
     {
         for (idx, file_path) in jsonl_files.into_iter().enumerate() {
+            if let Some(ref mut rem) = remaining_limit {
+                if *rem == 0 {
+                    break;
+                }
+                *rem -= 1;
+            }
+
             let current_scanned = progress_offset + idx + 1;
             progress_cb(current_scanned, total_files);
 
@@ -1264,6 +1272,7 @@ pub fn sync_codex(
     progress_offset: usize,
     total_files: usize,
     progress_cb: &impl Fn(usize, usize),
+    remaining_limit: &mut Option<usize>,
 ) -> Result<(), rusqlite::Error> {
     let codex_dir = get_codex_sessions_dir();
     if !codex_dir.exists() {
@@ -1295,6 +1304,13 @@ pub fn sync_codex(
     let tx = conn_cache.transaction()?;
     {
         for (idx, file_path) in jsonl_files.into_iter().enumerate() {
+            if let Some(ref mut rem) = remaining_limit {
+                if *rem == 0 {
+                    break;
+                }
+                *rem -= 1;
+            }
+
             let current_scanned = progress_offset + idx + 1;
             progress_cb(current_scanned, total_files);
 
@@ -1427,9 +1443,10 @@ pub fn sync_trae(
     progress_offset: usize,
     total_files: usize,
     progress_cb: &impl Fn(usize, usize),
+    remaining_limit: &mut Option<usize>,
 ) -> Result<(), rusqlite::Error> {
     let trae_dir = get_trae_workspace_dir();
-    sync_trae_common(conn_cache, &trae_dir, "trae", progress_offset, total_files, progress_cb)
+    sync_trae_common(conn_cache, &trae_dir, "trae", progress_offset, total_files, progress_cb, remaining_limit)
 }
 
 pub fn sync_trae_cn(
@@ -1437,9 +1454,10 @@ pub fn sync_trae_cn(
     progress_offset: usize,
     total_files: usize,
     progress_cb: &impl Fn(usize, usize),
+    remaining_limit: &mut Option<usize>,
 ) -> Result<(), rusqlite::Error> {
     let trae_cn_dir = get_trae_cn_workspace_dir();
-    sync_trae_common(conn_cache, &trae_cn_dir, "trae_cn", progress_offset, total_files, progress_cb)
+    sync_trae_common(conn_cache, &trae_cn_dir, "trae_cn", progress_offset, total_files, progress_cb, remaining_limit)
 }
 
 fn sync_trae_common(
@@ -1449,6 +1467,7 @@ fn sync_trae_common(
     progress_offset: usize,
     total_files: usize,
     progress_cb: &impl Fn(usize, usize),
+    remaining_limit: &mut Option<usize>,
 ) -> Result<(), rusqlite::Error> {
     if !workspace_dir.exists() {
         return Ok(());
@@ -1488,6 +1507,12 @@ fn sync_trae_common(
     let tx = conn_cache.transaction()?;
     {
         for (ws_idx, db_path) in ws_dbs.iter().enumerate() {
+            if let Some(ref mut rem) = remaining_limit {
+                if *rem == 0 {
+                    break;
+                }
+                *rem -= 1;
+            }
             let temp_db_path = db_path.with_extension("vscdb.tmp");
             let _guard = if std::fs::copy(db_path, &temp_db_path).is_ok() {
                 Some(TempFileGuard { path: temp_db_path.clone() })
@@ -1743,6 +1768,7 @@ pub fn sync_cursor(
     progress_offset: usize,
     total_files: usize,
     progress_cb: &impl Fn(usize, usize),
+    remaining_limit: &mut Option<usize>,
 ) -> Result<(), rusqlite::Error> {
     let cursor_db = get_cursor_db_path();
     if !cursor_db.exists() {
@@ -1810,6 +1836,13 @@ pub fn sync_cursor(
     let tx = conn_cache.transaction()?;
     {
         for (session_idx, (key, val)) in composer_sessions.into_iter().enumerate() {
+            if let Some(ref mut rem) = remaining_limit {
+                if *rem == 0 {
+                    break;
+                }
+                *rem -= 1;
+            }
+
             let current_scanned = progress_offset + session_idx + 1;
             progress_cb(current_scanned, total_files);
 
@@ -2040,6 +2073,9 @@ where
     // 获取全局数据库锁，避免多线程写入冲突
     let _lock = DB_LOCK.lock().unwrap();
 
+    let config = crate::config::load_config();
+    let mut remaining_limit = if config.developer_mode { Some(20) } else { None };
+
     // 1. 扫描 Antigravity 物理文件
     let db_dir = get_conversations_dir();
     let mut db_files = Vec::new();
@@ -2167,6 +2203,13 @@ where
     {
         let tx = conn_cache.transaction()?;
         for (i, db_path) in db_files.into_iter().enumerate() {
+            if let Some(ref mut rem) = remaining_limit {
+                if *rem == 0 {
+                    break;
+                }
+                *rem -= 1;
+            }
+
             let uuid = db_path.file_stem().unwrap().to_str().unwrap().to_string();
             let mtime = match std::fs::metadata(&db_path).and_then(|m| m.modified()) {
                 Ok(t) => t
@@ -2308,19 +2351,19 @@ where
     }
 
     // D. 增量同步 Claude Code 数据
-    let _ = sync_claude_code(&mut conn_cache, db_files_len, total_files, &progress_cb);
+    let _ = sync_claude_code(&mut conn_cache, db_files_len, total_files, &progress_cb, &mut remaining_limit);
 
     // E. 增量同步 Codex 数据
-    let _ = sync_codex(&mut conn_cache, db_files_len + claude_files.len(), total_files, &progress_cb);
+    let _ = sync_codex(&mut conn_cache, db_files_len + claude_files.len(), total_files, &progress_cb, &mut remaining_limit);
 
     // F. 增量同步 Cursor 数据
-    let _ = sync_cursor(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len(), total_files, &progress_cb);
+    let _ = sync_cursor(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len(), total_files, &progress_cb, &mut remaining_limit);
 
     // G. 增量同步 Trae 数据
-    let _ = sync_trae(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 }, total_files, &progress_cb);
+    let _ = sync_trae(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 }, total_files, &progress_cb, &mut remaining_limit);
 
     // H. 增量同步 Trae CN 数据
-    let _ = sync_trae_cn(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 } + trae_files_count, total_files, &progress_cb);
+    let _ = sync_trae_cn(&mut conn_cache, db_files_len + claude_files.len() + codex_files.len() + if has_cursor { 1 } else { 0 } + trae_files_count, total_files, &progress_cb, &mut remaining_limit);
 
     // H. 在同步结束前，一键重建本地 daily_stats 预聚合缓存表，保证大盘毫秒级查询
     log_progress("正在重建本地大盘预计算聚合缓存...");
