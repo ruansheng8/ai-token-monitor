@@ -1857,14 +1857,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                     <Download className="w-3 h-3 inline mr-1" />
                     导出 MD
                   </button>
-                  {activeTask.status === 'succeeded' && (
-                    <button
-                      onClick={() => window.print()}
-                      className="px-3 py-1.5 rounded-xl border border-card-border bg-white/5 text-xs font-semibold text-text-secondary hover:text-neon-cyan hover:border-neon-cyan/30 disabled:opacity-40 transition-all cursor-pointer"
-                    >
-                      🖨️ 打印/导出 PDF
-                    </button>
-                  )}
+
                   {activeTask.status !== 'running' && activeTask.status !== 'pending' && (
                     <button
                       onClick={(e) => handleDeleteTask(activeTask.id, e)}
