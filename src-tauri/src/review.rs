@@ -1450,6 +1450,12 @@ pub async fn handle_delete_task(
             return Err("未找到待删除的任务记录".to_string());
         }
 
+        // 删除磁盘上的任务目录
+        let task_dir = get_task_reports_dir(&id_clone);
+        if task_dir.exists() {
+            let _ = std::fs::remove_dir_all(&task_dir);
+        }
+
         Ok::<_, String>(())
     }).await;
 
@@ -1523,6 +1529,13 @@ pub async fn handle_retry_task(
                 "DELETE FROM review_task_events WHERE task_id = ?",
                 [&id_clone],
             ).map_err(|e| format!("清理历史事件失败: {}", e))?;
+
+            // 清理并重新创建磁盘上的任务目录
+            let task_dir = get_task_reports_dir(&id_clone);
+            if task_dir.exists() {
+                let _ = std::fs::remove_dir_all(&task_dir);
+            }
+            let _ = std::fs::create_dir_all(&task_dir);
 
             Ok::<ReviewTask, String>(task)
         }
@@ -1656,6 +1669,16 @@ pub fn recover_interrupted_tasks() -> Result<(), rusqlite::Error> {
     Ok(())
 }
 
+/// 获取指定任务的报告和临时文件目录
+/// 路径为：~/.token-insight/tasks/reports/{task_id}
+fn get_task_reports_dir(task_id: &str) -> std::path::PathBuf {
+    std::path::Path::new(&crate::db::get_user_profile_dir())
+        .join(".token-insight")
+        .join("tasks")
+        .join("reports")
+        .join(task_id)
+}
+
 // ============================================================
 // 核心：后台 CLI 执行协程
 // ============================================================
@@ -1674,6 +1697,16 @@ async fn run_cli_task_background(
 ) -> Result<(), String> {
     let task_id_str = task_id.to_string();
     let now = chrono::Utc::now().to_rfc3339();
+
+    let task_dir = get_task_reports_dir(task_id);
+    if let Err(e) = std::fs::create_dir_all(&task_dir) {
+        let err_msg = format!("❌ 创建任务目录失败: {}", e);
+        let _ = record_and_broadcast_event(&task_id_str, "error", &err_msg, None, &tx).await;
+        update_task_finish(&task_id_str, "failed", Some("cli_started"), 45, &err_msg, None, None, Some("CLI_EXECUTION_FAILED")).await;
+        return Err(err_msg);
+    }
+    // 备份输入 Prompt
+    let _ = std::fs::write(task_dir.join("prompt.md"), &prompt);
 
     // 1. 初始化更新任务主表 status='running' 和 started_at
     tokio::task::spawn_blocking({
@@ -1725,6 +1758,7 @@ async fn run_cli_task_background(
 
     // 3. 构建子进程参数并启动（注入 CLI 自定义环境变量）
     let mut cmd = Command::new(&exe_path);
+    cmd.current_dir(&task_dir);
 
     // 注入该 CLI 的自定义环境变量（排除 _BIN 路径键）
     {
@@ -1845,6 +1879,7 @@ async fn run_cli_task_background(
 
     let mut is_streaming_started = false;
     let mut stderr_buffer = String::new();
+    let mut output_markdown = String::new();
 
     // 协调轮询循环
     loop {
@@ -1869,6 +1904,9 @@ async fn run_cli_task_background(
                         // 广播并持久化事件与累加 Markdown 输出
                         let _ = record_and_broadcast_event(&task_id_str, "stdout", &line, None, &tx).await;
                         let _ = record_and_broadcast_event(&task_id_str, "stdout", "\n", None, &tx).await;
+
+                        output_markdown.push_str(&line);
+                        output_markdown.push('\n');
 
                         append_markdown_to_db(&task_id_str, &format!("{}\n", line), pct).await;
                     }
@@ -1923,6 +1961,13 @@ async fn run_cli_task_background(
     };
 
     update_task_finish(&task_id_str, status_str, Some(progress_stage), progress_percent, status_msg, None, exit_code, err_type).await;
+
+    // 写入文件归档
+    if success {
+        let _ = std::fs::write(task_dir.join("report.md"), &output_markdown);
+    } else {
+        let _ = std::fs::write(task_dir.join("error.log"), &stderr_buffer);
+    }
 
     let _ = record_and_broadcast_event(&task_id_str, "stage", status_msg, Some(&format!("{{\"percent\": {}, \"stage\": \"{}\"}}", progress_percent, progress_stage)), &tx).await;
 
@@ -2917,6 +2962,41 @@ mod tests {
         // 验证必须被判定为 available: false
         assert_eq!(info.available, false);
         assert_eq!(info.version, None);
+    }
+
+    #[tokio::test]
+    async fn test_task_reports_dir_lifecycle() {
+        let test_task_id = "test_task_spec_lifecycle_123456";
+        let task_dir = get_task_reports_dir(test_task_id);
+        
+        // 1. 验证路径是否包含 .token-insight 和 tasks/reports
+        let path_str = task_dir.to_string_lossy();
+        assert!(path_str.contains(".token-insight"));
+        assert!(path_str.contains("tasks"));
+        assert!(path_str.contains("reports"));
+        assert!(path_str.contains(test_task_id));
+        
+        // 2. 模拟创建和写入
+        let _ = std::fs::create_dir_all(&task_dir);
+        assert!(task_dir.exists());
+        
+        let prompt_file = task_dir.join("prompt.md");
+        let _ = std::fs::write(&prompt_file, "test prompt");
+        assert!(prompt_file.exists());
+        
+        // 3. 模拟重试清理
+        if task_dir.exists() {
+            let _ = std::fs::remove_dir_all(&task_dir);
+        }
+        let _ = std::fs::create_dir_all(&task_dir);
+        assert!(task_dir.exists());
+        assert!(!prompt_file.exists()); // 应该被清空了
+        
+        // 4. 模拟删除清理
+        if task_dir.exists() {
+            let _ = std::fs::remove_dir_all(&task_dir);
+        }
+        assert!(!task_dir.exists());
     }
 }
 
