@@ -74,8 +74,8 @@ export function DailyTrendChart({ data = [], deviceTrends = [], dimension = 'typ
     const dates = data.map(t => t.date);
     const borderColor = isDark ? '#0b1528' : '#ffffff';
 
-    let series: any[] = [];
-    let colors: string[] = [];
+    let series: any[];
+    let colors: string[];
 
     if (dimension === 'device' && deviceTrends && deviceTrends.length > 0) {
       // 提取所有不重复的设备名（若为空则回退为未知设备）

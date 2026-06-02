@@ -2,11 +2,11 @@
 
 :root {
   /* Light Mode (Default) Colors */
-  --bg-app: #f4f6f8;
+  --bg-app: #f8fafc;
   --bg-secondary: #ffffff;
-  --card-bg: #ffffff;
-  --card-border: rgba(226, 232, 240, 0.8);
-  --card-border-hover: rgba(37, 99, 235, 0.25);
+  --card-bg: rgba(255, 255, 255, 0.75);
+  --card-border: rgba(148, 163, 184, 0.15);
+  --card-border-hover: rgba(6, 182, 212, 0.4);
   --card-shadow: 0 12px 40px -12px rgba(15, 23, 42, 0.04);
   --card-shadow-hover: 0 16px 48px -12px rgba(15, 23, 42, 0.08);
 
@@ -19,19 +19,19 @@
 
   --scrollbar-track: rgba(15, 23, 42, 0.05);
   --scrollbar-thumb: rgba(15, 23, 42, 0.12);
-  --scrollbar-thumb-hover: rgba(37, 99, 235, 0.4);
+  --scrollbar-thumb-hover: rgba(6, 182, 212, 0.5);
 
   --decor-opacity: 0.06;
 
   /* Neon Colors for Light Mode */
-  --neon-cyan: #0ea5e9;
-  --neon-purple: #8b5cf6;
+  --neon-cyan: #0891b2;
+  --neon-purple: #9333ea;
   --neon-pink: #db2777;
-  --neon-orange: #f59e0b;
-  --neon-green: #10b981;
+  --neon-orange: #ea580c;
+  --neon-green: #16a34a;
   --neon-blue: #2563eb;
   --neon-gold: #ca8a04;
-  --neon-teal: #14b8a6;
+  --neon-teal: #0d9488;
 }
 
 .dark {
