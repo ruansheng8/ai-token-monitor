@@ -1,0 +1,52 @@
+name: Release App (Windows MSI Only)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+
+    steps:
+      # 1. 检出仓库代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. 安装 Node.js 环境并设置 npm 缓存
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      # 3. 安装 Rust 工具链
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # 4. 设置 Rust 编译缓存
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      # 5. 安装依赖
+      - name: Install dependencies
+        run: npm ci
+
+      # 6. 构建并发布到 GitHub Release
+      - name: Build and Publish
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Token Insight ${{ github.ref_name }}"
+          releaseBody: "感谢使用 Token Insight！本版本由 GitHub Actions 自动构建发布。请在下方资产（Assets）中下载对应的安装包。"
+          releaseDraft: false
+          prerelease: false
+          args: --bundles msi
