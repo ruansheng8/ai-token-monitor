@@ -262,7 +262,20 @@ fn get_well_known_toolchain_dirs() -> Vec<PathBuf> {
 }
 
 /// 在 PATH 中查找可执行文件，Windows 下额外尝试 .cmd 和 .exe 后缀
+/// 优先检查 AppConfig 的 agent_cli_env 中是否有 [BIN_UPPER]_BIN 的自定义路径覆盖
 fn find_cli_in_path(bin: &str) -> Option<PathBuf> {
+    // 0. 优先检查配置文件中是否有自定义 BIN 路径覆盖（如 CODEX_BIN, CLAUDE_BIN）
+    let config = crate::config::load_config();
+    let bin_key = format!("{}_BIN", bin.replace('-', "_").to_uppercase());
+    if let Some(agent_env) = config.agent_cli_env.get(bin) {
+        if let Some(custom_bin) = agent_env.get(&bin_key) {
+            let custom_path = PathBuf::from(custom_bin.trim());
+            if custom_path.exists() && custom_path.is_file() {
+                return Some(custom_path);
+            }
+        }
+    }
+
     // 1. 尝试直接通过系统的 PATH 寻找
     if let Ok(path) = which::which(bin) {
         return Some(path);
@@ -493,7 +506,14 @@ pub async fn handle_review_detect(
     }
 
     // 2. 缓存失效或 force 模式：执行真实检测
-    let candidate_bins = ["claude", "codex", "gemini", "agy"];
+    let candidate_bins = [
+        // 核心 tier-1 支持
+        "claude", "codex", "gemini", "agy",
+        // open-design 完整 CLI 列表
+        "cursor-agent", "opencode", "qwen", "copilot",
+        "devin", "kimi", "qoder", "pi", "kiro", "kilo",
+        "vibe", "deepseek", "hermes", "grok-build", "reasonix", "aider",
+    ];
 
     let mut tools = Vec::new();
     for bin in &candidate_bins {
@@ -1703,8 +1723,22 @@ async fn run_cli_task_background(
     let exe_path = cli_path.unwrap();
     let _ = record_and_broadcast_event(&task_id_str, "stage", &format!("已成功定位 AI CLI 引擎：{}", exe_path.to_string_lossy()), Some("{\"percent\": 35, \"stage\": \"cli_resolved\"}"), &tx).await;
 
-    // 3. 构建子进程参数并启动
+    // 3. 构建子进程参数并启动（注入 CLI 自定义环境变量）
     let mut cmd = Command::new(&exe_path);
+
+    // 注入该 CLI 的自定义环境变量（排除 _BIN 路径键）
+    {
+        let app_cfg = crate::config::load_config();
+        if let Some(agent_env) = app_cfg.agent_cli_env.get(cli_name) {
+            let bin_key = format!("{}_BIN", cli_name.replace('-', "_").to_uppercase());
+            for (k, v) in agent_env {
+                if k != &bin_key {
+                    cmd.env(k, v);
+                }
+            }
+        }
+    }
+
     if cli_name.starts_with("claude") {
         cmd.args([
             "-p",
@@ -1714,7 +1748,15 @@ async fn run_cli_task_background(
             "bypassPermissions",
         ]);
     } else if cli_name.starts_with("codex") {
-        cmd.args(["--full-auto", "-q"]);
+        // 新版 codex 使用 exec 子命令，不再支持 --full-auto -q
+        // Windows/WSL 使用 danger-full-access，Unix 使用 workspace-write
+        #[cfg(target_os = "windows")]
+        cmd.args(["exec", "--skip-git-repo-check", "--sandbox", "danger-full-access"]);
+        #[cfg(not(target_os = "windows"))]
+        cmd.args(["exec", "--skip-git-repo-check", "--sandbox", "workspace-write"]);
+    } else if cli_name.starts_with("gemini") {
+        // gemini 需要 --yolo 跳过 TTY 交互确认，通过 stdin 管道接收输入
+        cmd.args(["--yolo"]);
     } else if cli_name.starts_with("agy") {
         // agy.exe 新版 CLI 不带 -p 参数，通过 stdin 接收输入
     } else {
@@ -2044,8 +2086,24 @@ fn get_cli_display_name(bin: &str) -> &'static str {
     match bin {
         "claude" => "Claude Code",
         "codex" => "Codex CLI",
-        "gemini" => "Gemini CLI (旧版)",
-        "agy" => "Antigravity CLI (新版)",
+        "gemini" => "Gemini CLI",
+        "agy" => "Antigravity CLI",
+        "cursor-agent" => "Cursor Agent",
+        "opencode" => "OpenCode CLI",
+        "qwen" => "Qwen CLI",
+        "copilot" => "GitHub Copilot",
+        "devin" => "Devin CLI",
+        "kimi" => "Kimi CLI",
+        "qoder" => "Qoder CLI",
+        "pi" => "Pi CLI",
+        "kiro" => "Kiro Agent",
+        "kilo" => "Kilo Code",
+        "vibe" => "Vibe CLI",
+        "deepseek" => "DeepSeek CLI",
+        "hermes" => "Hermes CLI",
+        "grok-build" => "Grok Build",
+        "reasonix" => "Reasonix CLI",
+        "aider" => "Aider",
         _ => "AI CLI",
     }
 }
@@ -2536,6 +2594,253 @@ pub async fn handle_delete_prompt_template(
                 .unwrap()
         }
     }
+}
+
+// ============================================================
+// CLI 连通性测试接口
+// ============================================================
+
+#[derive(Debug, Deserialize)]
+pub struct TestCliRequest {
+    pub bin: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TestCliResponse {
+    pub ok: bool,
+    pub latency_ms: u64,
+    pub sample: Option<String>,
+    pub stdout: String,
+    pub stderr: String,
+    pub detail: String,
+}
+
+/// POST /api/review/test-cli
+/// 对指定的 CLI 引擎发送一个 Smoke Prompt，验证其连通性与可调用性
+/// 超时时间 45 秒，与 open-design 保持一致
+pub async fn handle_test_cli(
+    axum::Json(req): axum::Json<TestCliRequest>,
+) -> Response<Body> {
+    let bin = req.bin.trim().to_string();
+    if bin.is_empty() {
+        let body = serde_json::to_vec(&TestCliResponse {
+            ok: false,
+            latency_ms: 0,
+            sample: None,
+            stdout: String::new(),
+            stderr: String::new(),
+            detail: "bin 参数不能为空".to_string(),
+        }).unwrap_or_default();
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from(body))
+            .unwrap();
+    }
+
+    let start = std::time::Instant::now();
+
+    // 查找可执行文件（会优先使用自定义 BIN 路径）
+    let exe_path = match find_cli_in_path(&bin) {
+        Some(p) => p,
+        None => {
+            let body = serde_json::to_vec(&TestCliResponse {
+                ok: false,
+                latency_ms: start.elapsed().as_millis() as u64,
+                sample: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                detail: format!("未找到 '{}' 可执行文件，请检查安装或配置自定义路径", bin),
+            }).unwrap_or_default();
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(body))
+                .unwrap();
+        }
+    };
+
+    // Smoke Prompt — 与 open-design 保持一致
+    let smoke_prompt = "Reply with only: ok\n";
+
+    // 构建子进程
+    let mut cmd = Command::new(&exe_path);
+
+    // 注入该 CLI 的自定义环境变量（排除 _BIN 路径键）
+    {
+        let app_cfg = crate::config::load_config();
+        if let Some(agent_env) = app_cfg.agent_cli_env.get(&bin) {
+            let bin_key = format!("{}_BIN", bin.replace('-', "_").to_uppercase());
+            for (k, v) in agent_env {
+                if k != &bin_key {
+                    cmd.env(k, v);
+                }
+            }
+        }
+    }
+
+    // 根据 CLI 类型配置启动参数（仅保留 stdin 接收 prompt 的非交互参数）
+    if bin.starts_with("claude") {
+        cmd.args(["-p", "--output-format", "text", "--permission-mode", "bypassPermissions"]);
+    } else if bin.starts_with("codex") {
+        #[cfg(target_os = "windows")]
+        cmd.args(["exec", "--skip-git-repo-check", "--sandbox", "danger-full-access"]);
+        #[cfg(not(target_os = "windows"))]
+        cmd.args(["exec", "--skip-git-repo-check", "--sandbox", "workspace-write"]);
+    } else if bin.starts_with("gemini") {
+        cmd.args(["--yolo"]);
+    } else if bin.starts_with("agy") {
+        // agy 无需额外参数，通过 stdin 接收
+    } else {
+        cmd.arg("-p");
+    }
+
+    cmd.stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+
+    #[cfg(target_os = "windows")]
+    cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+
+    let mut child = match cmd.spawn() {
+        Ok(c) => c,
+        Err(e) => {
+            let body = serde_json::to_vec(&TestCliResponse {
+                ok: false,
+                latency_ms: start.elapsed().as_millis() as u64,
+                sample: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                detail: format!("启动 '{}' 进程失败: {}", bin, e),
+            }).unwrap_or_default();
+            return Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(body))
+                .unwrap();
+        }
+    };
+
+    // 写入 Smoke Prompt 并关闭 stdin
+    if let Some(mut stdin_pipe) = child.stdin.take() {
+        let _ = stdin_pipe.write_all(smoke_prompt.as_bytes()).await;
+        drop(stdin_pipe);
+    }
+
+    let stdout_pipe = child.stdout.take();
+    let stderr_pipe = child.stderr.take();
+
+    // 45 秒超时（与 open-design 一致）
+    let timeout_result = tokio::time::timeout(Duration::from_secs(45), async {
+        let mut stdout_buf = String::new();
+        let mut stderr_buf = String::new();
+
+        // 并发读取 stdout 和 stderr
+        let (r_tx, mut r_rx) = tokio::sync::mpsc::channel::<ReaderMsg>(200);
+
+        if let Some(pipe) = stdout_pipe {
+            let tx2 = r_tx.clone();
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let _ = tx2.send(ReaderMsg::Stdout(line)).await;
+                }
+            });
+        }
+        if let Some(pipe) = stderr_pipe {
+            let tx2 = r_tx;
+            tokio::spawn(async move {
+                let mut reader = BufReader::new(pipe).lines();
+                while let Ok(Some(line)) = reader.next_line().await {
+                    let _ = tx2.send(ReaderMsg::Stderr(line)).await;
+                }
+            });
+        }
+
+        while let Some(msg) = r_rx.recv().await {
+            match msg {
+                ReaderMsg::Stdout(line) => {
+                    stdout_buf.push_str(&line);
+                    stdout_buf.push('\n');
+                }
+                ReaderMsg::Stderr(line) => {
+                    if stderr_buf.len() < 4000 {
+                        stderr_buf.push_str(&line);
+                        stderr_buf.push('\n');
+                    }
+                }
+            }
+        }
+
+        let exit_status = tokio::time::timeout(Duration::from_secs(5), child.wait()).await
+            .ok()
+            .and_then(|r| r.ok());
+        let exit_code = exit_status.and_then(|s| s.code());
+        let exit_ok = exit_status.map(|s| s.success()).unwrap_or(false);
+
+        (stdout_buf, stderr_buf, exit_code, exit_ok)
+    }).await;
+
+    let latency_ms = start.elapsed().as_millis() as u64;
+
+    let response = match timeout_result {
+        Err(_) => {
+            // 45 秒超时
+            TestCliResponse {
+                ok: false,
+                latency_ms,
+                sample: None,
+                stdout: String::new(),
+                stderr: String::new(),
+                detail: format!("连通性测试超时 (>45s)：'{}' 引擎在规定时间内没有响应", bin),
+            }
+        }
+        Ok((stdout, stderr, _exit_code, exit_ok)) => {
+            let trimmed = stdout.trim().to_string();
+            let sample: Option<String> = if !trimmed.is_empty() {
+                // 截取最多 120 字符作为样本
+                Some(trimmed.chars().take(120).collect())
+            } else {
+                None
+            };
+
+            if exit_ok || !trimmed.is_empty() {
+                TestCliResponse {
+                    ok: true,
+                    latency_ms,
+                    sample,
+                    stdout: trimmed,
+                    stderr: stderr.trim().to_string(),
+                    detail: format!("连通性测试成功 ({:.1}s)", latency_ms as f64 / 1000.0),
+                }
+            } else {
+                let stderr_trim = stderr.trim().to_string();
+                TestCliResponse {
+                    ok: false,
+                    latency_ms,
+                    sample: None,
+                    stdout: trimmed,
+                    stderr: stderr_trim.clone(),
+                    detail: if !stderr_trim.is_empty() {
+                        format!("'{}' 引擎异常退出: {}", bin, &stderr_trim.chars().take(200).collect::<String>())
+                    } else {
+                        format!("'{}' 引擎异常退出，无输出", bin)
+                    },
+                }
+            }
+        }
+    };
+
+    let body = serde_json::to_vec(&response).unwrap_or_default();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(Body::from(body))
+        .unwrap()
 }
 
 #[cfg(test)]

@@ -19,7 +19,7 @@ use review::{
     handle_get_active_task, handle_get_task, handle_task_events, handle_cancel_task,
     handle_delete_task, handle_retry_task, handle_save_action_items, handle_save_quality_feedback,
     handle_get_turn_details, handle_list_prompt_templates, handle_create_prompt_template,
-    handle_update_prompt_template, handle_delete_prompt_template,
+    handle_update_prompt_template, handle_delete_prompt_template, handle_test_cli,
 };
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
@@ -162,6 +162,7 @@ fn main() {
                 .route("/api/review/turns/details", get(handle_get_turn_details))
                 .route("/api/review/prompt_templates", get(handle_list_prompt_templates).post(handle_create_prompt_template))
                 .route("/api/review/prompt_templates/:id", put(handle_update_prompt_template).delete(handle_delete_prompt_template))
+                .route("/api/review/test-cli", post(handle_test_cli))
                 .fallback(serve_static_file_fallback)
                 .layer(axum::middleware::from_fn(server::cors_middleware));
 

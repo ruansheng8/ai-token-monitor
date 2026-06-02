@@ -15,6 +15,10 @@ pub struct AppConfig {
     pub db_pg_database: String,
     #[serde(default)]
     pub developer_mode: bool,
+    /// CLI 引擎自定义环境变量，格式：{ "codex": { "CODEX_BIN": "/path", "OPENAI_API_KEY": "sk-..." } }
+    /// 与 open-design 的 agentCliEnv 字段保持一致的数据结构
+    #[serde(default)]
+    pub agent_cli_env: std::collections::HashMap<String, std::collections::HashMap<String, String>>,
 }
 
 impl Default for AppConfig {
@@ -31,6 +35,7 @@ impl Default for AppConfig {
             db_pg_password: "".to_string(),
             db_pg_database: "".to_string(),
             developer_mode: false,
+            agent_cli_env: std::collections::HashMap::new(),
         }
     }
 }

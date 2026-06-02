@@ -20,12 +20,15 @@ import {
   AlertTriangle,
   Download,
   Maximize2,
+  Settings,
 } from 'lucide-react';
 
 import { apiUrl, readJsonResponse } from '../lib/api';
 import { Markdown } from './Markdown';
 import { TurnDetailsDrawer } from './TurnDetailsDrawer';
 import { PromptTemplate, PromptTemplateManagerModal } from './PromptTemplateManagerModal';
+import { CliConfigModal } from './CliConfigModal';
+import type { AgentCliEnv } from './CliConfigModal';
 
 // ============================================================
 // 常量与辅助配置
@@ -309,18 +312,29 @@ interface LogLine {
 // ============================================================
 
 function getCliDisplayName(bin: string): string {
-  switch (bin) {
-    case 'claude':
-      return 'Claude Code';
-    case 'codex':
-      return 'Codex CLI';
-    case 'gemini':
-      return 'Gemini CLI (旧版)';
-    case 'agy':
-      return 'Antigravity CLI (新版)';
-    default:
-      return 'AI CLI';
-  }
+  const nameMap: Record<string, string> = {
+    claude: 'Claude Code',
+    codex: 'Codex CLI',
+    gemini: 'Gemini CLI',
+    agy: 'Antigravity CLI',
+    'cursor-agent': 'Cursor Agent',
+    opencode: 'OpenCode CLI',
+    qwen: 'Qwen CLI',
+    copilot: 'GitHub Copilot',
+    devin: 'Devin CLI',
+    kimi: 'Kimi CLI',
+    qoder: 'Qoder CLI',
+    pi: 'Pi CLI',
+    kiro: 'Kiro Agent',
+    kilo: 'Kilo Code',
+    vibe: 'Vibe CLI',
+    deepseek: 'DeepSeek CLI',
+    hermes: 'Hermes CLI',
+    'grok-build': 'Grok Build',
+    reasonix: 'Reasonix CLI',
+    aider: 'Aider',
+  };
+  return nameMap[bin] ?? bin;
 }
 
 const formatReviewDate = (d: Date) => {
@@ -465,6 +479,33 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
   const esRef = useRef<EventSource | null>(null);
   const outputRef = useRef<HTMLDivElement>(null);
   const logsRef = useRef<HTMLDivElement>(null);
+
+  // CLI 配置弹窗状态
+  const [cliConfigOpen, setCliConfigOpen] = useState(false);
+  const [agentCliEnv, setAgentCliEnv] = useState<AgentCliEnv>({});
+
+  // 加载 agent_cli_env 配置
+  useEffect(() => {
+    fetch(apiUrl('/config'))
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.agent_cli_env) setAgentCliEnv(data.agent_cli_env);
+      })
+      .catch(() => {});
+  }, []);
+
+  // 保存 agent_cli_env 到后端
+  const saveCliEnv = async (env: AgentCliEnv) => {
+    const currentConfig = await fetch(apiUrl('/config')).then((r) => r.json());
+    await fetch(apiUrl('/config/save'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...currentConfig, agent_cli_env: env }),
+    });
+    setAgentCliEnv(env);
+    // 保存后重新检测以刷新自定义路径结果
+    detectCliTools(true);
+  };
 
   // ────── 自动定位与提示词模板填充 ──────
   const lastAutoPromptRef = useRef('');
@@ -1556,14 +1597,24 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                     <Terminal className="w-4 h-4 text-neon-purple" />
                     第二步：选择运行分析引擎 CLI
                   </h3>
-                  <button
-                    onClick={() => detectCliTools(true)}
-                    disabled={detectLoading}
-                    className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border border-neon-cyan/25 bg-neon-cyan/5 text-neon-cyan hover:bg-neon-cyan/10 cursor-pointer"
-                  >
-                    <RefreshCw className={`w-2.5 h-2.5 ${detectLoading ? 'animate-spin' : ''}`} />
-                    重新检测
-                  </button>
+                  <div className="flex items-center gap-2">
+                    {/* 配置 CLI 按钮 */}
+                    <button
+                      onClick={() => setCliConfigOpen(true)}
+                      className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border border-violet-400/25 bg-violet-400/5 text-violet-400 hover:bg-violet-400/10 cursor-pointer"
+                    >
+                      <Settings className="w-2.5 h-2.5" />
+                      配置 CLI
+                    </button>
+                    <button
+                      onClick={() => detectCliTools(true)}
+                      disabled={detectLoading}
+                      className="flex items-center gap-1 text-[10px] px-2 py-1 rounded-lg border border-neon-cyan/25 bg-neon-cyan/5 text-neon-cyan hover:bg-neon-cyan/10 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-2.5 h-2.5 ${detectLoading ? 'animate-spin' : ''}`} />
+                      重新检测
+                    </button>
+                  </div>
                 </div>
 
                 {detectLoading ? (
@@ -1573,7 +1624,13 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                   </div>
                 ) : detectResult ? (
                   <div className="flex flex-wrap gap-2">
-                    {detectResult.tools.map((tool) => (
+                    {/* 只展示前 4 个可用 CLI，其余通过「配置 CLI」弹窗管理 */}
+                    {detectResult.tools
+                      .filter((t) => t.available)
+                      .slice(0, 4)
+                      .concat(detectResult.tools.filter((t) => !t.available).slice(0, Math.max(0, 4 - detectResult.tools.filter((t) => t.available).length)))
+                      .slice(0, 4)
+                      .map((tool) => (
                       <div
                         key={tool.name}
                         onClick={() => tool.available && setSelectedCli(tool.name)}
@@ -2379,6 +2436,15 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
           setCustomPrompt(newPrompt);
           lastAutoPromptRef.current = newPrompt;
         }}
+      />
+      <CliConfigModal
+        open={cliConfigOpen}
+        onClose={() => setCliConfigOpen(false)}
+        initialCliEnv={agentCliEnv}
+        onSave={saveCliEnv}
+        detectResult={detectResult}
+        onRefreshDetect={() => detectCliTools(true)}
+        detectLoading={detectLoading}
       />
     </>
   );

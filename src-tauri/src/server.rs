@@ -288,6 +288,8 @@ pub struct ConfigReq {
     pub close_behavior: Option<String>,
     pub app_version: Option<String>,
     pub developer_mode: Option<bool>,
+    /// CLI 引擎自定义环境变量，格式与 open-design agentCliEnv 一致
+    pub agent_cli_env: Option<std::collections::HashMap<String, std::collections::HashMap<String, String>>>,
 }
 
 pub async fn handle_config_get() -> impl axum::response::IntoResponse {
@@ -314,6 +316,7 @@ pub async fn handle_config_get() -> impl axum::response::IntoResponse {
             close_behavior: Some(config.close_behavior),
             app_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             developer_mode: Some(config.developer_mode),
+            agent_cli_env: if config.agent_cli_env.is_empty() { None } else { Some(config.agent_cli_env) },
         };
 
         Ok::<ConfigReq, String>(resp)
@@ -477,6 +480,7 @@ pub async fn handle_config_save(
             db_pg_password: new_pg_password,
             db_pg_database: new_pg_database,
             developer_mode: new_developer_mode,
+            agent_cli_env: req.agent_cli_env.unwrap_or_default(),
         };
 
         crate::config::save_config(&new_config)
