@@ -74,8 +74,8 @@ export function DailyTrendChart({ data = [], deviceTrends = [], dimension = 'typ
     const dates = data.map(t => t.date);
     const borderColor = isDark ? '#0b1528' : '#ffffff';
 
-    let series: any[] = [];
-    let colors: string[] = [];
+    let series: any[];
+    let colors: string[];
 
     if (dimension === 'device' && deviceTrends && deviceTrends.length > 0) {
       // 提取所有不重复的设备名（若为空则回退为未知设备）
@@ -114,7 +114,14 @@ export function DailyTrendChart({ data = [], deviceTrends = [], dimension = 'typ
       const outputData = data.map(t => t.output);
       const thinkingData = data.map(t => t.thinking);
 
-      colors = PALETTE_COLORS;
+      colors = isDark
+        ? PALETTE_COLORS
+        : [
+            '#10b981', // 1. 缓存输入 Token -> 薄荷绿
+            '#0ea5e9', // 2. 未缓存输入 Token -> 浅青/天空蓝
+            '#2563eb', // 3. 输出 Token -> 皇家蓝
+            '#8b5cf6', // 4. 推理 Token -> 科技紫
+          ];
 
       series = [
         {
@@ -167,8 +174,8 @@ export function DailyTrendChart({ data = [], deviceTrends = [], dimension = 'typ
               type: 'linear',
               x: 0, y: 0, x2: 0, y2: 1,
               colorStops: [
-                { offset: 0, color: hexToRgba(PALETTE_COLORS[3], 0.16) },
-                { offset: 1, color: hexToRgba(PALETTE_COLORS[3], 0.01) },
+                { offset: 0, color: hexToRgba(colors[3], 0.16) },
+                { offset: 1, color: hexToRgba(colors[3], 0.01) },
               ],
             },
           },

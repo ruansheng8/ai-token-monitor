@@ -59,6 +59,16 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
 
     // 针对每个工具，按日期对齐数据
     const sources = ['antigravity', 'claude_code', 'codex', 'cursor', 'trae', 'trae_cn'];
+    const lightEngineColors = {
+      antigravity: '#8b5cf6', // 科技紫
+      claude_code: '#f59e0b', // 琥珀黄
+      codex: '#0ea5e9',       // 浅青色
+      cursor: '#00bcd4',      // 亮青
+      trae: '#2563eb',        // 皇家蓝
+      trae_cn: '#10b981',     // 薄荷绿
+    };
+    const engineColors = isDark ? ENGINE_COLORS : lightEngineColors;
+
     const seriesData = sources.map(src => {
       const srcData = dates.map(d => {
         const found = data.find(item => item.date === d && item.source === src);
@@ -70,7 +80,7 @@ export function SourceTrendChart({ data = [], theme }: SourceTrendChartProps) {
         stack: 'total',
         data: srcData,
         itemStyle: {
-          color: ENGINE_COLORS[src as keyof typeof ENGINE_COLORS],
+          color: engineColors[src as keyof typeof engineColors],
           borderRadius: 4,
           borderColor: isDark ? '#0b1528' : '#ffffff',
           borderWidth: 1.5,

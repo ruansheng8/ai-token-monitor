@@ -2,11 +2,11 @@
 
 :root {
   /* Light Mode (Default) Colors */
-  --bg-app: #f8fafc;
+  --bg-app: #f4f6f8;
   --bg-secondary: #ffffff;
-  --card-bg: rgba(255, 255, 255, 0.75);
-  --card-border: rgba(148, 163, 184, 0.15);
-  --card-border-hover: rgba(6, 182, 212, 0.4);
+  --card-bg: #ffffff;
+  --card-border: rgba(226, 232, 240, 0.8);
+  --card-border-hover: rgba(37, 99, 235, 0.25);
   --card-shadow: 0 12px 40px -12px rgba(15, 23, 42, 0.04);
   --card-shadow-hover: 0 16px 48px -12px rgba(15, 23, 42, 0.08);
 
@@ -19,19 +19,19 @@
 
   --scrollbar-track: rgba(15, 23, 42, 0.05);
   --scrollbar-thumb: rgba(15, 23, 42, 0.12);
-  --scrollbar-thumb-hover: rgba(6, 182, 212, 0.5);
+  --scrollbar-thumb-hover: rgba(37, 99, 235, 0.4);
 
   --decor-opacity: 0.06;
 
   /* Neon Colors for Light Mode */
-  --neon-cyan: #0891b2;
-  --neon-purple: #9333ea;
+  --neon-cyan: #0ea5e9;
+  --neon-purple: #8b5cf6;
   --neon-pink: #db2777;
-  --neon-orange: #ea580c;
-  --neon-green: #16a34a;
+  --neon-orange: #f59e0b;
+  --neon-green: #10b981;
   --neon-blue: #2563eb;
   --neon-gold: #ca8a04;
-  --neon-teal: #0d9488;
+  --neon-teal: #14b8a6;
 }
 
 .dark {
@@ -151,10 +151,8 @@ body {
 
 /* 流光渐变看板头部背景 */
 .dashboard-header-bg {
-  background:
-    radial-gradient(circle at top left, rgba(6, 182, 212, 0.15), transparent 28%),
-    radial-gradient(circle at 85% 10%, rgba(249, 115, 22, 0.12), transparent 18%),
-    linear-gradient(180deg, #f8fbff 0%, #ffffff 100%);
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
 }
 
 .dark .dashboard-header-bg {
@@ -162,12 +160,13 @@ body {
     radial-gradient(circle at top left, rgba(6, 182, 212, 0.12), transparent 30%),
     radial-gradient(circle at 85% 10%, rgba(236, 72, 153, 0.08), transparent 25%),
     linear-gradient(180deg, #0b1224 0%, #030712 100%);
+  border-bottom: none;
 }
 
 /* 指标卡分色微渐变 */
 .kpi-blue {
-  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 50%, #ecfeff 100%);
-  border-color: rgba(191, 219, 254, 0.5);
+  background: #ffffff;
+  border-color: rgba(226, 232, 240, 0.8);
 }
 .dark .kpi-blue {
   background: linear-gradient(135deg, rgba(37, 99, 235, 0.12) 0%, rgba(11, 21, 40, 0.6) 50%, rgba(6, 182, 212, 0.08) 100%);
@@ -175,8 +174,8 @@ body {
 }
 
 .kpi-cyan {
-  background: linear-gradient(135deg, #ecfeff 0%, #ffffff 50%, #f0f9ff 100%);
-  border-color: rgba(165, 243, 252, 0.5);
+  background: #ffffff;
+  border-color: rgba(226, 232, 240, 0.8);
 }
 .dark .kpi-cyan {
   background: linear-gradient(135deg, rgba(6, 182, 212, 0.12) 0%, rgba(11, 21, 40, 0.6) 50%, rgba(56, 189, 248, 0.08) 100%);
@@ -184,8 +183,8 @@ body {
 }
 
 .kpi-orange {
-  background: linear-gradient(135deg, #fff7ed 0%, #ffffff 50%, #fef3c7 100%);
-  border-color: rgba(254, 215, 170, 0.5);
+  background: #ffffff;
+  border-color: rgba(226, 232, 240, 0.8);
 }
 .dark .kpi-orange {
   background: linear-gradient(135deg, rgba(249, 115, 22, 0.12) 0%, rgba(11, 21, 40, 0.6) 50%, rgba(245, 158, 11, 0.08) 100%);
@@ -193,8 +192,8 @@ body {
 }
 
 .kpi-green {
-  background: linear-gradient(135deg, #f0fdf4 0%, #ffffff 50%, #dcfce7 100%);
-  border-color: rgba(187, 247, 208, 0.5);
+  background: #ffffff;
+  border-color: rgba(226, 232, 240, 0.8);
 }
 .dark .kpi-green {
   background: linear-gradient(135deg, rgba(22, 163, 74, 0.12) 0%, rgba(11, 21, 40, 0.6) 50%, rgba(34, 197, 94, 0.08) 100%);
@@ -202,8 +201,8 @@ body {
 }
 
 .kpi-purple {
-  background: linear-gradient(135deg, #f5f3ff 0%, #ffffff 50%, #ede9fe 100%);
-  border-color: rgba(233, 213, 255, 0.5);
+  background: #ffffff;
+  border-color: rgba(226, 232, 240, 0.8);
 }
 .dark .kpi-purple {
   background: linear-gradient(135deg, rgba(139, 92, 246, 0.12) 0%, rgba(11, 21, 40, 0.6) 50%, rgba(168, 85, 247, 0.08) 100%);
@@ -211,8 +210,8 @@ body {
 }
 
 .kpi-slate {
-  background: linear-gradient(135deg, #f8fafc 0%, #ffffff 50%, #f1f5f9 100%);
-  border-color: rgba(226, 232, 240, 0.5);
+  background: #ffffff;
+  border-color: rgba(226, 232, 240, 0.8);
 }
 .dark .kpi-slate {
   background: linear-gradient(135deg, rgba(71, 85, 105, 0.12) 0%, rgba(11, 21, 40, 0.6) 50%, rgba(30, 41, 59, 0.2) 100%);
