@@ -1533,7 +1533,7 @@ async fn run_cli_task_background(
     let cli_path = find_cli_in_path(cli_name);
 
     if cli_path.is_none() {
-        let err_msg = format!("❌ 未在系统的 PATH 环境变量中检测到 AI CLI 引擎「{}」", cli_name);
+        let err_msg = format!("❌ 未在系统的 PATH 环境变量中检测到 AI CLI 引擎「{}」", get_cli_display_name(cli_name));
         let _ = record_and_broadcast_event(&task_id_str, "error", &err_msg, None, &tx).await;
         
         update_task_finish(&task_id_str, "failed", Some("cli_resolved"), 35, &err_msg, None, None, Some("CLI_NOT_FOUND")).await;

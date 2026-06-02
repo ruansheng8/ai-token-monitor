@@ -323,28 +323,28 @@ function getCliDisplayName(bin: string): string {
   }
 }
 
-function getReviewDateBounds(range: string) {
-  const end = new Date();
-  const start = new Date();
+const formatReviewDate = (d: Date) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
 
-  const format = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-  };
+function getReviewDateBounds(range: string) {
+  const now = new Date();
 
   if (range === '今日') {
-    // 保持 start 为今天
+    const dStr = formatReviewDate(now);
+    return { start: dStr, end: dStr };
   } else if (range === '7天') {
-    start.setDate(end.getDate() - 7);
+    const past = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+    return { start: formatReviewDate(past), end: formatReviewDate(now) };
   } else if (range === '30天') {
-    start.setDate(end.getDate() - 30);
+    const past = new Date(now.getTime() - 29 * 24 * 60 * 60 * 1000);
+    return { start: formatReviewDate(past), end: formatReviewDate(now) };
   } else {
-    start.setFullYear(end.getFullYear() - 5);
+    return { start: '', end: '' };
   }
-
-  return { start: format(start), end: format(end) };
 }
 
 function buildPromptFromTemplate(template: string, ides: string[]): string {
@@ -649,12 +649,10 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
           const resultsCurrent = await Promise.all(promisesCurrent);
 
           // 2. 获取上周 (14天到7天前) 边界和数据
-          const endCompare = new Date();
-          endCompare.setDate(endCompare.getDate() - 7);
-          const startCompare = new Date();
-          startCompare.setDate(endCompare.getDate() - 14);
-          const formatDate = (d: Date) => d.toISOString().slice(0, 10);
-          const boundsCompare = { start: formatDate(startCompare), end: formatDate(endCompare) };
+          const now = new Date();
+          const endCompare = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+          const startCompare = new Date(now.getTime() - 13 * 24 * 60 * 60 * 1000);
+          const boundsCompare = { start: formatReviewDate(startCompare), end: formatReviewDate(endCompare) };
 
           const promisesCompare = sourcesToFetch.map(async (src) => {
             const res = await fetch(
@@ -2237,6 +2235,30 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                       />
                       {(activeTask.status === 'running' || activeTask.status === 'pending') && <StreamingCursor />}
                     </>
+                  ) : activeTask.status === 'failed' ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-neon-pink">
+                      <AlertTriangle className="w-8 h-8 opacity-80" />
+                      <span className="text-xs font-semibold">
+                        分析任务执行失败，未生成报告
+                      </span>
+                      <span className="text-[11px] text-text-muted">
+                        请参考上方「任务诊断与修复指引」进行排查并重试。
+                      </span>
+                    </div>
+                  ) : activeTask.status === 'canceled' ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-text-muted">
+                      <AlertCircle className="w-8 h-8 opacity-60" />
+                      <span className="text-xs font-semibold">
+                        分析已被用户取消，未生成报告
+                      </span>
+                    </div>
+                  ) : activeTask.status === 'interrupted' ? (
+                    <div className="flex flex-col items-center justify-center py-16 gap-3 text-neon-gold">
+                      <AlertTriangle className="w-8 h-8 opacity-80" />
+                      <span className="text-xs font-semibold">
+                        分析任务随系统重启而中断，未生成报告
+                      </span>
+                    </div>
                   ) : (
                     <div className="flex flex-col items-center justify-center py-20 gap-3 text-text-muted">
                       <div className="w-8 h-8 rounded-full border-2 border-neon-cyan border-t-transparent animate-spin" />
