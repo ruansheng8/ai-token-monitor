@@ -69,6 +69,7 @@ pub struct CreateTaskRequest {
     pub force: Option<bool>,
     pub metrics_snapshot: MetricsSnapshot,
     pub compare_metrics_snapshot: Option<MetricsSnapshot>,
+    pub template_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,6 +101,7 @@ pub struct ReviewTask {
     pub quality_feedback: Option<String>,
     pub action_items_json: Option<String>,
     pub compare_metrics_snapshot_json: Option<String>,
+    pub template_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -797,24 +799,26 @@ pub async fn handle_create_task(
         let metrics_hash = calculate_hash(&metrics_snapshot_json);
         let selected_ides_json = serde_json::to_string(&req.selected_ides).unwrap_or_default();
 
-        let dedupe_str = format!("{}_{}_{}_{}", req.time_range, selected_ides_json, prompt_hash, metrics_hash);
+        let template_id_str = req.template_id.clone().unwrap_or_default();
+        let dedupe_str = format!("{}_{}_{}_{}_{}", req.time_range, selected_ides_json, prompt_hash, metrics_hash, template_id_str);
         let dedupe_key = calculate_hash(&dedupe_str);
 
         // 3. 去重模糊校验
         if req.force != Some(true) {
             let six_hours_ago = (chrono::Utc::now() - chrono::Duration::hours(6)).to_rfc3339();
             
-            // 查询 6 小时内，相同参数 (time_range, CLI, IDEs) 的成功任务
+            // 查询 6 小时内，相同参数 (time_range, CLI, IDEs, template_id) 的成功任务
             let recent_tasks: Vec<(String, String, String)> = {
                 let mut stmt = conn.prepare(
                     "SELECT id, metrics_snapshot_json, created_at FROM review_tasks \
                      WHERE time_range = ? AND cli_name = ? AND selected_ides_json = ? \
+                     AND COALESCE(template_id, '') = ? \
                      AND status = 'succeeded' \
                      AND created_at >= ? \
                      ORDER BY created_at DESC"
                 ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("查询历史任务失败: {}", e)))?;
                 
-                let rows = stmt.query_map(rusqlite::params![req.time_range, req.cli, selected_ides_json, six_hours_ago], |row| {
+                let rows = stmt.query_map(rusqlite::params![req.time_range, req.cli, selected_ides_json, template_id_str, six_hours_ago], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?))
                 }).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("读取历史任务失败: {}", e)))?;
                 
@@ -882,12 +886,13 @@ pub async fn handle_create_task(
             "INSERT INTO review_tasks (
                 id, title, status, cli_name, cli_path, time_range, selected_ides_json,
                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
-                progress_stage, progress_percent, status_message, created_at, compare_metrics_snapshot_json
-            ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', 5, '任务已创建', ?, ?)",
+                progress_stage, progress_percent, status_message, created_at, compare_metrics_snapshot_json,
+                template_id
+            ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', 5, '任务已创建', ?, ?, ?)",
             rusqlite::params![
                 task_id, title, req.cli, cli_path, req.time_range, selected_ides_json,
                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
-                created_at, compare_metrics_snapshot_json
+                created_at, compare_metrics_snapshot_json, req.template_id
             ],
         ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("插入任务失败: {}", e)))?;
 
@@ -974,7 +979,7 @@ pub async fn handle_list_tasks(
                                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
                                 progress_stage, progress_percent, status_message, output_markdown,
                                 error_message, exit_code, created_at, started_at, finished_at,
-                                canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json FROM review_tasks WHERE 1=1".to_string();
+                                canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id FROM review_tasks WHERE 1=1".to_string();
         
         let mut query_params = Vec::new();
 
@@ -1029,6 +1034,7 @@ pub async fn handle_list_tasks(
                 quality_feedback: row.get(24)?,
                 action_items_json: row.get(25)?,
                 compare_metrics_snapshot_json: row.get(26)?,
+                template_id: row.get(27)?,
             })
         }).map_err(|e| e.to_string())?;
 
@@ -1072,7 +1078,7 @@ pub async fn handle_get_active_task() -> impl IntoResponse {
                     prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
                     progress_stage, progress_percent, status_message, output_markdown,
                     error_message, exit_code, created_at, started_at, finished_at,
-                    canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json 
+                    canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id 
              FROM review_tasks 
              WHERE status IN ('pending', 'running') 
              ORDER BY created_at DESC LIMIT 1",
@@ -1106,6 +1112,7 @@ pub async fn handle_get_active_task() -> impl IntoResponse {
                     quality_feedback: row.get(24)?,
                     action_items_json: row.get(25)?,
                     compare_metrics_snapshot_json: row.get(26)?,
+                    template_id: row.get(27)?,
                 })
             },
         ).ok();
@@ -2000,7 +2007,7 @@ fn query_task_by_id(conn: &rusqlite::Connection, id: &str) -> Result<ReviewTask,
                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
                 progress_stage, progress_percent, status_message, output_markdown,
                 error_message, exit_code, created_at, started_at, finished_at,
-                canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json FROM review_tasks WHERE id = ?",
+                canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id FROM review_tasks WHERE id = ?",
         [id],
         |row| {
             Ok(ReviewTask {
@@ -2031,6 +2038,7 @@ fn query_task_by_id(conn: &rusqlite::Connection, id: &str) -> Result<ReviewTask,
                 quality_feedback: row.get(24)?,
                 action_items_json: row.get(25)?,
                 compare_metrics_snapshot_json: row.get(26)?,
+                template_id: row.get(27)?,
             })
         },
     )

@@ -1088,6 +1088,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
       cli: selectedCli,
       time_range: reviewTimeRange,
       selected_ides: selectedIdes,
+      template_id: selectedTemplateId,
       custom_prompt: customPrompt.trim() ? customPrompt.trim() : undefined,
       force: forceStart,
       metrics_snapshot: {
@@ -1411,7 +1412,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
               )}
 
               {/* 核心配置表单 */}
-              <div className="rounded-[24px] bg-slate-50/2 dark:bg-white/1 border border-card-border p-5 space-y-4 shadow-sm text-left">
+              <div className="glass-card p-5 space-y-4 text-left">
                 <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wider mb-2 flex items-center gap-1.5">
                   <Monitor className="w-4 h-4 text-neon-cyan" />
                   第一步：指定分析统计范围
@@ -1485,7 +1486,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                 {/* 指标快照微渐变白卡预览 */}
                 {(activeMetrics || metrics) && (
                   <div
-                    className="p-4 rounded-2xl relative overflow-hidden bg-gradient-to-br from-blue-500/5 via-transparent to-purple-500/5 border border-cyan-500/10"
+                    className="p-4 rounded-2xl relative overflow-hidden bg-gradient-to-br from-neon-blue/5 via-transparent to-neon-purple/5 border border-card-border"
                   >
                     <div className="absolute top-0 right-0 w-24 h-24 bg-cyan-500/5 rounded-full blur-2xl pointer-events-none" />
                     <div className="flex items-center justify-between mb-3.5 border-b border-card-border pb-2.5">
@@ -1558,7 +1559,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                               })()
                             },
                           ].map(({ label, currStr, prevStr, diff }) => (
-                            <div key={label} className={`p-3 rounded-xl bg-black/5 dark:bg-white/3 border border-card-border/50 ${metricsLoading ? 'opacity-30' : ''}`}>
+                            <div key={label} className={`p-3 rounded-xl bg-bg-secondary/60 dark:bg-white/5 border border-card-border ${metricsLoading ? 'opacity-30' : ''}`}>
                               <p className="text-[10px] text-text-muted font-medium mb-1">{label}</p>
                               <div className="flex items-baseline justify-between gap-1">
                                 <span className="text-xs font-bold font-mono text-text-primary">{currStr}</span>
@@ -1576,7 +1577,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                             { label: '会话交互总数', value: activeMetrics ? activeMetrics.totalSessions.toLocaleString() : (metrics?.totalSessions ?? 0).toLocaleString() },
                             { label: '缓存命中率', value: activeMetrics ? `${(activeMetrics.cacheHitRate * 100).toFixed(1)}%` : `${((metrics?.cacheHitRate ?? 0) * 100).toFixed(1)}%` },
                           ].map(({ label, value }) => (
-                            <div key={label} className={`p-2 rounded-xl bg-black/5 dark:bg-white/3 border border-card-border/50 ${metricsLoading ? 'opacity-30' : ''}`}>
+                            <div key={label} className={`p-2 rounded-xl bg-bg-secondary/60 dark:bg-white/5 border border-card-border ${metricsLoading ? 'opacity-30' : ''}`}>
                               <p className="text-[10px] text-text-muted font-medium mb-0.5">{label}</p>
                               <p className="text-xs font-bold font-mono text-text-primary">
                                 {value}
@@ -1591,7 +1592,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
               </div>
 
               {/* 规则参数步骤二：CLI 引擎 */}
-              <div className="rounded-[24px] bg-slate-50/2 dark:bg-white/1 border border-card-border p-5 space-y-4 shadow-sm text-left">
+              <div className="glass-card p-5 space-y-4 text-left">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wider flex items-center gap-1.5">
                     <Terminal className="w-4 h-4 text-neon-purple" />
@@ -1690,7 +1691,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
               </div>
 
               {/* 自定义提示词配置 */}
-              <div className="rounded-[24px] bg-slate-50/2 dark:bg-white/1 border border-card-border p-5 text-left">
+              <div className="glass-card p-5 text-left">
                 <button
                   onClick={() => setIsPromptExpanded(!isPromptExpanded)}
                   className="w-full flex items-center justify-between text-xs font-bold text-text-secondary uppercase tracking-wider cursor-pointer"
@@ -1758,7 +1759,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                         onChange={(e) => setCustomPrompt(e.target.value)}
                         rows={10}
                         spellCheck={false}
-                        className="w-full p-3 rounded-xl border border-card-border bg-black/10 dark:bg-black/30 font-mono text-[11px] leading-relaxed text-text-primary outline-none focus:border-cyan-500 transition-all"
+                        className="w-full p-3 rounded-xl border border-card-border bg-black/10 dark:bg-black/30 font-mono text-[11px] leading-relaxed text-text-primary outline-none focus:border-neon-cyan transition-all"
                       />
                     </div>
                   </div>
@@ -1848,7 +1849,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                       <div
                         key={task.id}
                         onClick={() => handleOpenDetail(task)}
-                        className="p-4 rounded-[20px] bg-slate-50/2 dark:bg-white/1 border border-card-border/80 hover:border-cyan-500/30 hover:shadow-md cursor-pointer transition-all duration-200 text-left flex justify-between items-start gap-4"
+                        className="p-4 rounded-[20px] bg-card-bg border border-card-border hover:border-card-border-hover hover:shadow-md cursor-pointer transition-all duration-200 text-left flex justify-between items-start gap-4"
                       >
                         <div className="space-y-2 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
@@ -2012,7 +2013,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                 {isLogsExpanded && (
                   <div
                     ref={logsRef}
-                    className="p-4 max-h-48 overflow-y-auto font-mono text-[10px] leading-relaxed text-text-secondary select-text space-y-1.5 border-t border-card-border bg-[#030712] border-none"
+                    className="p-4 max-h-48 overflow-y-auto font-mono text-[10px] leading-relaxed text-text-secondary select-text space-y-1.5 border-t border-card-border bg-bg-app border-none"
                     style={{ maxHeight: '180px' }}
                   >
                     {logLines.map((line, idx) => {
@@ -2125,10 +2126,10 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
               {/* 可折叠数据快照卡片 */}
               {/* ========================================== */}
               {activeTask.metrics_snapshot_json && (
-                <div className="rounded-2xl border border-card-border overflow-hidden bg-black/5 dark:bg-white/2">
+                <div className="rounded-2xl border border-card-border overflow-hidden bg-bg-secondary/40 dark:bg-white/3">
                   <button
                     onClick={() => setIsSnapshotExpanded(!isSnapshotExpanded)}
-                    className="w-full px-4 py-2.5 bg-black/10 dark:bg-white/3 flex items-center justify-between text-xs text-text-secondary font-bold tracking-wide outline-none cursor-pointer border-none"
+                    className="w-full px-4 py-2.5 bg-bg-secondary/50 dark:bg-white/5 flex items-center justify-between text-xs text-text-secondary font-bold tracking-wide outline-none cursor-pointer border-none"
                   >
                     <span className="flex items-center gap-1.5">
                       <BarChart2 className="w-3.5 h-3.5 text-neon-cyan" />
@@ -2138,7 +2139,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                   </button>
 
                   {isSnapshotExpanded && (
-                    <div className="p-4 border-t border-card-border bg-black/10 dark:bg-[#0f172a]/20 grid grid-cols-2 sm:grid-cols-4 gap-3 text-left">
+                    <div className="p-4 border-t border-card-border bg-bg-secondary/30 dark:bg-white/[0.02] grid grid-cols-2 sm:grid-cols-4 gap-3 text-left">
                       {(() => {
                         try {
                           const snap = JSON.parse(activeTask.metrics_snapshot_json);
@@ -2147,7 +2148,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                           if (compareSnap) {
                             return (
                               <>
-                                <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
+                                <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
                                   <div className="text-[10px] text-text-muted">Token 环比消耗</div>
                                   <div className="flex items-baseline justify-between gap-1">
                                     <span className="text-xs font-bold text-text-primary">
@@ -2166,7 +2167,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                                   </div>
                                   <div className="text-[9px] text-text-muted mt-0.5 font-mono">上周: {compareSnap.totalTokens.toLocaleString()}</div>
                                 </div>
-                                <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
+                                <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
                                   <div className="text-[10px] text-text-muted">费用环比 (USD)</div>
                                   <div className="flex items-baseline justify-between gap-1">
                                     <span className="text-xs font-bold text-neon-cyan">${(snap.totalCostUsd ?? 0).toFixed(4)}</span>
@@ -2179,7 +2180,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                                   </div>
                                   <div className="text-[9px] text-text-muted mt-0.5 font-mono">上周: ${compareSnap.totalCostUsd.toFixed(4)}</div>
                                 </div>
-                                <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
+                                <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
                                   <div className="text-[10px] text-text-muted">会话环比次数</div>
                                   <div className="flex items-baseline justify-between gap-1">
                                     <span className="text-xs font-bold text-text-primary">{snap.totalSessions} 次</span>
@@ -2192,7 +2193,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                                   </div>
                                   <div className="text-[9px] text-text-muted mt-0.5 font-mono">上周: {compareSnap.totalSessions} 次</div>
                                 </div>
-                                <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
+                                <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
                                   <div className="text-[10px] text-text-muted">缓存命中率变动</div>
                                   <div className="flex items-baseline justify-between gap-1">
                                     <span className="text-xs font-bold text-emerald-400">{((snap.cacheHitRate ?? 0) * 100).toFixed(1)}%</span>
@@ -2210,7 +2211,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
 
                           return (
                             <>
-                              <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
+                              <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
                                 <div className="text-[10px] text-text-muted">总 Token 消耗</div>
                                 <div className="text-xs font-bold text-text-primary mt-0.5">
                                   {snap.totalTokens >= 1_000_000 
@@ -2220,15 +2221,15 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                                       : snap.totalTokens}
                                 </div>
                               </div>
-                              <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
+                              <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
                                 <div className="text-[10px] text-text-muted">消费估算 (USD)</div>
                                 <div className="text-xs font-bold text-neon-cyan mt-0.5">${(snap.totalCostUsd ?? 0).toFixed(4)}</div>
                               </div>
-                              <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
+                              <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
                                 <div className="text-[10px] text-text-muted">总会话数</div>
                                 <div className="text-xs font-bold text-text-primary mt-0.5">{snap.totalSessions} 次</div>
                               </div>
-                              <div className="p-2.5 rounded-xl border border-card-border/80 bg-white/1">
+                              <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
                                 <div className="text-[10px] text-text-muted">缓存命中率</div>
                                 <div className="text-xs font-bold text-emerald-400 mt-0.5">{((snap.cacheHitRate ?? 0) * 100).toFixed(1)}%</div>
                               </div>
@@ -2356,7 +2357,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                         className={`flex items-start gap-3 p-3 rounded-xl border transition-all cursor-pointer select-none text-left ${
                           item.checked 
                             ? 'bg-emerald-500/5 border-emerald-500/20 text-emerald-500/70 line-through' 
-                            : 'bg-black/10 dark:bg-white/1 border-card-border/80 text-text-primary hover:border-cyan-500/30'
+                            : 'bg-bg-secondary/50 dark:bg-white/3 border-card-border text-text-primary hover:border-card-border-hover'
                         }`}
                       >
                         <input
