@@ -34,15 +34,8 @@ export function PerformanceChart({ data = [], theme }: PerformanceChartProps) {
 
     const borderColor = isDark ? '#0b1528' : '#ffffff';
 
-    const colors = isDark
-      ? PALETTE_COLORS
-      : [
-          '#2563eb', // 1. TPS -> 皇家蓝
-          '#10b981', // 2. Latency -> 薄荷绿
-        ];
-
     return {
-      color: colors,
+      color: PALETTE_COLORS,
       tooltip: {
         trigger: 'axis',
         confine: true,
@@ -136,8 +129,8 @@ export function PerformanceChart({ data = [], theme }: PerformanceChartProps) {
               type: 'linear',
               x: 0, y: 0, x2: 0, y2: 1,
               colorStops: [
-                { offset: 0, color: hexToRgba(colors[0], 0.16) },
-                { offset: 1, color: hexToRgba(colors[0], 0.01) },
+                { offset: 0, color: hexToRgba(PALETTE_COLORS[0], 0.16) },
+                { offset: 1, color: hexToRgba(PALETTE_COLORS[0], 0.01) },
               ],
             },
           },
@@ -160,8 +153,8 @@ export function PerformanceChart({ data = [], theme }: PerformanceChartProps) {
               type: 'linear',
               x: 0, y: 0, x2: 0, y2: 1,
               colorStops: [
-                { offset: 0, color: hexToRgba(colors[1], 0.16) },
-                { offset: 1, color: hexToRgba(colors[1], 0.01) },
+                { offset: 0, color: hexToRgba(PALETTE_COLORS[1], 0.16) },
+                { offset: 1, color: hexToRgba(PALETTE_COLORS[1], 0.01) },
               ],
             },
           },

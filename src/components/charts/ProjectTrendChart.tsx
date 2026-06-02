@@ -83,23 +83,11 @@ export function ProjectTrendChart({ data = [], theme }: ProjectTrendChartProps) 
       projectDataMap.get(pName)!.set(t.date, t.tokens);
     });
 
-    const colors = topProjects.map((_, idx) => {
-      const palette = isDark ? PALETTE_COLORS : [
-        '#2563eb', // 1. 皇家蓝
-        '#10b981', // 2. 薄荷绿
-        '#0ea5e9', // 3. 浅青色
-        '#6366f1', // 4. 睿智靛蓝
-        '#8b5cf6', // 5. 科技紫
-        '#f59e0b', // 6. 琥珀黄
-        '#14b8a6', // 7. 翠绿
-        '#db2777', // 8. 柔和粉
-      ];
-      return palette[idx % palette.length];
-    });
+    const colors = topProjects.map((_, idx) => PALETTE_COLORS[idx % PALETTE_COLORS.length]);
 
     const series = topProjects.map((project, idx) => {
       const seriesData = dates.map(date => projectDataMap.get(project)?.get(date) || 0);
-      const color = colors[idx % colors.length];
+      const color = PALETTE_COLORS[idx % PALETTE_COLORS.length];
       return {
         name: project,
         type: 'line',
