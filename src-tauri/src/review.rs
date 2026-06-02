@@ -176,8 +176,94 @@ fn calculate_hash<T: Hash>(t: &T) -> String {
     format!("{:x}", s.finish())
 }
 
+/// 辅助方法：遍历 Node 版本管理器中的 bin 文件夹
+fn find_node_version_bin_dirs(root: &std::path::Path, child_segments: &[&str]) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root) {
+        for entry in entries.flatten() {
+            if let Ok(file_type) = entry.file_type() {
+                if file_type.is_dir() || file_type.is_symlink() {
+                    let mut bin_path = entry.path();
+                    for seg in child_segments {
+                        bin_path = bin_path.join(seg);
+                    }
+                    if bin_path.exists() {
+                        result.push(bin_path);
+                    }
+                }
+            }
+        }
+    }
+    result
+}
+
+/// 扫描系统中常见但可能不在 GUI 进程默认 PATH 中的工具链目录
+fn get_well_known_toolchain_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    
+    // 获取 Home 目录
+    let home = std::env::var("USERPROFILE")
+        .ok()
+        .or_else(|| std::env::var("HOME").ok())
+        .map(PathBuf::from);
+
+    if let Some(home_path) = home {
+        dirs.push(home_path.join(".cargo").join("bin"));
+        dirs.push(home_path.join(".bun").join("bin"));
+        dirs.push(home_path.join(".volta").join("bin"));
+        dirs.push(home_path.join(".npm-global").join("bin"));
+        dirs.push(home_path.join(".npm-packages").join("bin"));
+        dirs.push(home_path.join(".local").join("bin"));
+        
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(app_data) = std::env::var("LOCALAPPDATA") {
+                let local_app_data = PathBuf::from(app_data);
+                let fnm_versions = local_app_data.join("fnm").join("node-versions");
+                dirs.extend(find_node_version_bin_dirs(&fnm_versions, &["installation", "bin"]));
+            }
+            if let Ok(app_data) = std::env::var("APPDATA") {
+                let roaming_app_data = PathBuf::from(app_data);
+                dirs.push(roaming_app_data.join("npm"));
+            }
+        }
+        
+        #[cfg(not(target_os = "windows"))]
+        {
+            let nvm_versions = home_path.join(".nvm").join("versions").join("node");
+            dirs.extend(find_node_version_bin_dirs(&nvm_versions, &["bin"]));
+            
+            let fnm_versions_1 = home_path.join(".local").join("share").join("fnm").join("node-versions");
+            dirs.extend(find_node_version_bin_dirs(&fnm_versions_1, &["installation", "bin"]));
+            
+            let fnm_versions_2 = home_path.join(".fnm").join("node-versions");
+            dirs.extend(find_node_version_bin_dirs(&fnm_versions_2, &["installation", "bin"]));
+        }
+    }
+    
+    if let Ok(prefix) = std::env::var("NPM_CONFIG_PREFIX").or_else(|_| std::env::var("npm_config_prefix")) {
+        let prefix_path = PathBuf::from(prefix.trim());
+        if !prefix_path.to_string_lossy().is_empty() {
+            dirs.push(prefix_path.join("bin"));
+            #[cfg(target_os = "windows")]
+            dirs.push(prefix_path.clone());
+        }
+    }
+    
+    #[cfg(not(target_os = "windows"))]
+    {
+        dirs.push(PathBuf::from("/opt/homebrew/bin"));
+        dirs.push(PathBuf::from("/usr/local/bin"));
+    }
+
+    dirs.into_iter()
+        .filter(|p| p.exists() && p.is_dir())
+        .collect()
+}
+
 /// 在 PATH 中查找可执行文件，Windows 下额外尝试 .cmd 和 .exe 后缀
 fn find_cli_in_path(bin: &str) -> Option<PathBuf> {
+    // 1. 尝试直接通过系统的 PATH 寻找
     if let Ok(path) = which::which(bin) {
         return Some(path);
     }
@@ -188,6 +274,28 @@ fn find_cli_in_path(bin: &str) -> Option<PathBuf> {
             let name = format!("{}{}", bin, suffix);
             if let Ok(path) = which::which(&name) {
                 return Some(path);
+            }
+        }
+    }
+
+    // 2. 遍历 well-known 目录进行补充搜索
+    let well_known_dirs = get_well_known_toolchain_dirs();
+    
+    #[cfg(target_os = "windows")]
+    let suffixes = &[".exe", ".cmd", ".bat", ""];
+    #[cfg(not(target_os = "windows"))]
+    let suffixes = &[""];
+
+    for dir in well_known_dirs {
+        for suffix in suffixes {
+            let file_name = if suffix.is_empty() {
+                bin.to_string()
+            } else {
+                format!("{}{}", bin, suffix)
+            };
+            let full_path = dir.join(&file_name);
+            if full_path.exists() && full_path.is_file() {
+                return Some(full_path);
             }
         }
     }
@@ -216,29 +324,71 @@ async fn probe_cli(bin: &str) -> CliToolInfo {
     #[cfg(target_os = "windows")]
     cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
 
-    let version = tokio::time::timeout(
+    let run_res = tokio::time::timeout(
         Duration::from_secs(5),
         cmd.output(),
     )
-    .await
-    .ok()
-    .and_then(|r| r.ok())
-    .and_then(|out| {
-        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-        let combined = if !stdout.is_empty() { stdout } else { stderr };
-        if combined.is_empty() {
-            None
-        } else {
-            Some(combined.lines().next().unwrap_or("").to_string())
-        }
-    });
+    .await;
 
-    CliToolInfo {
-        name: bin.to_string(),
-        available: true,
-        version,
-        path: Some(path_str),
+    match run_res {
+        // 超时，视作可调用，但由于未能提供版本因此设为 None
+        Err(_) => CliToolInfo {
+            name: bin.to_string(),
+            available: true,
+            version: None,
+            path: Some(path_str),
+        },
+        Ok(Err(io_err)) => {
+            // IO 级别错误：若文件无法启动（NotFound、PermissionDenied 等），标记为不可调用
+            let is_not_invocable = matches!(
+                io_err.kind(),
+                std::io::ErrorKind::NotFound | std::io::ErrorKind::PermissionDenied
+            );
+            CliToolInfo {
+                name: bin.to_string(),
+                available: !is_not_invocable,
+                version: None,
+                path: Some(path_str),
+            }
+        }
+        Ok(Ok(output)) => {
+            let exit_code = output.status.code();
+            // 退出状态码 126/127/9009 代表解释器/底层文件损坏丢失，不可调用
+            let is_not_invocable = matches!(exit_code, Some(126) | Some(127) | Some(9009));
+
+            if is_not_invocable {
+                CliToolInfo {
+                    name: bin.to_string(),
+                    available: false,
+                    version: None,
+                    path: Some(path_str),
+                }
+            } else {
+                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                let combined = if !stdout.is_empty() { stdout } else { stderr };
+                
+                // 特殊：Windows CMD/NPM shim 目标损坏时的中英文错误标志，防止 Windows 环境 GBK 乱码导致匹配失败
+                let is_broken_shim = combined.contains("系统找不到指定的路径") 
+                    || combined.contains("找不到文件")
+                    || combined.contains("The system cannot find the path specified")
+                    || combined.contains("is not recognized as an internal or external command")
+                    || combined.contains("不是内部或外部命令");
+                
+                let version = if combined.is_empty() || is_broken_shim {
+                    None
+                } else {
+                    Some(combined.lines().next().unwrap_or("").to_string())
+                };
+
+                CliToolInfo {
+                    name: bin.to_string(),
+                    available: !is_broken_shim,
+                    version,
+                    path: Some(path_str),
+                }
+            }
+        }
     }
 }
 
@@ -2385,6 +2535,83 @@ pub async fn handle_delete_prompt_template(
                 .body(Body::from(serde_json::json!({ "success": false, "message": "删除模板失败" }).to_string()))
                 .unwrap()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::File;
+    use std::io::Write;
+
+    #[tokio::test]
+    async fn test_well_known_dirs() {
+        let dirs = get_well_known_toolchain_dirs();
+        // 验证过滤存在性后，返回的全部是真实存在的目录
+        for d in &dirs {
+            assert!(d.exists());
+            assert!(d.is_dir());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_probe_non_existent_cli() {
+        let info = probe_cli("non_existent_crazy_cli_tool_xxx").await;
+        assert_eq!(info.available, false);
+        assert_eq!(info.version, None);
+        assert_eq!(info.path, None);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[tokio::test]
+    async fn test_probe_broken_cmd_shim() {
+        let temp_dir = std::env::temp_dir();
+        let shim_path = temp_dir.join("test_broken_ghost_cli.cmd");
+        
+        // 模拟一个损坏的 npm 批处理代理
+        // 写入中英文混合的找不到指定路径字眼，以防在非中文 Windows 系统下匹配失败
+        let mut file = File::create(&shim_path).unwrap();
+        writeln!(file, "@echo off\necho 系统找不到指定的路径。 >&2\necho The system cannot find the path specified. >&2\nexit /b 1").unwrap();
+        drop(file);
+
+        let path_str = shim_path.to_string_lossy().to_string();
+        let info = probe_cli(&path_str).await;
+        
+        // 清理
+        let _ = std::fs::remove_file(&shim_path);
+
+        // 验证它必须被判定为 available: false 
+        assert_eq!(info.available, false);
+        assert_eq!(info.version, None);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[tokio::test]
+    async fn test_probe_broken_unix_shim() {
+        let temp_dir = std::env::temp_dir();
+        let shim_path = temp_dir.join("test_broken_ghost_cli");
+        
+        // 模拟 Unix 下返回 127/126 的不可用 shim
+        let mut file = File::create(&shim_path).unwrap();
+        writeln!(file, "#!/bin/sh\nexit 127").unwrap();
+        drop(file);
+
+        // 赋予执行权限
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&shim_path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let path_str = shim_path.to_string_lossy().to_string();
+        let info = probe_cli(&path_str).await;
+
+        // 清理
+        let _ = std::fs::remove_file(&shim_path);
+
+        // 验证必须被判定为 available: false
+        assert_eq!(info.available, false);
+        assert_eq!(info.version, None);
     }
 }
 
