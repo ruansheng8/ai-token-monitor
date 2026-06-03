@@ -16,6 +16,10 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge" alt="MIT License"></a>
 </p>
 
+<p align="center">
+  <img src="docs/superpowers/assets/dashboard.png" alt="Token Insight Dashboard" width="100%" />
+</p>
+
 **Token Insight** 是一款专为本地 AI 助手打造的 *Token 消耗用量统计仪表盘*（完美适配 Antigravity/Gemini、Claude Code、Codex、Cursor 等主流 AI 编程工具）。
 
 它通过动态解码本地用量文件，直观呈现 API 用量明细、每日/月度使用趋势以及模型用量占比。
