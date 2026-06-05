@@ -21,6 +21,11 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
+
+  interface FileWithRelativePath extends File {
+    relativePath?: string;
+  }
 
   const fetchSkills = async () => {
     setLoading(true);
@@ -43,7 +48,10 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
 
   useEffect(() => {
     if (isOpen) {
-      fetchSkills();
+      const timer = setTimeout(() => {
+        fetchSkills();
+      }, 0);
+      return () => clearTimeout(timer);
     }
   }, [isOpen]);
 
@@ -59,37 +67,117 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
     }
   };
 
+  const traverseFileTree = async (item: DataTransferItem): Promise<FileWithRelativePath[]> => {
+    const entry = item.webkitGetAsEntry();
+    if (!entry) return [];
+
+    const files: FileWithRelativePath[] = [];
+
+    const traverse = async (entry: FileSystemEntry, path: string = ""): Promise<void> => {
+      if (entry.isFile) {
+        await new Promise<void>((resolve) => {
+          (entry as FileSystemFileEntry).file((file) => {
+            const fileWithPath = file as FileWithRelativePath;
+            fileWithPath.relativePath = path + entry.name;
+            files.push(fileWithPath);
+            resolve();
+          }, () => resolve());
+        });
+      } else if (entry.isDirectory) {
+        const dirReader = (entry as FileSystemDirectoryEntry).createReader();
+        const readEntries = (): Promise<FileSystemEntry[]> => {
+          return new Promise((resolve) => {
+            dirReader.readEntries((entries) => resolve(entries), () => resolve([]));
+          });
+        };
+
+        let entries = await readEntries();
+        const allEntries: FileSystemEntry[] = [];
+        while (entries.length > 0) {
+          allEntries.push(...entries);
+          entries = await readEntries();
+        }
+
+        for (const e of allEntries) {
+          await traverse(e, path + entry.name + "/");
+        }
+      }
+    };
+
+    await traverse(entry);
+    return files;
+  };
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
     setDragActive(false);
     setErrorMsg(null);
 
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const file = e.dataTransfer.files[0];
-      await uploadFile(file);
+    if (e.dataTransfer.items && e.dataTransfer.items.length > 0) {
+      setUploading(true);
+      try {
+        const filePromises: Promise<FileWithRelativePath[]>[] = [];
+        for (let i = 0; i < e.dataTransfer.items.length; i++) {
+          const item = e.dataTransfer.items[i];
+          if (item.kind === 'file') {
+            filePromises.push(traverseFileTree(item));
+          }
+        }
+        const fileArrays = await Promise.all(filePromises);
+        const files = fileArrays.flat();
+        if (files.length > 0) {
+          await uploadFiles(files);
+        }
+      } catch (err) {
+        setErrorMsg('解析拖入的文件/文件夹失败');
+        console.error(err);
+      } finally {
+        setUploading(false);
+      }
+    } else if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const filesArray = Array.from(e.dataTransfer.files) as FileWithRelativePath[];
+      await uploadFiles(filesArray);
     }
   };
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setErrorMsg(null);
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      await uploadFile(file);
+    if (e.target.files && e.target.files.length > 0) {
+      const filesArray = Array.from(e.target.files) as FileWithRelativePath[];
+      await uploadFiles(filesArray);
     }
   };
 
-  const uploadFile = async (file: File) => {
-    const isZip = file.name.endsWith('.zip');
-    const is7z = file.name.endsWith('.7z');
-    if (!isZip && !is7z) {
-      setErrorMsg('仅支持上传 .zip 或 .7z 压缩包');
-      return;
+  const handleFolderChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    setErrorMsg(null);
+    if (e.target.files && e.target.files.length > 0) {
+      const filesArray = Array.from(e.target.files) as FileWithRelativePath[];
+      await uploadFiles(filesArray);
     }
+  };
+
+  const uploadFiles = async (files: FileWithRelativePath[]) => {
+    if (files.length === 0) return;
 
     setUploading(true);
     const formData = new FormData();
-    formData.append('file', file);
+
+    const isSingleArchive =
+      files.length === 1 &&
+      (files[0].name.endsWith('.zip') || files[0].name.endsWith('.7z'));
+
+    if (isSingleArchive) {
+      formData.append('file', files[0]);
+    } else {
+      for (const file of files) {
+        const name = file.name;
+        if (name === '.DS_Store' || name === 'Thumbs.db') continue;
+
+        const path = file.relativePath || file.webkitRelativePath || file.name;
+        formData.append('files', file, path);
+      }
+    }
 
     try {
       const res = await fetch(apiUrl('/review/skills/upload'), {
@@ -101,9 +189,10 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
         fetchSkills();
         onRefreshSkills();
         if (fileInputRef.current) fileInputRef.current.value = '';
+        if (folderInputRef.current) folderInputRef.current.value = '';
       } else {
         const text = await res.text();
-        setErrorMsg(text || '上传失败，请检查压缩包是否符合 Claude 技能规范');
+        setErrorMsg(text || '上传失败，请检查压缩包或文件夹是否符合 Claude 技能规范');
       }
     } catch (e) {
       setErrorMsg('上传发生网络异常，请重试');
@@ -185,8 +274,7 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
             onDragOver={handleDrag}
             onDragLeave={handleDrag}
             onDrop={handleDrop}
-            onClick={() => fileInputRef.current?.click()}
-            className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all duration-300 ${
+            className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center gap-2 transition-all duration-300 ${
               dragActive
                 ? 'border-teal-500 bg-teal-50/50'
                 : 'border-slate-200 hover:border-slate-300 bg-slate-50/50 hover:bg-slate-50'
@@ -199,22 +287,45 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
               accept=".zip,.7z"
               className="hidden"
             />
+            <input
+              type="file"
+              ref={folderInputRef}
+              onChange={handleFolderChange}
+              {...{ webkitdirectory: "", directory: "", multiple: true }}
+              className="hidden"
+            />
             {uploading ? (
               <div className="flex flex-col items-center gap-2">
                 <div className="w-8 h-8 border-2 border-teal-500 border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm text-teal-600 font-medium">正在解析解压技能包...</span>
+                <span className="text-sm text-teal-600 font-medium">正在上传解析技能包...</span>
               </div>
             ) : (
               <>
                 <svg className="w-10 h-10 text-slate-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
-                <div className="text-center">
+                <div className="text-center space-y-3">
                   <p className="text-sm font-medium text-slate-700">
-                    点击选择 或 将 `.zip` / `.7z` 压缩包拖拽至此
+                    拖拽 `.zip` / `.7z` 压缩包或整个技能文件夹至此
                   </p>
+                  <div className="flex gap-4 justify-center">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="px-3.5 py-2 bg-teal-500 hover:bg-teal-600 text-white rounded-xl text-xs font-semibold shadow transition-all duration-200 cursor-pointer"
+                    >
+                      选择压缩文件
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => folderInputRef.current?.click()}
+                      className="px-3.5 py-2 bg-white hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold border border-slate-200 shadow-sm transition-all duration-200 cursor-pointer"
+                    >
+                      选择技能文件夹
+                    </button>
+                  </div>
                   <p className="text-xs text-slate-500 mt-1">
-                    压缩包内需包含含有 `SKILL.md` 的文件夹，符合 Claude Skills 规范
+                    压缩包或文件夹内需包含包含 `SKILL.md` 的文件夹，符合 Claude Skills 规范
                   </p>
                 </div>
               </>

@@ -3104,28 +3104,71 @@ pub async fn handle_list_skills() -> impl IntoResponse {
         .unwrap()
 }
 
+fn validate_uploaded_skills(temp_dir: &std::path::Path, default_folder_name: &str) -> Result<Vec<(std::path::PathBuf, String)>, String> {
+    let mut found_dirs = Vec::new();
+    find_skills_directories(temp_dir, &mut found_dirs);
+
+    if found_dirs.is_empty() {
+        return Err("未检测到符合 Claude 技能规范的 SKILL.md 文件".to_string());
+    }
+
+    let mut validated_skills = Vec::new();
+
+    for skill_dir in found_dirs {
+        let folder_name = skill_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        let folder_name = if folder_name.is_empty() || folder_name.starts_with("temp_") {
+            default_folder_name.to_string()
+        } else {
+            folder_name
+        };
+
+        if folder_name.contains('/') || folder_name.contains('\\') || folder_name.contains("..") {
+            return Err(format!("非法的技能目录名称: {}", folder_name));
+        }
+
+        let skill_md_path = skill_dir.join("SKILL.md");
+        if !skill_md_path.exists() {
+            return Err(format!("目录「{}」缺少 SKILL.md", folder_name));
+        }
+
+        let content = std::fs::read_to_string(&skill_md_path)
+            .map_err(|e| format!("无法读取技能「{}」的 SKILL.md: {}", folder_name, e))?;
+
+        let (name, _description) = parse_skill_md_frontmatter(&content);
+        if name.trim().is_empty() {
+            return Err(format!("技能「{}」的 SKILL.md 缺少有效的 name 前言字段", folder_name));
+        }
+
+        validated_skills.push((skill_dir, folder_name));
+    }
+
+    Ok(validated_skills)
+}
+
 /// POST /api/review/skills/upload
-/// 上传并解压自定义技能压缩包 (.zip 或 .7z)
+/// 上传并解压自定义技能压缩包 (.zip 或 .7z) 或 直接上传技能文件夹中包含的多个文件
 pub async fn handle_upload_skills(
     mut multipart: axum::extract::Multipart,
 ) -> impl IntoResponse {
-    let mut file_data = Vec::new();
-    let mut file_name = String::new();
+    let mut files = Vec::new(); // 存储 (相对路径名, 文件内容)
 
     while let Ok(Some(field)) = multipart.next_field().await {
-        if let Some(name) = field.name() {
-            if name == "file" {
-                if let Some(f_name) = field.file_name() {
-                    file_name = f_name.to_string();
-                }
+        let f_name = field.file_name().map(|s| s.to_string());
+        if let Some(name) = f_name {
+            if !name.is_empty() {
                 if let Ok(bytes) = field.bytes().await {
-                    file_data = bytes.to_vec();
+                    files.push((name, bytes.to_vec()));
                 }
             }
         }
     }
 
-    if file_data.is_empty() {
+    if files.is_empty() {
         return Response::builder()
             .status(StatusCode::BAD_REQUEST)
             .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
@@ -3144,154 +3187,213 @@ pub async fn handle_upload_skills(
     let _ = std::fs::create_dir_all(&temp_root);
     let uuid = format!("temp_{}", chrono::Utc::now().timestamp_millis());
     let temp_dir = temp_root.join(&uuid);
-    let _ = std::fs::create_dir_all(&temp_dir);
-
-    let is_zip = file_name.ends_with(".zip");
-    let is_7z = file_name.ends_with(".7z");
-
-    if !is_zip && !is_7z {
-        let _ = std::fs::remove_dir_all(&temp_dir);
+    if let Err(e) = std::fs::create_dir_all(&temp_dir) {
         return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .body(Body::from("仅支持上传 .zip 或 .7z 压缩包"))
+            .body(Body::from(format!("创建临时目录失败: {}", e)))
             .unwrap();
     }
 
-    if is_zip {
-        let temp_zip_path = temp_dir.join("upload.zip");
-        if std::fs::write(&temp_zip_path, &file_data).is_err() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(Body::from("写入临时文件失败"))
-                .unwrap();
-        }
+    // 判断是否为单压缩包上传
+    let is_archive_upload = files.len() == 1
+        && (files[0].0.ends_with(".zip") || files[0].0.ends_with(".7z"));
 
-        let file = match std::fs::File::open(&temp_zip_path) {
-            Ok(f) => f,
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&temp_dir);
+    let default_folder_name = if is_archive_upload {
+        files[0].0.strip_suffix(".zip")
+            .or_else(|| files[0].0.strip_suffix(".7z"))
+            .unwrap_or("custom_skill")
+            .to_string()
+    } else {
+        // 针对文件夹上传，提取第一个文件路径的第一级目录名作为默认名称
+        let first_path = &files[0].0;
+        let normalized = first_path.replace('\\', "/");
+        let parts: Vec<&str> = normalized.split('/').collect();
+        if parts.len() > 1 && !parts[0].is_empty() {
+            parts[0].to_string()
+        } else {
+            "custom_skill".to_string()
+        }
+    };
+
+    let cleanup_temp = || {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    };
+
+    if is_archive_upload {
+        let (file_name, file_data) = files.remove(0);
+        let is_zip = file_name.ends_with(".zip");
+        let is_7z = file_name.ends_with(".7z");
+
+        if is_zip {
+            let temp_zip_path = temp_dir.join("upload.zip");
+            if std::fs::write(&temp_zip_path, &file_data).is_err() {
+                cleanup_temp();
                 return Response::builder()
                     .status(StatusCode::INTERNAL_SERVER_ERROR)
                     .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
                     .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .body(Body::from(format!("打开临时文件失败: {}", e)))
+                    .body(Body::from("写入临时文件失败"))
                     .unwrap();
             }
-        };
 
-        let mut archive = match zip::ZipArchive::new(file) {
-            Ok(a) => a,
-            Err(e) => {
-                let _ = std::fs::remove_dir_all(&temp_dir);
+            let file = match std::fs::File::open(&temp_zip_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    cleanup_temp();
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("打开临时文件失败: {}", e)))
+                        .unwrap();
+                }
+            };
+
+            let mut archive = match zip::ZipArchive::new(file) {
+                Ok(a) => a,
+                Err(e) => {
+                    cleanup_temp();
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("无效的 ZIP 压缩包: {}", e)))
+                        .unwrap();
+                }
+            };
+
+            for i in 0..archive.len() {
+                let mut file = match archive.by_index(i) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                let outpath = match file.enclosed_name() {
+                    Some(path) => temp_dir.join(path),
+                    None => continue,
+                };
+
+                if (*file.name()).ends_with('/') {
+                    let _ = std::fs::create_dir_all(&outpath);
+                } else {
+                    if let Some(p) = outpath.parent() {
+                        let _ = std::fs::create_dir_all(p);
+                    }
+                    let mut outfile = match std::fs::File::create(&outpath) {
+                        Ok(f) => f,
+                        Err(_) => continue,
+                    };
+                    let _ = std::io::copy(&mut file, &mut outfile);
+                }
+            }
+            let _ = std::fs::remove_file(&temp_zip_path);
+        } else if is_7z {
+            let temp_7z_path = temp_dir.join("upload.7z");
+            if std::fs::write(&temp_7z_path, &file_data).is_err() {
+                cleanup_temp();
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Body::from("写入临时文件失败"))
+                    .unwrap();
+            }
+
+            if let Err(e) = sevenz_rust::decompress_file(&temp_7z_path, &temp_dir) {
+                cleanup_temp();
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
                     .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
                     .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .body(Body::from(format!("无效的 ZIP 压缩包: {}", e)))
+                    .body(Body::from(format!("7z 解压失败: {}", e)))
                     .unwrap();
             }
-        };
+            let _ = std::fs::remove_file(&temp_7z_path);
+        }
+    } else {
+        // 直接上传文件夹子文件列表
+        for (rel_path, file_data) in files {
+            // 防路径遍历安全检查
+            if rel_path.contains("..") || rel_path.starts_with('/') || rel_path.starts_with('\\') {
+                cleanup_temp();
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Body::from(format!("非法的相对路径: {}", rel_path)))
+                    .unwrap();
+            }
 
-        for i in 0..archive.len() {
-            let mut file = match archive.by_index(i) {
-                Ok(f) => f,
-                Err(_) => continue,
-            };
-            let outpath = match file.enclosed_name() {
-                Some(path) => temp_dir.join(path),
-                None => continue,
-            };
-
-            if (*file.name()).ends_with('/') {
-                let _ = std::fs::create_dir_all(&outpath);
-            } else {
-                if let Some(p) = outpath.parent() {
-                    let _ = std::fs::create_dir_all(p);
+            let outpath = temp_dir.join(&rel_path);
+            if let Some(p) = outpath.parent() {
+                if let Err(e) = std::fs::create_dir_all(p) {
+                    cleanup_temp();
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("创建临时子目录失败: {}", e)))
+                        .unwrap();
                 }
-                let mut outfile = match std::fs::File::create(&outpath) {
-                    Ok(f) => f,
-                    Err(_) => continue,
-                };
-                let _ = std::io::copy(&mut file, &mut outfile);
+            }
+
+            if let Err(e) = std::fs::write(&outpath, &file_data) {
+                cleanup_temp();
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Body::from(format!("写入临时文件失败: {}", e)))
+                    .unwrap();
             }
         }
-        let _ = std::fs::remove_file(&temp_zip_path);
-    } else if is_7z {
-        let temp_7z_path = temp_dir.join("upload.7z");
-        if std::fs::write(&temp_7z_path, &file_data).is_err() {
-            let _ = std::fs::remove_dir_all(&temp_dir);
-            return Response::builder()
-                .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
-                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(Body::from("写入临时文件失败"))
-                .unwrap();
-        }
+    }
 
-        if let Err(e) = sevenz_rust::decompress_file(&temp_7z_path, &temp_dir) {
-            let _ = std::fs::remove_dir_all(&temp_dir);
+    // 持久化保存前，统一进行校验
+    let validated_skills = match validate_uploaded_skills(&temp_dir, &default_folder_name) {
+        Ok(v) => v,
+        Err(e) => {
+            cleanup_temp();
             return Response::builder()
                 .status(StatusCode::BAD_REQUEST)
                 .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
                 .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                .body(Body::from(format!("7z 解压失败: {}", e)))
+                .body(Body::from(format!("格式校验失败：{}", e)))
                 .unwrap();
         }
-        let _ = std::fs::remove_file(&temp_7z_path);
-    }
+    };
 
-    // 递归寻找包含 SKILL.md 的目录
-    let mut found_dirs = Vec::new();
-    find_skills_directories(&temp_dir, &mut found_dirs);
-
-    if found_dirs.is_empty() {
-        let _ = std::fs::remove_dir_all(&temp_dir);
+    let dest_skills_root = get_user_skills_dir();
+    if let Err(e) = std::fs::create_dir_all(&dest_skills_root) {
+        cleanup_temp();
         return Response::builder()
-            .status(StatusCode::BAD_REQUEST)
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
             .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
             .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-            .body(Body::from("压缩包中未检测到 Claude 规范的 SKILL.md 文件"))
+            .body(Body::from(format!("创建技能持久化根目录失败: {}", e)))
             .unwrap();
     }
 
-    let dest_skills_root = get_user_skills_dir();
-    let _ = std::fs::create_dir_all(&dest_skills_root);
-
-    for skill_dir in found_dirs {
-        let folder_name = skill_dir
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-
-        let folder_name = if folder_name == uuid || folder_name.is_empty() {
-            file_name
-                .strip_suffix(".zip")
-                .or_else(|| file_name.strip_suffix(".7z"))
-                .unwrap_or("custom_skill")
-                .to_string()
-        } else {
-            folder_name
-        };
-
-        if folder_name.contains('/') || folder_name.contains('\\') || folder_name.contains("..") {
-            continue;
-        }
-
+    // 将校验通过的技能持久化移动/覆盖到最终目录
+    for (skill_dir, folder_name) in validated_skills {
         let target_dir = dest_skills_root.join(&folder_name);
         if target_dir.exists() {
             let _ = std::fs::remove_dir_all(&target_dir);
         }
 
-        let _ = copy_dir_all(&skill_dir, &target_dir);
+        if let Err(e) = copy_dir_all(&skill_dir, &target_dir) {
+            cleanup_temp();
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(format!("持久化拷贝技能「{}」失败: {}", folder_name, e)))
+                .unwrap();
+        }
     }
 
-    let _ = std::fs::remove_dir_all(&temp_dir);
+    cleanup_temp();
 
     Response::builder()
         .status(StatusCode::OK)
@@ -3489,6 +3591,38 @@ mod tests {
             let _ = std::fs::remove_dir_all(&task_dir);
         }
         assert!(!task_dir.exists());
+    }
+
+    #[test]
+    fn test_validate_uploaded_skills() {
+        let temp_dir = std::env::temp_dir().join(format!("test_validate_{}", chrono::Utc::now().timestamp_millis()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+
+        // Case 1: 无 SKILL.md
+        let res = validate_uploaded_skills(&temp_dir, "test_default");
+        assert!(res.is_err());
+        assert!(res.err().unwrap().contains("未检测到符合 Claude 技能规范的 SKILL.md 文件"));
+
+        // Case 2: 有 SKILL.md 但无 name 前言
+        let skill_a = temp_dir.join("skill_a");
+        let _ = std::fs::create_dir_all(&skill_a);
+        let skill_md_path = skill_a.join("SKILL.md");
+        std::fs::write(&skill_md_path, "---\ndescription: \"Only description\"\n---\n").unwrap();
+
+        let res = validate_uploaded_skills(&temp_dir, "test_default");
+        assert!(res.is_err());
+        assert!(res.err().unwrap().contains("缺少有效的 name 前言字段"));
+
+        // Case 3: 有 SKILL.md 且包含 valid name
+        std::fs::write(&skill_md_path, "---\nname: \"My Valid Skill\"\ndescription: \"With description\"\n---\n").unwrap();
+        let res = validate_uploaded_skills(&temp_dir, "test_default");
+        assert!(res.is_ok());
+        let validated = res.unwrap();
+        assert_eq!(validated.len(), 1);
+        assert_eq!(validated[0].1, "skill_a");
+
+        // 清理
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }
 
