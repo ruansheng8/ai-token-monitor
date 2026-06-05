@@ -946,7 +946,7 @@ pub async fn handle_create_task(
                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
                 progress_stage, progress_percent, status_message, created_at, compare_metrics_snapshot_json,
                 template_id, selected_skills_json
-            ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', 5, '任务已创建', ?, ?, ?, ?, ?)",
+            ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', 5, '任务已创建', ?, ?, ?, ?)",
             rusqlite::params![
                 task_id, title, req.cli, cli_path, req.time_range, selected_ides_json,
                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
