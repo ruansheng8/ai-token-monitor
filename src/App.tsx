@@ -144,6 +144,13 @@ interface DeviceTrendItem {
   cost: number;
 }
 
+interface ModelTrendItem {
+  date: string;
+  model_name: string;
+  tokens: number;
+  cost: number;
+}
+
 interface ModelPerformance {
   model: string;
   avg_latency: number;
@@ -191,6 +198,7 @@ interface AggregatedMetrics {
   sessions: SessionItem[];
   source_trends: SourceTrendItem[];
   device_trends: DeviceTrendItem[];
+  model_trends: ModelTrendItem[];
   model_performance: ModelPerformance[];
   performance_trends: PerformanceTrend[];
   project_trends: ProjectTrendItem[];
@@ -325,7 +333,7 @@ export default function App() {
   useEffect(() => {
     stateRef.current = { source, startDate, endDate, pageSize, searchKeyword, sortField, sortOrder, hideZero, currentPage };
   }, [source, startDate, endDate, pageSize, searchKeyword, sortField, sortOrder, hideZero, currentPage]);
-  const [chartDimension, setChartDimension] = useState<'type' | 'source' | 'device'>('type');
+  const [chartDimension, setChartDimension] = useState<'type' | 'source' | 'device' | 'model'>('type');
 
   // 数据库数据源配置状态
   const [isConfigOpen, setIsConfigOpen] = useState(false);
@@ -1609,6 +1617,8 @@ export default function App() {
                 ? '各引擎每日用量对比走势 (Token 堆叠柱状图)' 
                 : chartDimension === 'device' 
                 ? '各设备每日用量对比走势 (Token 堆叠柱状图)' 
+                : chartDimension === 'model'
+                ? '各模型每日用量对比走势 (Token 堆叠柱状图)'
                 : '每日用量走势 (Token 堆叠柱状图)'}
             </h2>
             
@@ -1636,6 +1646,16 @@ export default function App() {
                 </button>
               )}
               <button
+                onClick={() => setChartDimension('model')}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
+                  chartDimension === 'model'
+                    ? 'bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_10px_rgba(6,182,212,0.15)]'
+                    : 'text-text-secondary hover:text-text-primary hover:bg-white/5'
+                }`}
+              >
+                🤖 模型维度
+              </button>
+              <button
                 onClick={() => setChartDimension('device')}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer ${
                   chartDimension === 'device'
@@ -1658,6 +1678,12 @@ export default function App() {
               ) : chartDimension === 'device' ? (
                 data?.device_trends && data.device_trends.length > 0 ? (
                   <DailyTrendChart data={data.daily_trends} deviceTrends={data.device_trends} dimension="device" theme={theme} />
+                ) : (
+                  <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
+                )
+              ) : chartDimension === 'model' ? (
+                data?.model_trends && data.model_trends.length > 0 ? (
+                  <DailyTrendChart data={data.daily_trends} modelTrends={data.model_trends} dimension="model" theme={theme} />
                 ) : (
                   <div className="h-[300px] flex items-center justify-center text-text-muted italic">暂无趋势图表数据</div>
                 )
@@ -3480,7 +3506,7 @@ export default function App() {
           {/* 报表头部 */}
           <div className="flex justify-between items-center pb-4 border-b border-card-border">
             <div className="flex flex-col gap-1.5">
-              <h1 className="text-2xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">
+              <h1 className="text-2xl font-bold text-neon-cyan tracking-tight">
                 📸 Token Insight 数据分析报表
               </h1>
               <p className="text-xs text-text-secondary font-medium">
@@ -3594,6 +3620,22 @@ export default function App() {
                   <SourceTrendChart data={data.source_trends} theme={theme} />
                 ) : (
                   <div className="h-full flex items-center justify-center text-text-muted italic text-xs">暂无引擎对比图表数据</div>
+                )}
+              </Suspense>
+            </div>
+          </div>
+
+          {/* 各模型每日用量对比走势 (模型维度) */}
+          <div className="chart-section glass-card p-5 flex flex-col gap-4">
+            <div className="pb-3 border-b border-card-border">
+              <h2 className="text-sm font-semibold text-text-primary">各模型每日用量对比走势 (Token 堆叠柱状图) - 模型维度</h2>
+            </div>
+            <div className="w-full h-[300px]">
+              <Suspense fallback={<ChartFallback />}>
+                {data.model_trends && data.model_trends.length > 0 ? (
+                  <DailyTrendChart data={data.daily_trends} modelTrends={data.model_trends} dimension="model" theme={theme} />
+                ) : (
+                  <div className="h-full flex items-center justify-center text-text-muted italic text-xs">暂无模型对比图表数据</div>
                 )}
               </Suspense>
             </div>

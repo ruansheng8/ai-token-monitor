@@ -17,10 +17,18 @@ interface DeviceTrendItem {
   cost: number;
 }
 
+interface ModelTrendItem {
+  date: string;
+  model_name: string;
+  tokens: number;
+  cost: number;
+}
+
 interface DailyTrendChartProps {
   data: DailyTrend[];
   deviceTrends?: DeviceTrendItem[];
-  dimension?: 'type' | 'device';
+  modelTrends?: ModelTrendItem[];
+  dimension?: 'type' | 'device' | 'model';
   theme: 'light' | 'dark';
 }
 
@@ -67,7 +75,7 @@ const formatValueWithUnit = (val: number) => {
   return precise;
 };
 
-export function DailyTrendChart({ data = [], deviceTrends = [], dimension = 'type', theme }: DailyTrendChartProps) {
+export function DailyTrendChart({ data = [], deviceTrends = [], modelTrends = [], dimension = 'type', theme }: DailyTrendChartProps) {
   const isDark = theme === 'dark';
 
   const chartOption = useMemo(() => {
@@ -97,6 +105,55 @@ export function DailyTrendChart({ data = [], deviceTrends = [], dimension = 'typ
         const seriesData = dates.map(date => deviceDataMap.get(device)?.get(date) || 0);
         return {
           name: device,
+          type: 'bar',
+          stack: 'total',
+          data: seriesData,
+          itemStyle: {
+            borderRadius: 4,
+            borderColor: borderColor,
+            borderWidth: 1.5,
+          },
+        };
+      });
+    } else if (dimension === 'model' && modelTrends && modelTrends.length > 0) {
+      // 限制前 8 的模型，其余归入“其他 (Others)”
+      const modelTotalMap = new Map<string, number>();
+      modelTrends.forEach(t => {
+        const mName = t.model_name || 'unknown-model';
+        modelTotalMap.set(mName, (modelTotalMap.get(mName) || 0) + t.tokens);
+      });
+
+      const sortedModels = Array.from(modelTotalMap.entries())
+        .sort((a, b) => b[1] - a[1])
+        .map(entry => entry[0]);
+
+      const top8Models = sortedModels.slice(0, 8);
+      const hasOthers = sortedModels.length > 8;
+
+      const modelDataMap = new Map<string, Map<string, number>>();
+      modelTrends.forEach(t => {
+        let mName = t.model_name || 'unknown-model';
+        if (!top8Models.includes(mName)) {
+          mName = '其他 (Others)';
+        }
+        if (!modelDataMap.has(mName)) {
+          modelDataMap.set(mName, new Map<string, number>());
+        }
+        const dateMap = modelDataMap.get(mName)!;
+        dateMap.set(t.date, (dateMap.get(t.date) || 0) + t.tokens);
+      });
+
+      const chartModels = [...top8Models];
+      if (hasOthers) {
+        chartModels.push('其他 (Others)');
+      }
+
+      colors = chartModels.map((_, idx) => DEVICE_COLORS[idx % DEVICE_COLORS.length]);
+
+      series = chartModels.map((model) => {
+        const seriesData = dates.map(date => modelDataMap.get(model)?.get(date) || 0);
+        return {
+          name: model,
           type: 'bar',
           stack: 'total',
           data: seriesData,
@@ -267,7 +324,7 @@ export function DailyTrendChart({ data = [], deviceTrends = [], dimension = 'typ
       },
       series: series
     };
-  }, [data, deviceTrends, dimension, isDark]);
+  }, [data, deviceTrends, modelTrends, dimension, isDark]);
 
   return (
     <div style={{ height: '300px', width: '100%' }}>

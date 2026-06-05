@@ -2798,6 +2798,14 @@ pub struct DeviceTrend {
     pub cost: f64,
 }
 
+#[derive(Serialize, Clone, Debug)]
+pub struct ModelTrend {
+    pub date: String,
+    pub model_name: String,
+    pub tokens: i64,
+    pub cost: f64,
+}
+
 #[derive(Serialize)]
 pub struct ModelPerformance {
     pub model: String,
@@ -3321,6 +3329,7 @@ pub struct AggregatedMetrics {
     pub sessions: Vec<SessionItem>,
     pub source_trends: Vec<SourceTrend>,
     pub device_trends: Vec<DeviceTrend>,
+    pub model_trends: Vec<ModelTrend>,
     pub project_trends: Vec<ProjectTrend>,
     pub project_rankings: Vec<ProjectRanking>,
     pub model_performance: Vec<ModelPerformance>,
@@ -3816,6 +3825,39 @@ pub fn get_aggregated_metrics_from_cache(
         });
     }
 
+    // F2.5. 新增：模型用量每日对比走势 (ModelTrends - 查 turns 与 sessions 关联)
+    let sql_model_trends = format!(
+        "SELECT 
+            substr(s.created_at, 1, 10) as date,
+            t.model as model_name,
+            SUM(t.input_tokens + t.output_tokens) as total_tokens,
+            SUM(t.cost_usd) as cost
+        FROM sessions s
+        INNER JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {} {}
+        GROUP BY date, model_name
+        ORDER BY date ASC, model_name ASC",
+        where_clause_raw,
+        if where_clause_raw.is_empty() { "WHERE t.model IS NOT NULL AND t.model != 'unknown' AND t.model != ''" } else { "AND t.model IS NOT NULL AND t.model != 'unknown' AND t.model != ''" }
+    );
+
+    let mut stmt_model = conn.prepare(&sql_model_trends)?;
+    let mut rows_model = stmt_model.query(rusqlite::params_from_iter(params_raw.clone()))?;
+
+    let mut model_trends = Vec::new();
+    while let Some(row) = rows_model.next()? {
+        let date: Option<String> = row.get(0)?;
+        let model_name: String = row.get(1)?;
+        let tokens: Option<i64> = row.get(2)?;
+        let cost: Option<f64> = row.get(3)?;
+        model_trends.push(ModelTrend {
+            date: date.unwrap_or_default(),
+            model_name,
+            tokens: tokens.unwrap_or(0),
+            cost: cost.unwrap_or(0.0),
+        });
+    }
+
     let display_currency = get_display_currency();
     let (usd_exchange_rate, exchange_rate_updated_at) = get_exchange_rate(&conn, &display_currency)?;
 
@@ -3827,6 +3869,7 @@ pub fn get_aggregated_metrics_from_cache(
         sessions,
         source_trends,
         device_trends,
+        model_trends,
         project_trends,
         project_rankings,
         model_performance,
@@ -5036,6 +5079,37 @@ pub fn get_pg_aggregated_metrics(
         });
     }
 
+    // 9. Model Trends (实时联合查询)
+    let sql_model_trends = format!(
+        "SELECT 
+            SUBSTR(s.created_at, 1, 10) as date,
+            t.model as model_name,
+            CAST(SUM(t.input_tokens + t.output_tokens) AS BIGINT) as total_tokens,
+            SUM(t.cost_usd) as cost
+        FROM sessions s
+        INNER JOIN turns t ON s.source = t.source AND s.uuid = t.uuid
+        {} {}
+        GROUP BY date, model_name
+        ORDER BY date ASC, model_name ASC",
+        where_clause_raw,
+        if where_clause_raw.is_empty() { "WHERE t.model IS NOT NULL AND t.model != 'unknown' AND t.model != ''" } else { "AND t.model IS NOT NULL AND t.model != 'unknown' AND t.model != ''" }
+    );
+
+    let rows_model_trends = pg_client.query(&sql_model_trends, &pg_params_raw[..]).map_err(|e| e.to_string())?;
+    let mut model_trends = Vec::new();
+    for r in rows_model_trends {
+        let date: Option<String> = r.get(0);
+        let model_name: String = r.get(1);
+        let tokens: Option<i64> = r.get(2);
+        let cost: Option<f64> = r.get(3);
+        model_trends.push(ModelTrend {
+            date: date.unwrap_or_default(),
+            model_name,
+            tokens: tokens.unwrap_or(0),
+            cost: cost.unwrap_or(0.0),
+        });
+    }
+
     Ok(AggregatedMetrics {
         totals,
         daily_trends,
@@ -5044,6 +5118,7 @@ pub fn get_pg_aggregated_metrics(
         sessions,
         source_trends,
         device_trends,
+        model_trends,
         project_trends: Vec::new(),
         project_rankings: Vec::new(),
         model_performance,
