@@ -1849,8 +1849,10 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                               {skill.is_builtin ? '内置' : '自定义'}
                             </span>
                           </span>
-                          <span className="text-[9px] text-text-muted leading-relaxed block line-clamp-2" title={skill.description}>
-                            {skill.description || '暂无描述信息'}
+                          <span className="text-[9px] text-text-muted leading-relaxed block" title={skill.description}>
+                            {skill.description
+                              ? (skill.description.length > 200 ? skill.description.slice(0, 200) + '...' : skill.description)
+                              : '暂无描述信息'}
                           </span>
                         </div>
                       );

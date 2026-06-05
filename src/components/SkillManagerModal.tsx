@@ -372,8 +372,10 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
                 {successSkills.map((s) => (
                   <div key={s.id} className="text-left">
                     <p className="text-xs font-bold text-slate-800">{s.name}</p>
-                    <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
-                      技能描述：{s.description || '暂无描述信息'}
+                    <p className="text-[11px] text-slate-600 mt-1 leading-relaxed" title={s.description}>
+                      技能描述：{s.description
+                        ? (s.description.length > 200 ? s.description.slice(0, 200) + '...' : s.description)
+                        : '暂无描述信息'}
                     </p>
                   </div>
                 ))}
@@ -415,8 +417,10 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-slate-600 leading-relaxed">
-                        {skill.description || '暂无描述信息'}
+                      <p className="text-xs text-slate-600 leading-relaxed" title={skill.description}>
+                        {skill.description
+                          ? (skill.description.length > 200 ? skill.description.slice(0, 200) + '...' : skill.description)
+                          : '暂无描述信息'}
                       </p>
                       <p className="text-[10px] text-slate-400 font-mono">ID: {skill.id}</p>
                     </div>
