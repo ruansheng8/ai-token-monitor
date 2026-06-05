@@ -13,7 +13,7 @@
         "title": "AI 用量统计仪表盘",
         "width": 1350,
         "height": 850,
-        "dragDropEnabled": false
+        "dragDropEnabled": true
       }
     ],
     "security": {

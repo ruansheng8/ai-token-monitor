@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { apiUrl } from '../lib/api';
+import { apiUrl, isTauriRuntime } from '../lib/api';
 
 export interface Skill {
   id: string;
@@ -57,6 +57,42 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
     }
     return () => {
       if (timer) clearTimeout(timer);
+    };
+  }, [isOpen]);
+
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+
+    if (isOpen && isTauriRuntime()) {
+      import('@tauri-apps/api/webviewWindow')
+        .then(({ getCurrentWebviewWindow }) => {
+          const appWindow = getCurrentWebviewWindow();
+          appWindow
+            .onDragDropEvent((event) => {
+              if (event.payload.type === 'enter' || event.payload.type === 'over') {
+                setDragActive(true);
+              } else if (event.payload.type === 'leave') {
+                setDragActive(false);
+              } else if (event.payload.type === 'drop') {
+                setDragActive(false);
+                if (event.payload.paths && event.payload.paths.length > 0) {
+                  importPaths(event.payload.paths);
+                }
+              }
+            })
+            .then((unlistenFn) => {
+              unlisten = unlistenFn;
+            });
+        })
+        .catch((err) => {
+          console.error('Failed to load Tauri webviewWindow API:', err);
+        });
+    }
+
+    return () => {
+      if (unlisten) {
+        unlisten();
+      }
     };
   }, [isOpen]);
 
@@ -209,6 +245,43 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
       }
     } catch (e) {
       setErrorMsg('上传发生网络异常，请重试');
+      console.error(e);
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  const importPaths = async (paths: string[]) => {
+    if (paths.length === 0) return;
+
+    setUploading(true);
+    setSuccessSkills([]);
+    setErrorMsg(null);
+
+    try {
+      const res = await fetch(apiUrl('/review/skills/import'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ paths }),
+      });
+
+      if (res.ok) {
+        try {
+          const data = await res.json();
+          setSuccessSkills(data);
+        } catch (e) {
+          console.error(e);
+        }
+        fetchSkills();
+        onRefreshSkills();
+      } else {
+        const text = await res.text();
+        setErrorMsg(text || '导入失败，请检查文件/文件夹是否符合 Claude 技能规范');
+      }
+    } catch (e) {
+      setErrorMsg('导入发生网络异常，请重试');
       console.error(e);
     } finally {
       setUploading(false);

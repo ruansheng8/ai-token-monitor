@@ -3514,6 +3514,294 @@ pub async fn handle_upload_skills(
         .unwrap()
 }
 
+#[derive(serde::Deserialize)]
+pub struct ImportSkillsRequest {
+    pub paths: Vec<String>,
+}
+
+/// POST /api/review/skills/import
+/// 导入本地拖入/选择的技能包（绝对路径，支持压缩包或文件夹）
+pub async fn handle_import_skills(
+    axum::Json(req): axum::Json<ImportSkillsRequest>,
+) -> impl IntoResponse {
+    let mut imported_skills_info = Vec::new();
+    let dest_skills_root = get_user_skills_dir();
+
+    if let Err(e) = std::fs::create_dir_all(&dest_skills_root) {
+        return Response::builder()
+            .status(StatusCode::INTERNAL_SERVER_ERROR)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from(format!("创建技能持久化根目录失败: {}", e)))
+            .unwrap();
+    }
+
+    let temp_root = match dest_skills_root.parent() {
+        Some(p) => p.join("temp_upload"),
+        None => std::path::Path::new(&crate::db::get_user_profile_dir())
+            .join(".token-insight")
+            .join("temp_upload"),
+    };
+    let _ = std::fs::create_dir_all(&temp_root);
+
+    for path_str in req.paths {
+        let path = std::path::Path::new(&path_str);
+        if !path.exists() {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(format!("路径不存在: {}", path_str)))
+                .unwrap();
+        }
+
+        let folder_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        if path.is_file() {
+            let is_zip = path_str.ends_with(".zip");
+            let is_7z = path_str.ends_with(".7z");
+
+            if !is_zip && !is_7z {
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Body::from(format!("不支持的文件格式，仅支持 .zip 或 .7z 压缩包: {}", folder_name)))
+                    .unwrap();
+            }
+
+            let file_data = match std::fs::read(path) {
+                Ok(data) => data,
+                Err(e) => {
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("读取文件失败: {}", e)))
+                        .unwrap();
+                }
+            };
+
+            let uuid = format!("temp_{}", chrono::Utc::now().timestamp_millis());
+            let temp_dir = temp_root.join(&uuid);
+            if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Body::from(format!("创建临时目录失败: {}", e)))
+                    .unwrap();
+            }
+
+            let cleanup_temp = || {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+            };
+
+            let default_folder_name = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .to_string();
+
+            if is_zip {
+                let temp_zip_path = temp_dir.join("upload.zip");
+                if std::fs::write(&temp_zip_path, &file_data).is_err() {
+                    cleanup_temp();
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from("写入临时文件失败"))
+                        .unwrap();
+                }
+
+                let file = match std::fs::File::open(&temp_zip_path) {
+                    Ok(f) => f,
+                    Err(e) => {
+                        cleanup_temp();
+                        return Response::builder()
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                            .body(Body::from(format!("打开临时文件失败: {}", e)))
+                            .unwrap();
+                    }
+                };
+
+                let mut archive = match zip::ZipArchive::new(file) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        cleanup_temp();
+                        return Response::builder()
+                            .status(StatusCode::BAD_REQUEST)
+                            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                            .body(Body::from(format!("无效的 ZIP 压缩包: {}", e)))
+                            .unwrap();
+                    }
+                };
+
+                for i in 0..archive.len() {
+                    let mut file = match archive.by_index(i) {
+                        Ok(f) => f,
+                        Err(_) => continue,
+                    };
+                    let outpath = match file.enclosed_name() {
+                        Some(path) => temp_dir.join(path),
+                        None => continue,
+                    };
+
+                    if (*file.name()).ends_with('/') {
+                        let _ = std::fs::create_dir_all(&outpath);
+                    } else {
+                        if let Some(p) = outpath.parent() {
+                            let _ = std::fs::create_dir_all(p);
+                        }
+                        let mut outfile = match std::fs::File::create(&outpath) {
+                            Ok(f) => f,
+                            Err(_) => continue,
+                        };
+                        let _ = std::io::copy(&mut file, &mut outfile);
+                    }
+                }
+                let _ = std::fs::remove_file(&temp_zip_path);
+            } else if is_7z {
+                let temp_7z_path = temp_dir.join("upload.7z");
+                if std::fs::write(&temp_7z_path, &file_data).is_err() {
+                    cleanup_temp();
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from("写入临时文件失败"))
+                        .unwrap();
+                }
+
+                if let Err(e) = sevenz_rust::decompress_file(&temp_7z_path, &temp_dir) {
+                    cleanup_temp();
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("7z 解压失败: {}", e)))
+                        .unwrap();
+                }
+                let _ = std::fs::remove_file(&temp_7z_path);
+            }
+
+            // 格式校验
+            let validated_skills = match validate_uploaded_skills(&temp_dir, &default_folder_name) {
+                Ok(v) => v,
+                Err(e) => {
+                    cleanup_temp();
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("格式校验失败：{}", e)))
+                        .unwrap();
+                }
+            };
+
+            // 持久化移动/拷贝
+            for (skill_dir, name) in &validated_skills {
+                let target_dir = dest_skills_root.join(name);
+                if target_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&target_dir);
+                }
+
+                if let Err(e) = copy_dir_all(skill_dir, &target_dir) {
+                    cleanup_temp();
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("持久化拷贝技能「{}」失败: {}", name, e)))
+                        .unwrap();
+                }
+            }
+
+            // 获取技能信息以返回
+            for (_, name) in &validated_skills {
+                let skill_md_path = dest_skills_root.join(name).join("SKILL.md");
+                if skill_md_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
+                        let (display_name, description) = parse_skill_md_frontmatter(&content);
+                        let final_name = if display_name.is_empty() { name.clone() } else { display_name };
+                        imported_skills_info.push(SkillInfo {
+                            id: name.clone(),
+                            name: final_name,
+                            description,
+                            is_builtin: false,
+                        });
+                    }
+                }
+            }
+
+            cleanup_temp();
+        } else if path.is_dir() {
+            // 格式校验
+            let validated_skills = match validate_uploaded_skills(path, &folder_name) {
+                Ok(v) => v,
+                Err(e) => {
+                    return Response::builder()
+                        .status(StatusCode::BAD_REQUEST)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("格式校验失败：{}", e)))
+                        .unwrap();
+                }
+            };
+
+            // 持久化拷贝
+            for (skill_dir, name) in &validated_skills {
+                let target_dir = dest_skills_root.join(name);
+                if target_dir.exists() {
+                    let _ = std::fs::remove_dir_all(&target_dir);
+                }
+
+                if let Err(e) = copy_dir_all(skill_dir, &target_dir) {
+                    return Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                        .body(Body::from(format!("持久化拷贝技能「{}」失败: {}", name, e)))
+                        .unwrap();
+                }
+            }
+
+            // 获取技能信息以返回
+            for (_, name) in &validated_skills {
+                let skill_md_path = dest_skills_root.join(name).join("SKILL.md");
+                if skill_md_path.exists() {
+                    if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
+                        let (display_name, description) = parse_skill_md_frontmatter(&content);
+                        let final_name = if display_name.is_empty() { name.clone() } else { display_name };
+                        imported_skills_info.push(SkillInfo {
+                            id: name.clone(),
+                            name: final_name,
+                            description,
+                            is_builtin: false,
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    let body = serde_json::to_vec(&imported_skills_info).unwrap_or_default();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(Body::from(body))
+        .unwrap()
+}
+
 /// DELETE /api/review/skills/:id
 /// 删除自定义技能目录 (防路径遍历)
 pub async fn handle_delete_skill(
@@ -3761,6 +4049,15 @@ mod tests {
         let (name4, desc4) = parse_skill_md_frontmatter(content4);
         assert_eq!(name4, "Multiline Skill");
         assert_eq!(desc4, "First line of description Second line of description");
+    }
+
+    #[tokio::test]
+    async fn test_handle_import_skills_nonexistent() {
+        let req = ImportSkillsRequest {
+            paths: vec!["/nonexistent_crazy_path_123456_file.zip".to_string()],
+        };
+        let response = handle_import_skills(axum::Json(req)).await.into_response();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
 }
 

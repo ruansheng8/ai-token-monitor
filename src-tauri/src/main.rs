@@ -21,7 +21,7 @@ use review::{
     handle_delete_task, handle_retry_task, handle_save_action_items, handle_save_quality_feedback,
     handle_get_turn_details, handle_list_prompt_templates, handle_create_prompt_template,
     handle_update_prompt_template, handle_delete_prompt_template, handle_test_cli,
-    handle_list_skills, handle_upload_skills, handle_delete_skill,
+    handle_list_skills, handle_upload_skills, handle_delete_skill, handle_import_skills,
 };
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
@@ -167,6 +167,7 @@ fn main() {
                 .route("/api/review/test-cli", post(handle_test_cli))
                 .route("/api/review/skills", get(handle_list_skills))
                 .route("/api/review/skills/upload", post(handle_upload_skills))
+                .route("/api/review/skills/import", post(handle_import_skills))
                 .route("/api/review/skills/:id", delete(handle_delete_skill))
                 .fallback(serve_static_file_fallback)
                 .layer(axum::middleware::from_fn(server::cors_middleware));
