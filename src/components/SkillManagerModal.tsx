@@ -233,7 +233,7 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
               </div>
             ) : skills.length === 0 ? (
               <div className="text-center py-8 text-sm text-slate-500 border border-slate-100 rounded-2xl bg-slate-50/50">
-                暂无技能，请上传压缩包或在项目 `.agents/skills` 放置内置规范
+                暂无技能，请上传压缩包，或在全局配置的 `skills/default` 目录放置默认规范
               </div>
             ) : (
               <div className="grid grid-cols-1 gap-3">

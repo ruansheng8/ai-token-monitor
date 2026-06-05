@@ -810,24 +810,35 @@ pub async fn handle_create_task(
                 prompt_text.push_str("\n\n---\n\n## 🛠️ 必须遵循的 AI 诊断技能与行为准则 (Skills Context)\n\n请在分析我的 Token 数据并生成复盘报告、诊断建议以及行动清单时，严格参考并融入以下技能规范进行评估：\n\n");
                 for skill_id in selected_skills {
                     let mut found_content = None;
-                    if let Ok(curr_dir) = std::env::current_dir() {
-                        let mut builtin_path = curr_dir.join(".agents").join("skills").join(skill_id).join("SKILL.md");
-                        if !builtin_path.exists() {
-                            if let Some(parent) = curr_dir.parent() {
-                                builtin_path = parent.join(".agents").join("skills").join(skill_id).join("SKILL.md");
-                            }
-                        }
-                        if builtin_path.exists() && builtin_path.is_file() {
-                            if let Ok(content) = std::fs::read_to_string(&builtin_path) {
-                                found_content = Some(content);
-                            }
+                    // 1. 尝试默认技能目录 (skills/default)
+                    let default_path = get_default_skills_dir().join(skill_id).join("SKILL.md");
+                    if default_path.exists() && default_path.is_file() {
+                        if let Ok(content) = std::fs::read_to_string(&default_path) {
+                            found_content = Some(content);
                         }
                     }
+                    // 2. 尝试用户自定义技能目录 (skills/user)
                     if found_content.is_none() {
                         let custom_path = get_user_skills_dir().join(skill_id).join("SKILL.md");
                         if custom_path.exists() && custom_path.is_file() {
                             if let Ok(content) = std::fs::read_to_string(&custom_path) {
                                 found_content = Some(content);
+                            }
+                        }
+                    }
+                    // 3. 备用 fallback: 尝试项目工作空间下的 .agents/skills
+                    if found_content.is_none() {
+                        if let Ok(curr_dir) = std::env::current_dir() {
+                            let mut builtin_path = curr_dir.join(".agents").join("skills").join(skill_id).join("SKILL.md");
+                            if !builtin_path.exists() {
+                                if let Some(parent) = curr_dir.parent() {
+                                    builtin_path = parent.join(".agents").join("skills").join(skill_id).join("SKILL.md");
+                                }
+                            }
+                            if builtin_path.exists() && builtin_path.is_file() {
+                                if let Ok(content) = std::fs::read_to_string(&builtin_path) {
+                                    found_content = Some(content);
+                                }
                             }
                         }
                     }
@@ -2954,6 +2965,14 @@ fn get_user_skills_dir() -> std::path::PathBuf {
     std::path::Path::new(&crate::db::get_user_profile_dir())
         .join(".token-insight")
         .join("skills")
+        .join("user")
+}
+
+fn get_default_skills_dir() -> std::path::PathBuf {
+    std::path::Path::new(&crate::db::get_user_profile_dir())
+        .join(".token-insight")
+        .join("skills")
+        .join("default")
 }
 
 fn parse_skill_md_frontmatter(content: &str) -> (String, String) {
@@ -3012,45 +3031,38 @@ fn find_skills_directories(dir: &std::path::Path, list: &mut Vec<std::path::Path
 pub async fn handle_list_skills() -> impl IntoResponse {
     let mut list = Vec::new();
 
-    // 1. 扫描内置技能 (项目当前工作空间下的 .agents/skills)
-    if let Ok(curr_dir) = std::env::current_dir() {
-        let mut builtin_path = curr_dir.join(".agents").join("skills");
-        if !builtin_path.exists() {
-            if let Some(parent) = curr_dir.parent() {
-                builtin_path = parent.join(".agents").join("skills");
-            }
-        }
-        if builtin_path.exists() && builtin_path.is_dir() {
-            if let Ok(entries) = std::fs::read_dir(&builtin_path) {
-                for entry in entries.flatten() {
-                    let path = entry.path();
-                    if path.is_dir() {
-                        let skill_md_path = path.join("SKILL.md");
-                        if skill_md_path.exists() && skill_md_path.is_file() {
-                            let folder_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
-                            let mut display_name = folder_name.clone();
-                            let mut desc = String::new();
-                            if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
-                                let (name, description) = parse_skill_md_frontmatter(&content);
-                                if !name.is_empty() {
-                                    display_name = name;
-                                }
-                                desc = description;
+    // 1. 扫描默认/内置技能 (用户配置目录下的 .token-insight/skills/default)
+    let default_skills_dir = get_default_skills_dir();
+    if default_skills_dir.exists() && default_skills_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&default_skills_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let skill_md_path = path.join("SKILL.md");
+                    if skill_md_path.exists() && skill_md_path.is_file() {
+                        let folder_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        let mut display_name = folder_name.clone();
+                        let mut desc = String::new();
+                        if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
+                            let (name, description) = parse_skill_md_frontmatter(&content);
+                            if !name.is_empty() {
+                                display_name = name;
                             }
-                            list.push(SkillInfo {
-                                id: folder_name,
-                                name: display_name,
-                                description: desc,
-                                is_builtin: true,
-                            });
+                            desc = description;
                         }
+                        list.push(SkillInfo {
+                            id: folder_name,
+                            name: display_name,
+                            description: desc,
+                            is_builtin: true,
+                        });
                     }
                 }
             }
         }
     }
 
-    // 2. 扫描自定义技能 (用户配置目录下的 .token-insight/skills)
+    // 2. 扫描自定义技能 (用户配置目录下的 .token-insight/skills/user)
     let user_skills_dir = get_user_skills_dir();
     if user_skills_dir.exists() && user_skills_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&user_skills_dir) {
@@ -3303,7 +3315,18 @@ pub async fn handle_delete_skill(
             .unwrap();
     }
 
-    // 限制内置技能只读
+    // 限制默认/内置技能只读
+    let default_path = get_default_skills_dir().join(&id);
+    if default_path.exists() {
+        return Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from("内置/默认只读技能无法被删除"))
+            .unwrap();
+    }
+
+    // 限制内置技能只读 (双重保险检查工作空间)
     if let Ok(curr_dir) = std::env::current_dir() {
         let mut builtin_path = curr_dir.join(".agents").join("skills").join(&id);
         if !builtin_path.exists() {
@@ -3352,6 +3375,16 @@ mod tests {
     use super::*;
     use std::fs::File;
     use std::io::Write;
+
+    #[test]
+    fn test_skills_directories_paths() {
+        let user_skills = get_user_skills_dir();
+        let default_skills = get_default_skills_dir();
+        assert!(user_skills.to_string_lossy().contains("skills"));
+        assert!(user_skills.to_string_lossy().contains("user"));
+        assert!(default_skills.to_string_lossy().contains("skills"));
+        assert!(default_skills.to_string_lossy().contains("default"));
+    }
 
     #[tokio::test]
     async fn test_well_known_dirs() {
