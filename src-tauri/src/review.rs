@@ -811,7 +811,12 @@ pub async fn handle_create_task(
                 for skill_id in selected_skills {
                     let mut found_content = None;
                     if let Ok(curr_dir) = std::env::current_dir() {
-                        let builtin_path = curr_dir.join(".agents").join("skills").join(skill_id).join("SKILL.md");
+                        let mut builtin_path = curr_dir.join(".agents").join("skills").join(skill_id).join("SKILL.md");
+                        if !builtin_path.exists() {
+                            if let Some(parent) = curr_dir.parent() {
+                                builtin_path = parent.join(".agents").join("skills").join(skill_id).join("SKILL.md");
+                            }
+                        }
                         if builtin_path.exists() && builtin_path.is_file() {
                             if let Ok(content) = std::fs::read_to_string(&builtin_path) {
                                 found_content = Some(content);
@@ -3009,7 +3014,12 @@ pub async fn handle_list_skills() -> impl IntoResponse {
 
     // 1. 扫描内置技能 (项目当前工作空间下的 .agents/skills)
     if let Ok(curr_dir) = std::env::current_dir() {
-        let builtin_path = curr_dir.join(".agents").join("skills");
+        let mut builtin_path = curr_dir.join(".agents").join("skills");
+        if !builtin_path.exists() {
+            if let Some(parent) = curr_dir.parent() {
+                builtin_path = parent.join(".agents").join("skills");
+            }
+        }
         if builtin_path.exists() && builtin_path.is_dir() {
             if let Ok(entries) = std::fs::read_dir(&builtin_path) {
                 for entry in entries.flatten() {
@@ -3295,7 +3305,12 @@ pub async fn handle_delete_skill(
 
     // 限制内置技能只读
     if let Ok(curr_dir) = std::env::current_dir() {
-        let builtin_path = curr_dir.join(".agents").join("skills").join(&id);
+        let mut builtin_path = curr_dir.join(".agents").join("skills").join(&id);
+        if !builtin_path.exists() {
+            if let Some(parent) = curr_dir.parent() {
+                builtin_path = parent.join(".agents").join("skills").join(&id);
+            }
+        }
         if builtin_path.exists() {
             return Response::builder()
                 .status(StatusCode::FORBIDDEN)
