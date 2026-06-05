@@ -797,8 +797,9 @@ pub async fn handle_report_open(
         #[cfg(target_os = "windows")]
         {
             // Windows 下打开文件夹并高亮定位选中文件
+            use std::os::windows::process::CommandExt;
             std::process::Command::new("explorer")
-                .arg(format!("/select,\"{}\"", req.path))
+                .raw_arg(format!("/select,\"{}\"", req.path))
                 .spawn()
                 .map_err(|e| e.to_string())?;
         }
