@@ -342,7 +342,7 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
         </div>
 
         {/* Content Body */}
-        <div className="flex-1 overflow-y-auto py-4 space-y-4 pr-1">
+        <div className="flex-1 overflow-y-auto py-4 px-2 space-y-4">
           {errorMsg && (
             <div className="bg-rose-50 border border-rose-200 text-rose-600 rounded-xl p-3 text-sm flex items-center justify-between">
               <span>⚠️ {errorMsg}</span>
