@@ -11,6 +11,8 @@ permissions:
 jobs:
   publish:
     runs-on: windows-latest
+    env:
+      CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER: lld-link.exe
 
     steps:
       # 1. 检出仓库代码
