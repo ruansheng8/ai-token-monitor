@@ -690,6 +690,172 @@ pub async fn handle_exchange_rate_refresh() -> impl axum::response::IntoResponse
     }
 }
 
+#[derive(serde::Deserialize)]
+pub struct ReportSaveReq {
+    pub image_base64: String,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ReportOpenReq {
+    pub path: String,
+}
+
+pub async fn handle_report_save(
+    axum::Json(req): axum::Json<ReportSaveReq>,
+) -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        // 1. 动态获取用户 Downloads 目录
+        let default_dir = std::env::var("USERPROFILE")
+            .or_else(|_| std::env::var("HOME"))
+            .map(|p| std::path::PathBuf::from(p).join("Downloads"))
+            .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+        // 2. 唤起原生文件夹选择框
+        let folder = rfd::FileDialog::new()
+            .set_directory(&default_dir)
+            .pick_folder();
+
+        let path = match folder {
+            Some(p) => p,
+            None => {
+                return Ok::<_, String>(serde_json::json!({
+                    "success": false,
+                    "cancelled": true
+                }));
+            }
+        };
+
+        // 3. 构建不重名的默认文件名
+        let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+        let mut file_path = path.join(format!("Token_Insight_图片报表_{}.png", today));
+        let mut counter = 1;
+        while file_path.exists() {
+            file_path = path.join(format!("Token_Insight_图片报表_{}_{}.png", today, counter));
+            counter += 1;
+        }
+
+        // 4. 解析并解码 base64
+        let base64_str = if req.image_base64.contains(',') {
+            req.image_base64.split(',').nth(1).unwrap_or(&req.image_base64)
+        } else {
+            &req.image_base64
+        };
+
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let bytes = STANDARD.decode(base64_str)
+            .map_err(|e| format!("图片 Base64 解码失败: {}", e))?;
+
+        // 5. 写入文件
+        std::fs::write(&file_path, bytes)
+            .map_err(|e| format!("图片文件写入磁盘失败: {}", e))?;
+
+        Ok(serde_json::json!({
+            "success": true,
+            "file_path": file_path.to_string_lossy().to_string()
+        }))
+    }).await;
+
+    match result {
+        Ok(Ok(json)) => {
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&json).unwrap()))
+                .unwrap()
+        }
+        Ok(Err(err)) => {
+            let body = serde_json::json!({ "success": false, "message": err });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Err(e) => {
+            let body = serde_json::json!({ "success": false, "message": format!("内部线程错误: {}", e) });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+    }
+}
+
+pub async fn handle_report_open(
+    axum::Json(req): axum::Json<ReportOpenReq>,
+) -> impl axum::response::IntoResponse {
+    let result = tokio::task::spawn_blocking(move || {
+        let path = std::path::Path::new(&req.path);
+        if !path.exists() {
+            return Err("文件路径不存在".to_string());
+        }
+
+        #[cfg(target_os = "windows")]
+        {
+            // Windows 下打开文件夹并高亮定位选中文件
+            std::process::Command::new("explorer")
+                .arg(format!("/select,\"{}\"", req.path))
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg("-R")
+                .arg(&req.path)
+                .spawn()
+                .map_err(|e| e.to_string())?;
+        }
+
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(parent) = path.parent() {
+                std::process::Command::new("xdg-open")
+                    .arg(parent)
+                    .spawn()
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+
+        Ok(())
+    }).await;
+
+    match result {
+        Ok(Ok(())) => {
+            let body = serde_json::json!({ "success": true });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Ok(Err(err)) => {
+            let body = serde_json::json!({ "success": false, "message": err });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+        Err(e) => {
+            let body = serde_json::json!({ "success": false, "message": format!("内部线程错误: {}", e) });
+            Response::builder()
+                .status(StatusCode::OK)
+                .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(serde_json::to_vec(&body).unwrap()))
+                .unwrap()
+        }
+    }
+}
+
 // ==================== CORS 全局跨域与预检中间件 ====================
 pub async fn cors_middleware(
     request: axum::http::Request<axum::body::Body>,

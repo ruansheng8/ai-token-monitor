@@ -14,6 +14,7 @@ use server::{
     handle_config_get, handle_config_test, handle_config_save, handle_app_restart,
     handle_db_clean, handle_sessions_paginated, handle_model_pricing_get,
     handle_model_pricing_save, handle_exchange_rate_refresh,
+    handle_report_save, handle_report_open,
 };
 use review::{
     handle_review_detect, handle_create_task, handle_list_tasks,
@@ -152,6 +153,8 @@ fn main() {
                 .route("/api/db/clean", post(handle_db_clean).get(handle_db_clean))
                 .route("/api/model-pricing", get(handle_model_pricing_get).post(handle_model_pricing_save))
                 .route("/api/exchange-rates/refresh", post(handle_exchange_rate_refresh))
+                .route("/api/report/save", post(handle_report_save))
+                .route("/api/report/open", post(handle_report_open))
                 .route("/api/review/detect", get(handle_review_detect))
                 .route("/api/review/tasks", get(handle_list_tasks).post(handle_create_task))
                 .route("/api/review/tasks/active", get(handle_get_active_task))

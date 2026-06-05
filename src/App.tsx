@@ -361,6 +361,8 @@ export default function App() {
   const [isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [isReportModalOpen, setIsReportModalOpen] = useState(false);
   const [reportImgUrl, setReportImgUrl] = useState('');
+  const [isSavingReport, setIsSavingReport] = useState(false);
+
 
   const generateReportImage = async () => {
     setIsGeneratingReport(true);
@@ -3282,32 +3284,63 @@ export default function App() {
               {reportImgUrl && (
                 <button
                   type="button"
-                  onClick={() => {
-                    // Tauri WebView2 不支持 data: URL 的 <a download>，改用 Blob + createObjectURL
+                  disabled={isSavingReport}
+                  onClick={async () => {
+                    if (isSavingReport) return;
+                    setIsSavingReport(true);
                     try {
-                      const base64 = reportImgUrl.split(',')[1];
-                      const binary = atob(base64);
-                      const bytes = new Uint8Array(binary.length);
-                      for (let i = 0; i < binary.length; i++) {
-                        bytes[i] = binary.charCodeAt(i);
+                      const response = await fetch(apiUrl('/report/save'), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ image_base64: reportImgUrl })
+                      });
+                      if (response.ok) {
+                        interface SaveReportResponse {
+                          success: boolean;
+                          cancelled?: boolean;
+                          file_path?: string;
+                          message?: string;
+                        }
+                        const res = await readJsonResponse<SaveReportResponse>(response);
+                        if (res.success) {
+                          if (confirm(`🎉 图片报表保存成功！\n保存路径：${res.file_path}\n\n是否立即在文件夹中打开该图片？`)) {
+                            try {
+                              await fetch(apiUrl('/report/open'), {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ path: res.file_path })
+                              });
+                            } catch (e) {
+                              console.error('打开路径失败:', e);
+                              alert('打开保存路径失败。');
+                            }
+                          }
+                        } else if (res.cancelled) {
+                          // 用户取消了选择，静默
+                        } else {
+                          alert('保存失败：' + res.message);
+                        }
+                      } else {
+                        alert('网络错误，保存报表图片失败。');
                       }
-                      const blob = new Blob([bytes], { type: 'image/png' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `Token_Insight_图片报表_${new Date().toISOString().split('T')[0]}.png`;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      setTimeout(() => URL.revokeObjectURL(url), 1000);
-                    } catch (e) {
-                      console.error('下载图片失败:', e);
-                      alert('保存图片失败，请尝试右键图片另存为。');
+                    } catch (e: unknown) {
+                      console.error('保存报表图片错误:', e);
+                      const errMsg = e instanceof Error ? e.message : String(e);
+                      alert('保存报表图片抛出异常：' + errMsg);
+                    } finally {
+                      setIsSavingReport(false);
                     }
                   }}
-                  className="px-6 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_15px_rgba(6,182,212,0.25)] hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer min-w-[150px] text-center flex items-center justify-center gap-1.5"
+                  className="px-6 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_15px_rgba(6,182,212,0.25)] hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer min-w-[150px] text-center flex items-center justify-center gap-1.5 disabled:opacity-50"
                 >
-                  📥 保存图片报表
+                  {isSavingReport ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>正在保存...</span>
+                    </>
+                  ) : (
+                    <span>📥 保存图片报表</span>
+                  )}
                 </button>
               )}
             </div>
@@ -3596,12 +3629,12 @@ export default function App() {
               </div>
               <div className="flex flex-col gap-4 pr-1">
                 {data.model_distribution && data.model_distribution.length > 0 ? (
-                  data.model_distribution.map((m) => {
+                  data.model_distribution.slice(0, 8).map((m) => {
                     const pct = maxModelTokens > 0 ? (m.total_tokens / maxModelTokens) * 100 : 0;
                     return (
                       <div key={m.model} className="flex flex-col gap-1.5">
                         <div className="flex justify-between items-center text-xs">
-                          <span className="font-semibold text-text-primary text-[11px] truncate max-w-[150px]">{m.model}</span>
+                          <span className="font-semibold text-text-primary text-[11px] inline-block leading-normal pb-0.5 truncate max-w-[150px]">{m.model}</span>
                           <span className="font-mono text-text-secondary text-[10px]" title={`${formatPreciseNum(m.total_tokens)} Tokens`}>
                             {formatNum(m.total_tokens)} Tokens
                           </span>
