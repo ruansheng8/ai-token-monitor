@@ -2983,15 +2983,54 @@ fn parse_skill_md_frontmatter(content: &str) -> (String, String) {
         let parts: Vec<&str> = content_trimmed.split("---").collect();
         if parts.len() >= 3 {
             let yaml = parts[1];
+            let mut current_key = String::new();
+            let is_block_indicator = |s: &str| {
+                s == ">" || s == "|" || s == ">-" || s == "|-"
+            };
+
             for line in yaml.lines() {
-                let line_trimmed = line.trim();
-                if let Some(val) = line_trimmed.strip_prefix("name:") {
-                    name = val.trim().trim_matches('"').trim_matches('\'').to_string();
-                } else if let Some(val) = line_trimmed.strip_prefix("description:") {
-                    description = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                if let Some(colon_idx) = trimmed.find(':') {
+                    let key_candidate = trimmed[..colon_idx].trim().to_lowercase();
+                    let val_candidate = trimmed[colon_idx + 1..].trim();
+                    if key_candidate == "name" || key_candidate == "description" || key_candidate == "desc" {
+                        current_key = key_candidate;
+                        let val = val_candidate.trim_matches('"').trim_matches('\'').to_string();
+                        if current_key == "name" {
+                            name = val;
+                        } else {
+                            description = val;
+                        }
+                        continue;
+                    }
+                }
+
+                // Handle multiline continuation in YAML
+                if !current_key.is_empty() && (line.starts_with(' ') || line.starts_with('\t')) {
+                    let val_line = trimmed.trim_matches('"').trim_matches('\'').to_string();
+                    if current_key == "description" || current_key == "desc" {
+                        if is_block_indicator(&description) {
+                            description = val_line;
+                        } else {
+                            if !description.is_empty() && !val_line.is_empty() {
+                                description.push(' ');
+                            }
+                            description.push_str(&val_line);
+                        }
+                    }
                 }
             }
         }
+    }
+
+    // Treat block indicator or whitespace-only descriptions as empty
+    let desc_trimmed = description.trim();
+    if desc_trimmed == ">" || desc_trimmed == "|" || desc_trimmed == ">-" || desc_trimmed == "|-" || desc_trimmed.is_empty() {
+        description = String::new();
     }
 
     // Fallbacks if name is empty
@@ -3716,6 +3755,12 @@ mod tests {
         let (name3, desc3) = parse_skill_md_frontmatter(content3);
         assert_eq!(name3, "Fallback Title Skill");
         assert_eq!(desc3, "Some introductory text that is description.");
+
+        // Case 4: Multiline frontmatter description
+        let content4 = "---\nname: Multiline Skill\ndescription: >\n  First line of description\n  Second line of description\n---\n";
+        let (name4, desc4) = parse_skill_md_frontmatter(content4);
+        assert_eq!(name4, "Multiline Skill");
+        assert_eq!(desc4, "First line of description Second line of description");
     }
 }
 
