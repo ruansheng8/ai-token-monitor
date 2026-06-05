@@ -175,6 +175,13 @@ fn main() {
             // 启动文件监测与热同步服务
             start_folder_watcher();
 
+            // 异步后台初始化默认技能
+            tokio::spawn(async {
+                if let Err(e) = review::init_default_skills().await {
+                    eprintln!("[技能初始化] 后台初始化默认技能失败: {}", e);
+                }
+            });
+
             // 本地桌面版绑定本地回环地址 127.0.0.1
             let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
             println!("\n==================================================");

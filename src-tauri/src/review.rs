@@ -2975,6 +2975,104 @@ fn get_default_skills_dir() -> std::path::PathBuf {
         .join("default")
 }
 
+#[derive(rust_embed::RustEmbed)]
+#[folder = "../assets/skills-default/"]
+struct DefaultSkillsAsset;
+
+#[derive(Serialize, Deserialize)]
+struct ExtractedManifest {
+    version: String,
+}
+
+pub async fn init_default_skills() -> Result<(), String> {
+    let default_skills_dir = get_default_skills_dir();
+    let manifest_path = default_skills_dir.join(".extracted_manifest.json");
+    let current_version = env!("CARGO_PKG_VERSION").to_string();
+
+    // 检查标记文件，对比版本号
+    if manifest_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&manifest_path) {
+            if let Ok(manifest) = serde_json::from_str::<ExtractedManifest>(&content) {
+                if manifest.version == current_version {
+                    // 版本一致，直接返回，避免重复解压
+                    return Ok(());
+                }
+            }
+        }
+    }
+
+    println!("[技能初始化] 检测到版本更新或首次运行，开始初始化默认技能...");
+
+    // 清理旧的默认技能目录
+    if default_skills_dir.exists() {
+        if let Err(e) = std::fs::remove_dir_all(&default_skills_dir) {
+            return Err(format!("清理旧默认技能目录失败: {}", e));
+        }
+    }
+    if let Err(e) = std::fs::create_dir_all(&default_skills_dir) {
+        return Err(format!("创建默认技能目录失败: {}", e));
+    }
+
+    // 内存解压嵌入的 ZIP 文件
+    for file in DefaultSkillsAsset::iter() {
+        if file.ends_with(".zip") {
+            if let Some(embedded_file) = DefaultSkillsAsset::get(&file) {
+                let data = embedded_file.data.as_ref();
+                let cursor = std::io::Cursor::new(data);
+                let mut archive = match zip::ZipArchive::new(cursor) {
+                    Ok(a) => a,
+                    Err(e) => {
+                        eprintln!("[技能初始化] 警告: 无法解析压缩包「{}」: {}", file, e);
+                        continue;
+                    }
+                };
+
+                for i in 0..archive.len() {
+                    let mut zip_file = match archive.by_index(i) {
+                        Ok(f) => f,
+                        Err(_) => continue,
+                    };
+                    let outpath = match zip_file.enclosed_name() {
+                        Some(path) => default_skills_dir.join(path),
+                        None => continue,
+                    };
+
+                    if (*zip_file.name()).ends_with('/') {
+                        let _ = std::fs::create_dir_all(&outpath);
+                    } else {
+                        if let Some(p) = outpath.parent() {
+                            let _ = std::fs::create_dir_all(p);
+                        }
+                        let mut outfile = match std::fs::File::create(&outpath) {
+                            Ok(f) => f,
+                            Err(e) => {
+                                eprintln!("[技能初始化] 无法创建输出文件 「{}」: {}", outpath.display(), e);
+                                continue;
+                            }
+                        };
+                        if let Err(e) = std::io::copy(&mut zip_file, &mut outfile) {
+                            eprintln!("[技能初始化] 写入文件失败 「{}」: {}", outpath.display(), e);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 写入新标记文件
+    let new_manifest = ExtractedManifest {
+        version: current_version,
+    };
+    if let Ok(manifest_content) = serde_json::to_string_pretty(&new_manifest) {
+        if let Err(e) = std::fs::write(&manifest_path, manifest_content) {
+            eprintln!("[技能初始化] 警告: 写入标记文件失败: {}", e);
+        }
+    }
+
+    println!("[技能初始化] 默认技能初始化完成！");
+    Ok(())
+}
+
 fn parse_skill_md_frontmatter(content: &str) -> (String, String) {
     let mut name = String::new();
     let mut description = String::new();
@@ -4058,6 +4156,41 @@ mod tests {
         };
         let response = handle_import_skills(axum::Json(req)).await.into_response();
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_init_default_skills() {
+        let test_id = chrono::Utc::now().timestamp_millis();
+        let temp_path = std::env::temp_dir().join(format!("token_insight_skills_test_{}", test_id));
+        std::fs::create_dir_all(&temp_path).unwrap();
+        std::env::set_var("USERPROFILE", temp_path.to_str().unwrap());
+
+        // 执行解压初始化
+        let init_res = init_default_skills().await;
+        assert!(init_res.is_ok());
+
+        // 验证目标目录和标记文件是否生成
+        let default_skills_dir = get_default_skills_dir();
+        assert!(default_skills_dir.exists());
+
+        let manifest_path = default_skills_dir.join(".extracted_manifest.json");
+        assert!(manifest_path.exists());
+
+        // 验证标记文件包含当前版本
+        let content = std::fs::read_to_string(&manifest_path).unwrap();
+        let manifest: ExtractedManifest = serde_json::from_str(&content).unwrap();
+        assert_eq!(manifest.version, env!("CARGO_PKG_VERSION"));
+
+        // 验证解包生成了默认技能文件夹 (例如 token-insight-report)
+        let skill_report_dir = default_skills_dir.join("token-insight-report");
+        assert!(skill_report_dir.exists());
+        assert!(skill_report_dir.join("SKILL.md").exists());
+
+        // 再次执行，应该跳过且成功
+        let init_res_again = init_default_skills().await;
+        assert!(init_res_again.is_ok());
+
+        let _ = std::fs::remove_dir_all(&temp_path);
     }
 }
 
