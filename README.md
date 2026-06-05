@@ -155,45 +155,72 @@ token-insight/
 
 ## 🏷️ 版本发布指南 (Release Guide)
 
-若要为项目发布新的正式版本，请按照以下步骤打 Tag 并发布 GitHub Release：
+项目已配置 GitHub Actions 自动化发布工作流。当你在本地完成版本号更新、提交代码并推送 `v*` 格式的 Git Tag 时，GitHub Actions 会自动编译并生成对应的 `.msi` 安装包，并将其发布为 GitHub Release 资产，无需手动上传。
 
-### 1. 更新版本号
-在准备发布新版前，需同步更新项目配置文件中的版本号：
-- **Rust 后端**：修改 [src-tauri/Cargo.toml](src-tauri/Cargo.toml) 中的 `version` 字段，例如 `version = "0.2.10"`。
-- **前端配置**：修改 [package.json](package.json) 中的 `version` 字段，例如 `"version": "1.0.0"`。
+### ⚡ 便捷一键发布脚本 (推荐)
+我们提供了一个自动化的一键发布脚本 [scripts/publish.py](file:///d:/VibeCoding/ai-token-monitor/scripts/publish.py)。它可以帮助你自动修改版本号、同步依赖锁文件、提交代码、创建 Git Tag 并推送至 GitHub 触发云端自动打包。
 
-### 2. 编译并打包产物
-在本地构建生产环境发布包，确保无编译错误：
-- **Tauri 安装包（含安装向导）**：
-  ```bash
-  pnpm tauri build
-  ```
-  打包产物位于 `src-tauri/target/release/bundle/msi/` 目录下（如 `.msi` 格式安装包）以及 `src-tauri/target/release/bundle/nsis/` 目录下（如 `.exe` 格式安装包）。
-  
-- **独立可执行程序（单文件，双击即用）**：
-  ```bash
-  pnpm build && cd src-tauri && cargo build --release
-  ```
-  打包产物为单可执行文件 `src-tauri/target/release/token-insight.exe`。
-
-### 3. 创建本地 Git Tag
-确认代码已全部提交并推送到远程仓库后，在本地为当前 commit 创建带注释的 Git 标签（Tag 格式推荐为 `v*.*.*`）：
-
+你可以直接运行：
 ```bash
-# 创建本地标签 (以 v0.2.10 为例)
-git tag -a v0.2.10 -m "Release v0.2.10"
+# 方式 A：指定版本发布（如指定发布 v1.0.5）
+python scripts/publish.py 1.0.5
 
-# 将标签推送到 GitHub 远程仓库
-git push origin v0.2.10
+# 方式 B：自动递增发布（自动读取当前版本并将末尾 Patch 版本号加 1，并在控制台让你确认后发布）
+python scripts/publish.py
+```
+*运行脚本后，只需在终端控制台输入 `y` 确认，即可全自动完成修改和推送。*
+
+---
+
+### 📖 手动发布步骤 (脚本背后的原理)
+如果你希望手动控制每个步骤，请按照以下指南操作：
+
+### 1. 更新版本号 (必须一致)
+在准备发布新版（例如 `1.0.3`）前，**必须同步将以下文件中的版本号修改为完全一致**：
+
+- **Rust 后端**：修改 [src-tauri/Cargo.toml](src-tauri/Cargo.toml) 中的 `version` 字段：
+  ```toml
+  [package]
+  name = "token-insight"
+  version = "1.0.3"
+  ```
+- **前端配置**：修改 [package.json](package.json) 中的 `version` 字段：
+  ```json
+  "version": "1.0.3",
+  ```
+- **同步锁文件**：在根目录下运行以下命令，确保 `Cargo.lock` 和 `package-lock.json` 也同步更新：
+  ```bash
+  # 同步 Rust 锁文件
+  cd src-tauri && cargo check && cd ..
+  # 同步 Node 锁文件
+  npm install --package-lock-only
+  ```
+
+### 2. 提交代码并推送至远程分支
+将版本号的更改提交并推送到 GitHub 远程仓库：
+```bash
+git add .
+git commit -m "chore: bump version to 1.0.3"
+git push origin master
 ```
 
-### 4. 在 GitHub 发布 Release
-1. 访问项目的 GitHub 仓库页面，点击右侧的 **Releases**，然后点击 **Draft a new release**。
-2. 在 **Choose a tag** 下拉菜单中选择刚刚推送的标签（如 `v0.2.10`）。
-3. 填写 **Release title**（例如 `Release v0.2.10`）和 **Describe this release**（编写版本更新日志）。
-4. **上传构建产物**：
-   将第 2 步中生成的打包产物拖入附件上传区域（建议上传独立的 `token-insight.exe` 以及打包后的安装程序，以便用户按需下载）。
-5. 点击 **Publish release** 正式发布。
+### 3. 创建并推送 Git Tag (触发自动打包)
+在本地为当前提交打上版本标签（Tag 格式必须为 `v*.*.*`），并推送到远程：
+```bash
+# 创建本地标签 (以 v1.0.3 为例)
+git tag -a v1.0.3 -m "Release v1.0.3"
+
+# 将标签推送到 GitHub 远程仓库
+git push origin v1.0.3
+```
+
+### 4. 自动构建与发布
+推送 Tag 后，GitHub Actions 会自动触发名为 `Release App (Windows MSI Only)` 的工作流：
+1. 自动在云端 Windows 环境拉取代码、下载依赖、编译打包。
+2. 自动创建一个名为 `Token Insight v1.0.3` 的 GitHub Release。
+3. 自动将编译出的 `token-insight_1.0.3_x64_zh-CN.msi` 安装包上传到该 Release 的 Assets（资源列表）中。
+
+你可以前往 GitHub 仓库的 **Actions** 标签页查看打包构建进度。构建完成后，即可在 **Releases** 页面下载最新安装包。
 
 ---
 
