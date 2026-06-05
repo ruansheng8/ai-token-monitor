@@ -338,6 +338,17 @@ function getCliDisplayName(bin: string): string {
   return nameMap[bin] ?? bin;
 }
 
+function formatTimeRangeLabel(range: string): string {
+  const map: Record<string, string> = {
+    '今日': '今日',
+    '7天': '最近7天',
+    '30天': '最近30天',
+    '周度对比': '周度对比',
+    'all': '全部时间',
+  };
+  return map[range] || range;
+}
+
 const formatReviewDate = (d: Date) => {
   const y = d.getFullYear();
   const m = String(d.getMonth() + 1).padStart(2, '0');
@@ -2228,7 +2239,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                   >
                     <span className="flex items-center gap-1.5">
                       <BarChart2 className="w-3.5 h-3.5 text-neon-cyan" />
-                      📊 冻结的分析数据快照 (生成于 {new Date(activeTask.created_at).toLocaleString()})
+                      📊 冻结的分析数据快照 ({formatTimeRangeLabel(activeTask.time_range)}) (生成于 {new Date(activeTask.created_at).toLocaleString()})
                     </span>
                     {isSnapshotExpanded ? <ChevronUp className="w-4 h-4 text-text-muted" /> : <ChevronDown className="w-4 h-4 text-text-muted" />}
                   </button>
@@ -2307,7 +2318,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                           return (
                             <>
                               <div className="p-2.5 rounded-xl border border-card-border bg-bg-secondary/60 dark:bg-white/5">
-                                <div className="text-[10px] text-text-muted">总 Token 消耗</div>
+                                <div className="text-[10px] text-text-muted">{formatTimeRangeLabel(activeTask.time_range)}总 Token 消耗</div>
                                 <div className="text-xs font-bold text-text-primary mt-0.5">
                                   {snap.totalTokens >= 1_000_000 
                                     ? `${(snap.totalTokens / 1_000_000).toFixed(1)}M` 

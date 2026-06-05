@@ -1489,7 +1489,16 @@ export default function App() {
           {/* 总消耗 */}
           <div className="kpi-card kpi-blue glass-card p-3.5 flex justify-between items-center group">
             <div className="flex flex-col">
-              <span className="text-xs text-text-secondary font-medium mb-0.5">总消耗 Token</span>
+              <span className="text-xs text-text-secondary font-medium mb-0.5">
+                {timeRange === 'all' && '全部时间'}
+                {timeRange === 'today' && '今日'}
+                {timeRange === 'week' && '最近7天'}
+                {timeRange === '30days' && '最近30天'}
+                {timeRange === 'month' && '本月'}
+                {timeRange === 'quarter' && '本季度'}
+                {timeRange === 'custom' && '自定义区间'}
+                总消耗 Token
+              </span>
               <h2 className="text-xl font-semibold font-mono tracking-tight text-text-primary mb-0.5" title={totals ? formatPreciseNum(totals.total_tokens) : '0'}>{totals ? formatNum(totals.total_tokens) : 0}</h2>
               <span className="text-[9px] font-semibold text-text-muted tracking-wider uppercase">Total Tokens</span>
             </div>
