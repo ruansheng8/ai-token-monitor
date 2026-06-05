@@ -392,7 +392,7 @@ export function CliConfigModal({
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center"
-      style={{ backgroundColor: 'rgba(15, 15, 35, 0.55)', backdropFilter: 'blur(12px)' }}
+      style={{ backgroundColor: 'rgba(255, 255, 255, 0.45)', backdropFilter: 'blur(16px)' }}
       onClick={(e) => {
         if (e.target === e.currentTarget) onClose();
       }}
@@ -403,31 +403,32 @@ export function CliConfigModal({
           width: 'min(920px, 96vw)',
           height: 'min(680px, 90vh)',
           background: '#ffffff',
-          boxShadow: '0 32px 80px rgba(99,102,241,0.18), 0 8px 32px rgba(0,0,0,0.12)',
-          border: '1.5px solid rgba(99,102,241,0.14)',
+          boxShadow: '0 20px 50px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.02)',
+          border: '1px solid #e2e8f0',
         }}
       >
         {/* ── 顶部标题栏 ── */}
         <div
           className="flex items-center justify-between px-6 py-4 flex-shrink-0"
           style={{
-            background: 'linear-gradient(90deg, #6366f1 0%, #8b5cf6 50%, #06b6d4 100%)',
+            background: '#ffffff',
+            borderBottom: '1px solid #f1f5f9',
           }}
         >
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-white/20 flex items-center justify-center backdrop-blur-sm">
-              <Terminal className="w-4 h-4 text-white" />
+            <div className="w-8 h-8 rounded-xl bg-slate-100 flex items-center justify-center backdrop-blur-sm">
+              <Terminal className="w-4 h-4 text-[#8b5cf6]" />
             </div>
             <div>
-              <h2 className="text-sm font-bold text-white drop-shadow-sm">配置 AI CLI 引擎</h2>
-              <p className="text-xs text-white/75 mt-0.5">自定义各 CLI 的可执行路径与 API Key 环境变量</p>
+              <h2 className="text-sm font-bold bg-gradient-to-r from-[#06b6d4] to-[#8b5cf6] bg-clip-text text-transparent">配置 AI CLI 引擎</h2>
+              <p className="text-xs text-slate-500 mt-0.5">自定义各 CLI 的可执行路径与 API Key 环境变量</p>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="w-8 h-8 rounded-xl bg-white/15 hover:bg-white/25 flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors cursor-pointer"
           >
-            <X className="w-4 h-4 text-white" />
+            <X className="w-4 h-4 text-slate-500 hover:text-slate-700" />
           </button>
         </div>
 
@@ -438,23 +439,29 @@ export function CliConfigModal({
             className="flex flex-col flex-shrink-0 overflow-y-auto"
             style={{
               width: '220px',
-              background: '#f8f9fc',
-              borderRight: '1px solid #e8eaf0',
+              background: '#f8fafc',
+              borderRight: '1px solid #e2e8f0',
             }}
           >
             {/* 重新检测按钮 */}
-            <div className="px-3 py-2.5 flex-shrink-0" style={{ borderBottom: '1px solid #e8eaf0' }}>
+            <div className="px-3 py-2.5 flex-shrink-0" style={{ borderBottom: '1px solid #e2e8f0' }}>
               <button
                 onClick={onRefreshDetect}
                 disabled={detectLoading}
                 className="w-full flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
                 style={{
-                  color: '#0891b2',
-                  background: '#e0f7fa',
-                  border: '1px solid #a5f3fc',
+                  color: '#334155',
+                  background: '#ffffff',
+                  border: '1px solid #e2e8f0',
+                }}
+                onMouseEnter={(e) => {
+                  if (!detectLoading) (e.currentTarget as HTMLButtonElement).style.background = '#f1f5f9';
+                }}
+                onMouseLeave={(e) => {
+                  if (!detectLoading) (e.currentTarget as HTMLButtonElement).style.background = '#ffffff';
                 }}
               >
-                <RefreshCw className={`w-3 h-3 ${detectLoading ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-3 h-3 ${detectLoading ? 'animate-spin' : ''} text-[#06b6d4]`} />
                 重新检测所有 CLI
               </button>
             </div>
@@ -473,8 +480,8 @@ export function CliConfigModal({
                     onClick={() => setSelectedBin(def.bin)}
                     className="w-full flex items-center gap-2.5 px-3 py-2 text-left transition-all cursor-pointer"
                     style={isSelected ? {
-                      background: 'linear-gradient(90deg, #ede9fe 0%, #e0f2fe 100%)',
-                      borderRight: '3px solid #6366f1',
+                      background: '#f1f5f9',
+                      borderRight: '3px solid #06b6d4',
                     } : {
                       borderRight: '3px solid transparent',
                     }}
@@ -489,7 +496,7 @@ export function CliConfigModal({
                     <div className="flex-1 min-w-0">
                       <div
                         className="text-xs font-semibold truncate"
-                        style={{ color: isSelected ? '#4f46e5' : '#374151' }}
+                        style={{ color: isSelected ? '#0f172a' : '#475569' }}
                       >
                         {def.displayName}
                       </div>
@@ -525,29 +532,29 @@ export function CliConfigModal({
               {/* CLI 头部信息 */}
               <div
                 className="flex items-center gap-3 p-4 rounded-2xl"
-                style={{ background: 'linear-gradient(135deg, #f5f3ff 0%, #e0f2fe 100%)', border: '1px solid #e9d5ff' }}
+                style={{ background: '#ffffff', border: '1px solid #e2e8f0' }}
               >
                 <span className="text-3xl">{selectedDef.icon}</span>
                 <div>
-                  <h3 className="text-sm font-bold" style={{ color: '#1e1b4b' }}>{selectedDef.displayName}</h3>
-                  <p className="text-xs mt-0.5" style={{ color: '#6b7280' }}>{selectedDef.description}</p>
+                  <h3 className="text-sm font-bold" style={{ color: '#0f172a' }}>{selectedDef.displayName}</h3>
+                  <p className="text-xs mt-0.5" style={{ color: '#64748b' }}>{selectedDef.description}</p>
                 </div>
                 {detectInfo && (
                   <div
                     className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold"
                     style={detectInfo.available ? {
-                      background: '#dcfce7',
-                      border: '1px solid #86efac',
-                      color: '#15803d',
+                      background: '#f0fdf4',
+                      border: '1px solid #bbf7d0',
+                      color: '#16a34a',
                     } : {
-                      background: '#fee2e2',
-                      border: '1px solid #fca5a5',
+                      background: '#fef2f2',
+                      border: '1px solid #fecaca',
                       color: '#dc2626',
                     }}
                   >
                     <span
                       className={`w-1.5 h-1.5 rounded-full ${detectInfo.available ? 'animate-pulse' : ''}`}
-                      style={{ background: detectInfo.available ? '#22c55e' : '#f87171' }}
+                      style={{ background: detectInfo.available ? '#22c55e' : '#ef4444' }}
                     />
                     {detectInfo.available ? '已检测到' : '未检测到'}
                   </div>
@@ -557,8 +564,8 @@ export function CliConfigModal({
               {/* ─ 自定义可执行路径 ─ */}
               <div className="space-y-2">
                 <div className="flex items-center gap-1.5">
-                  <Settings className="w-3.5 h-3.5" style={{ color: '#6366f1' }} />
-                  <span className="text-xs font-bold uppercase tracking-wider" style={{ color: '#4b5563' }}>
+                  <Settings className="w-3.5 h-3.5" style={{ color: '#06b6d4' }} />
+                  <span className="text-xs font-bold uppercase tracking-wider" style={{ color: '#475569' }}>
                     自定义可执行路径
                   </span>
                 </div>
@@ -573,8 +580,8 @@ export function CliConfigModal({
                       color: '#1e293b',
                     }}
                     onFocus={(e) => {
-                      e.currentTarget.style.border = '1.5px solid #6366f1';
-                      e.currentTarget.style.background = '#fafafe';
+                      e.currentTarget.style.border = '1.5px solid #06b6d4';
+                      e.currentTarget.style.background = '#ffffff';
                     }}
                     onBlur={(e) => {
                       e.currentTarget.style.border = '1.5px solid #e2e8f0';
@@ -585,7 +592,7 @@ export function CliConfigModal({
                     onChange={(e) => setEnvValue(binKey, e.target.value)}
                   />
                   <div className="mt-1.5 text-[10px]" style={{ color: '#94a3b8' }}>
-                    对应环境变量：<code style={{ color: '#6366f1', fontFamily: 'monospace' }}>{binKey}</code>
+                    对应环境变量：<code style={{ color: '#06b6d4', fontFamily: 'monospace' }}>{binKey}</code>
                     {detectInfo?.path && (
                       <span className="ml-2">
                         检测路径：<span style={{ color: '#0891b2', fontFamily: 'monospace' }}>{detectInfo.path}</span>
@@ -599,8 +606,8 @@ export function CliConfigModal({
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-1.5">
-                    <Zap className="w-3.5 h-3.5" style={{ color: '#d97706' }} />
-                    <span className="text-xs font-bold uppercase tracking-wider" style={{ color: '#4b5563' }}>
+                    <Zap className="w-3.5 h-3.5" style={{ color: '#8b5cf6' }} />
+                    <span className="text-xs font-bold uppercase tracking-wider" style={{ color: '#475569' }}>
                       环境变量
                     </span>
                   </div>
@@ -626,9 +633,9 @@ export function CliConfigModal({
                             <div
                               className="w-full px-2.5 py-2 rounded-lg text-[11px] font-mono truncate"
                               style={{
-                                background: '#fffbeb',
-                                border: '1px solid #fde68a',
-                                color: '#92400e',
+                                background: '#f1f5f9',
+                                border: '1px solid #e2e8f0',
+                                color: '#475569',
                               }}
                             >
                               {key}
@@ -643,7 +650,7 @@ export function CliConfigModal({
                                 border: '1.5px solid #e2e8f0',
                                 color: '#1e293b',
                               }}
-                              onFocus={(e) => { e.currentTarget.style.border = '1.5px solid #6366f1'; }}
+                              onFocus={(e) => { e.currentTarget.style.border = '1.5px solid #06b6d4'; }}
                               onBlur={(e) => { e.currentTarget.style.border = '1.5px solid #e2e8f0'; }}
                               placeholder={`请输入 ${key} 的值`}
                               value={value}
@@ -693,10 +700,10 @@ export function CliConfigModal({
                   className="rounded-2xl p-4"
                   style={testResult.ok ? {
                     background: '#f0fdf4',
-                    border: '1px solid #86efac',
+                    border: '1px solid #bbf7d0',
                   } : {
-                    background: '#fff1f2',
-                    border: '1px solid #fca5a5',
+                    background: '#fef2f2',
+                    border: '1px solid #fecaca',
                   }}
                 >
                   <div className="flex items-start gap-2.5">
@@ -739,7 +746,7 @@ export function CliConfigModal({
             {/* ── 底部操作区 ── */}
             <div
               className="flex-shrink-0 flex items-center gap-3 px-6 py-4"
-              style={{ borderTop: '1px solid #e8eaf0', background: '#f8f9fc' }}
+              style={{ borderTop: '1px solid #e2e8f0', background: '#f8fafc' }}
             >
               {/* 连通测试 */}
               <button
@@ -747,21 +754,21 @@ export function CliConfigModal({
                 disabled={testState === 'running'}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer disabled:opacity-50"
                 style={{
-                  background: testState === 'running' ? '#ede9fe' : '#f5f3ff',
-                  border: '1.5px solid #c4b5fd',
-                  color: '#6d28d9',
+                  background: testState === 'running' ? '#f1f5f9' : '#ffffff',
+                  border: '1.5px solid #e2e8f0',
+                  color: '#334155',
                 }}
                 onMouseEnter={(e) => {
-                  if (testState !== 'running') (e.currentTarget as HTMLButtonElement).style.background = '#ede9fe';
+                  if (testState !== 'running') (e.currentTarget as HTMLButtonElement).style.background = '#f1f5f9';
                 }}
                 onMouseLeave={(e) => {
-                  if (testState !== 'running') (e.currentTarget as HTMLButtonElement).style.background = '#f5f3ff';
+                  if (testState !== 'running') (e.currentTarget as HTMLButtonElement).style.background = '#ffffff';
                 }}
               >
                 {testState === 'running' ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-[#8b5cf6]" />
                 ) : (
-                  <FlaskConical className="w-3.5 h-3.5" />
+                  <FlaskConical className="w-3.5 h-3.5 text-[#06b6d4]" />
                 )}
                 {testState === 'running' ? '测试中 (45s)...' : '⚡ 测试连通性'}
               </button>
@@ -777,12 +784,12 @@ export function CliConfigModal({
                 onClick={onClose}
                 className="px-4 py-2 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
                 style={{
-                  background: '#f1f5f9',
+                  background: '#ffffff',
                   border: '1.5px solid #e2e8f0',
-                  color: '#475569',
+                  color: '#334155',
                 }}
-                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#e2e8f0'; }}
-                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#f1f5f9'; }}
+                onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#f1f5f9'; }}
+                onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#ffffff'; }}
               >
                 关闭
               </button>
@@ -793,7 +800,7 @@ export function CliConfigModal({
                 disabled={saving}
                 className="flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold transition-all cursor-pointer disabled:opacity-50 shadow-md"
                 style={{
-                  background: 'linear-gradient(90deg, #6366f1 0%, #06b6d4 100%)',
+                  background: 'linear-gradient(90deg, #06b6d4 0%, #8b5cf6 100%)',
                   color: '#ffffff',
                 }}
                 onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.opacity = '0.9'; }}
@@ -836,12 +843,12 @@ function AddEnvVarButtonLight({
         onClick={() => setOpen((p) => !p)}
         className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[10px] font-semibold transition-colors cursor-pointer"
         style={{
-          background: '#f1f5f9',
+          background: '#ffffff',
           border: '1.5px solid #e2e8f0',
-          color: '#475569',
+          color: '#334155',
         }}
-        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#e2e8f0'; }}
-        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#f1f5f9'; }}
+        onMouseEnter={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#f1f5f9'; }}
+        onMouseLeave={(e) => { (e.currentTarget as HTMLButtonElement).style.background = '#ffffff'; }}
       >
         <Plus className="w-3 h-3" />
         添加变量
@@ -854,7 +861,7 @@ function AddEnvVarButtonLight({
             width: '240px',
             background: '#ffffff',
             border: '1.5px solid #e2e8f0',
-            boxShadow: '0 16px 48px rgba(99,102,241,0.15), 0 4px 16px rgba(0,0,0,0.08)',
+            boxShadow: '0 16px 48px rgba(0, 0, 0, 0.05), 0 4px 16px rgba(0, 0, 0, 0.03)',
           }}
         >
           {/* 自定义输入 */}
@@ -870,7 +877,7 @@ function AddEnvVarButtonLight({
                   border: '1.5px solid #e2e8f0',
                   color: '#1e293b',
                 }}
-                onFocus={(e) => { e.currentTarget.style.border = '1.5px solid #6366f1'; }}
+                onFocus={(e) => { e.currentTarget.style.border = '1.5px solid #06b6d4'; }}
                 onBlur={(e) => { e.currentTarget.style.border = '1.5px solid #e2e8f0'; }}
                 value={customKey}
                 onChange={(e) => setCustomKey(e.target.value.toUpperCase())}
@@ -883,7 +890,7 @@ function AddEnvVarButtonLight({
                 onClick={() => customKey.trim() && handleAdd(customKey.trim())}
                 disabled={!customKey.trim()}
                 className="px-2.5 py-1.5 rounded-lg text-[10px] font-bold disabled:opacity-40 cursor-pointer transition-colors"
-                style={{ background: '#6366f1', color: '#ffffff' }}
+                style={{ background: 'linear-gradient(90deg, #06b6d4 0%, #8b5cf6 100%)', color: '#ffffff' }}
               >
                 添加
               </button>
