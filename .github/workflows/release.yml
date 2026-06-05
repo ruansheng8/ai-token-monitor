@@ -18,6 +18,8 @@ jobs:
       # 1. 检出仓库代码
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # 2. 安装 Node.js 环境并设置 npm 缓存
       - name: Setup Node.js
@@ -40,6 +42,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # 5.5 获取 Tag 描述信息
+      - name: Get tag description
+        id: get_tag_desc
+        shell: bash
+        run: |
+          TAG_DESC=$(git tag -l --format='%(contents)' ${{ github.ref_name }})
+          if [ -z "$TAG_DESC" ]; then
+            TAG_DESC="感谢使用 Token Insight！本版本由 GitHub Actions 自动构建发布。请在下方资产（Assets）中下载对应的安装包。"
+          fi
+          echo "desc<<EOF" >> $GITHUB_OUTPUT
+          echo "$TAG_DESC" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
       # 6. 构建并发布到 GitHub Release
       - name: Build and Publish
         uses: tauri-apps/tauri-action@v0
@@ -48,7 +63,7 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: "Token Insight ${{ github.ref_name }}"
-          releaseBody: "感谢使用 Token Insight！本版本由 GitHub Actions 自动构建发布。请在下方资产（Assets）中下载对应的安装包。"
+          releaseBody: ${{ steps.get_tag_desc.outputs.desc }}
           releaseDraft: false
           prerelease: false
           args: --bundles msi
