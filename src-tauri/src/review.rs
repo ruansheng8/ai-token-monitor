@@ -2993,6 +2993,59 @@ fn parse_skill_md_frontmatter(content: &str) -> (String, String) {
             }
         }
     }
+
+    // Fallbacks if name is empty
+    if name.is_empty() {
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with('#') {
+                name = trimmed.trim_start_matches('#').trim().to_string();
+                break;
+            }
+        }
+    }
+
+    // Fallbacks if description is empty
+    if description.is_empty() {
+        let mut in_frontmatter = false;
+        let mut frontmatter_count = 0;
+        let mut in_code_block = false;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("```") {
+                in_code_block = !in_code_block;
+                continue;
+            }
+            if in_code_block {
+                continue;
+            }
+            if trimmed == "---" {
+                frontmatter_count += 1;
+                in_frontmatter = frontmatter_count < 2;
+                continue;
+            }
+            if in_frontmatter {
+                continue;
+            }
+            if trimmed.is_empty()
+                || trimmed.starts_with('#')
+                || trimmed.starts_with('>')
+                || trimmed.starts_with('-')
+                || trimmed.starts_with('*')
+                || trimmed.starts_with('+')
+                || trimmed.starts_with('<')
+                || trimmed.starts_with('[')
+                || trimmed.starts_with('!')
+            {
+                continue;
+            }
+            // Found a regular paragraph line!
+            let extracted = trimmed.chars().take(300).collect::<String>();
+            description = extracted;
+            break;
+        }
+    }
+
     (name, description)
 }
 
@@ -3376,13 +3429,13 @@ pub async fn handle_upload_skills(
     }
 
     // 将校验通过的技能持久化移动/覆盖到最终目录
-    for (skill_dir, folder_name) in validated_skills {
-        let target_dir = dest_skills_root.join(&folder_name);
+    for (skill_dir, folder_name) in &validated_skills {
+        let target_dir = dest_skills_root.join(folder_name);
         if target_dir.exists() {
             let _ = std::fs::remove_dir_all(&target_dir);
         }
 
-        if let Err(e) = copy_dir_all(&skill_dir, &target_dir) {
+        if let Err(e) = copy_dir_all(skill_dir, &target_dir) {
             cleanup_temp();
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
@@ -3393,13 +3446,32 @@ pub async fn handle_upload_skills(
         }
     }
 
+    // Collect SkillInfo for successfully uploaded skills
+    let mut uploaded_skills_info = Vec::new();
+    for (_, folder_name) in &validated_skills {
+        let skill_md_path = dest_skills_root.join(folder_name).join("SKILL.md");
+        if skill_md_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
+                let (name, description) = parse_skill_md_frontmatter(&content);
+                let display_name = if name.is_empty() { folder_name.clone() } else { name };
+                uploaded_skills_info.push(SkillInfo {
+                    id: folder_name.clone(),
+                    name: display_name,
+                    description,
+                    is_builtin: false,
+                });
+            }
+        }
+    }
+
     cleanup_temp();
 
+    let body = serde_json::to_vec(&uploaded_skills_info).unwrap_or_default();
     Response::builder()
         .status(StatusCode::OK)
-        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-        .body(Body::from("技能安装成功"))
+        .body(Body::from(body))
         .unwrap()
 }
 
@@ -3623,6 +3695,27 @@ mod tests {
 
         // 清理
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_parse_skill_md_frontmatter_fallbacks() {
+        // Case 1: Standard frontmatter with name and description
+        let content1 = "---\nname: \"Standard Skill\"\ndescription: \"Standard description\"\n---\n";
+        let (name1, desc1) = parse_skill_md_frontmatter(content1);
+        assert_eq!(name1, "Standard Skill");
+        assert_eq!(desc1, "Standard description");
+
+        // Case 2: Frontmatter has name, but missing description. Should fall back to first paragraph.
+        let content2 = "---\nname: \"Fallback Desc Skill\"\n---\n# Some header\nThis is the first paragraph description.\n- Some list item\n";
+        let (name2, desc2) = parse_skill_md_frontmatter(content2);
+        assert_eq!(name2, "Fallback Desc Skill");
+        assert_eq!(desc2, "This is the first paragraph description.");
+
+        // Case 3: Missing frontmatter entirely. Should fall back to # title and first paragraph.
+        let content3 = "\n\n# Fallback Title Skill\n\nSome introductory text that is description.\n";
+        let (name3, desc3) = parse_skill_md_frontmatter(content3);
+        assert_eq!(name3, "Fallback Title Skill");
+        assert_eq!(desc3, "Some introductory text that is description.");
     }
 }
 

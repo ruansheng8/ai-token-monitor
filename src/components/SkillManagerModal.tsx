@@ -20,6 +20,7 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
   const [uploading, setUploading] = useState<boolean>(false);
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [successSkills, setSuccessSkills] = useState<Skill[]>([]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const folderInputRef = useRef<HTMLInputElement>(null);
 
@@ -47,12 +48,16 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
   };
 
   useEffect(() => {
+    setSuccessSkills([]);
+    let timer: any = null;
     if (isOpen) {
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         fetchSkills();
       }, 0);
-      return () => clearTimeout(timer);
     }
+    return () => {
+      if (timer) clearTimeout(timer);
+    };
   }, [isOpen]);
 
   if (!isOpen) return null;
@@ -161,6 +166,8 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
     if (files.length === 0) return;
 
     setUploading(true);
+    setSuccessSkills([]);
+    setErrorMsg(null);
     const formData = new FormData();
 
     const isSingleArchive =
@@ -186,6 +193,12 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
       });
 
       if (res.ok) {
+        try {
+          const data = await res.json();
+          setSuccessSkills(data);
+        } catch (e) {
+          console.error(e);
+        }
         fetchSkills();
         onRefreshSkills();
         if (fileInputRef.current) fileInputRef.current.value = '';
@@ -334,6 +347,39 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
               </>
             )}
           </div>
+
+          {/* Upload Success Alert */}
+          {successSkills.length > 0 && (
+            <div
+              className="p-4 rounded-2xl border flex flex-col gap-3 relative transition-all animate-fade-in"
+              style={{
+                borderColor: 'rgba(16, 185, 129, 0.25)',
+                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.08) 0%, rgba(16, 185, 129, 0.02) 100%)',
+              }}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-bold text-emerald-600 flex items-center gap-1.5">
+                  <span className="text-sm">🎉</span> 成功上传并解析 {successSkills.length} 个诊断技能规范！
+                </span>
+                <button
+                  onClick={() => setSuccessSkills([])}
+                  className="w-5 h-5 rounded-lg bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-600 flex items-center justify-center transition-colors cursor-pointer text-xs border-none"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="space-y-2 border-t border-emerald-500/10 pt-2">
+                {successSkills.map((s) => (
+                  <div key={s.id} className="text-left">
+                    <p className="text-xs font-bold text-slate-800">{s.name}</p>
+                    <p className="text-[11px] text-slate-600 mt-1 leading-relaxed">
+                      技能描述：{s.description || '暂无描述信息'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Skills List */}
           <div className="space-y-3">
