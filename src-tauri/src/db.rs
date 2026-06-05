@@ -416,12 +416,13 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
             quality_feedback TEXT DEFAULT NULL,
             action_items_json TEXT DEFAULT NULL,
             compare_metrics_snapshot_json TEXT DEFAULT NULL,
-            template_id TEXT DEFAULT NULL
+            template_id TEXT DEFAULT NULL,
+            selected_skills_json TEXT DEFAULT NULL
         )",
         [],
     )?;
 
-    // SQLite 增量升级：为 review_tasks 表添加 error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id 字段 (若已存在表)
+    // SQLite 增量升级：为 review_tasks 表添加 error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id, selected_skills_json 字段 (若已存在表)
     {
         let mut stmt = conn.prepare("PRAGMA table_info(review_tasks)")?;
         let mut rows = stmt.query([])?;
@@ -430,6 +431,7 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
         let mut has_action_items = false;
         let mut has_compare_metrics_snapshot = false;
         let mut has_template_id = false;
+        let mut has_selected_skills = false;
         while let Some(row) = rows.next()? {
             let name: String = row.get(1)?;
             if name == "error_type" {
@@ -442,6 +444,8 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
                 has_compare_metrics_snapshot = true;
             } else if name == "template_id" {
                 has_template_id = true;
+            } else if name == "selected_skills_json" {
+                has_selected_skills = true;
             }
         }
         if !has_error_type {
@@ -455,6 +459,9 @@ pub fn init_cache_db() -> Result<(), rusqlite::Error> {
         }
         if !has_compare_metrics_snapshot {
             let _ = conn.execute("ALTER TABLE review_tasks ADD COLUMN compare_metrics_snapshot_json TEXT DEFAULT NULL;", []);
+        }
+        if !has_selected_skills {
+            let _ = conn.execute("ALTER TABLE review_tasks ADD COLUMN selected_skills_json TEXT DEFAULT NULL;", []);
         }
         if !has_template_id {
             // 在升级加入 template_id 的同时，顺便清理历史报告数据

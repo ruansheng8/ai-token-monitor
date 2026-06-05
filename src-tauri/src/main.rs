@@ -8,7 +8,7 @@ mod review;
 mod config;
 mod utils;
 
-use axum::{routing::{get, post, put}, Router};
+use axum::{routing::{get, post, put, delete}, Router};
 use server::{
     handle_metrics, handle_scan_start, handle_scan_status, serve_static_file_fallback,
     handle_config_get, handle_config_test, handle_config_save, handle_app_restart,
@@ -21,6 +21,7 @@ use review::{
     handle_delete_task, handle_retry_task, handle_save_action_items, handle_save_quality_feedback,
     handle_get_turn_details, handle_list_prompt_templates, handle_create_prompt_template,
     handle_update_prompt_template, handle_delete_prompt_template, handle_test_cli,
+    handle_list_skills, handle_upload_skills, handle_delete_skill,
 };
 use std::path::Path;
 use notify::{Watcher, RecursiveMode, Event};
@@ -164,6 +165,9 @@ fn main() {
                 .route("/api/review/prompt_templates", get(handle_list_prompt_templates).post(handle_create_prompt_template))
                 .route("/api/review/prompt_templates/:id", put(handle_update_prompt_template).delete(handle_delete_prompt_template))
                 .route("/api/review/test-cli", post(handle_test_cli))
+                .route("/api/review/skills", get(handle_list_skills))
+                .route("/api/review/skills/upload", post(handle_upload_skills))
+                .route("/api/review/skills/:id", delete(handle_delete_skill))
                 .fallback(serve_static_file_fallback)
                 .layer(axum::middleware::from_fn(server::cors_middleware));
 

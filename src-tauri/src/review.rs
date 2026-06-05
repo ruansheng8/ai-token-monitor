@@ -70,6 +70,7 @@ pub struct CreateTaskRequest {
     pub metrics_snapshot: MetricsSnapshot,
     pub compare_metrics_snapshot: Option<MetricsSnapshot>,
     pub template_id: Option<String>,
+    pub skills: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -102,6 +103,15 @@ pub struct ReviewTask {
     pub action_items_json: Option<String>,
     pub compare_metrics_snapshot_json: Option<String>,
     pub template_id: Option<String>,
+    pub selected_skills_json: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct SkillInfo {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub is_builtin: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -794,6 +804,37 @@ pub async fn handle_create_task(
             }
         }
 
+        // 拼接所勾选的技能规范到 Prompt
+        if let Some(ref selected_skills) = req.skills {
+            if !selected_skills.is_empty() {
+                prompt_text.push_str("\n\n---\n\n## 🛠️ 必须遵循的 AI 诊断技能与行为准则 (Skills Context)\n\n请在分析我的 Token 数据并生成复盘报告、诊断建议以及行动清单时，严格参考并融入以下技能规范进行评估：\n\n");
+                for skill_id in selected_skills {
+                    let mut found_content = None;
+                    if let Ok(curr_dir) = std::env::current_dir() {
+                        let builtin_path = curr_dir.join(".agents").join("skills").join(skill_id).join("SKILL.md");
+                        if builtin_path.exists() && builtin_path.is_file() {
+                            if let Ok(content) = std::fs::read_to_string(&builtin_path) {
+                                found_content = Some(content);
+                            }
+                        }
+                    }
+                    if found_content.is_none() {
+                        let custom_path = get_user_skills_dir().join(skill_id).join("SKILL.md");
+                        if custom_path.exists() && custom_path.is_file() {
+                            if let Ok(content) = std::fs::read_to_string(&custom_path) {
+                                found_content = Some(content);
+                            }
+                        }
+                    }
+                    if let Some(content) = found_content {
+                        let (name, desc) = parse_skill_md_frontmatter(&content);
+                        let display_name = if name.is_empty() { skill_id } else { &name };
+                        prompt_text.push_str(&format!("### 技能: {}\n说明: {}\n\n【详细规范内容】\n{}\n\n--------------------------------------------------\n\n", display_name, desc, content));
+                    }
+                }
+            }
+        }
+
         let prompt_hash = calculate_hash(&prompt_text);
         let metrics_snapshot_json = serde_json::to_string(&req.metrics_snapshot).unwrap_or_default();
         let metrics_hash = calculate_hash(&metrics_snapshot_json);
@@ -881,18 +922,19 @@ pub async fn handle_create_task(
 
         let cli_path = find_cli_in_path(&req.cli).map(|p| p.to_string_lossy().to_string());
         let compare_metrics_snapshot_json = req.compare_metrics_snapshot.as_ref().map(|s| serde_json::to_string(s).unwrap_or_default());
+        let selected_skills_json = req.skills.as_ref().map(|s| serde_json::to_string(s).unwrap_or_default());
 
         conn.execute(
             "INSERT INTO review_tasks (
                 id, title, status, cli_name, cli_path, time_range, selected_ides_json,
                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
                 progress_stage, progress_percent, status_message, created_at, compare_metrics_snapshot_json,
-                template_id
-            ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', 5, '任务已创建', ?, ?, ?)",
+                template_id, selected_skills_json
+            ) VALUES (?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?, ?, ?, 'created', 5, '任务已创建', ?, ?, ?, ?, ?)",
             rusqlite::params![
                 task_id, title, req.cli, cli_path, req.time_range, selected_ides_json,
                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
-                created_at, compare_metrics_snapshot_json, req.template_id
+                created_at, compare_metrics_snapshot_json, req.template_id, selected_skills_json
             ],
         ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("插入任务失败: {}", e)))?;
 
@@ -979,7 +1021,7 @@ pub async fn handle_list_tasks(
                                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
                                 progress_stage, progress_percent, status_message, output_markdown,
                                 error_message, exit_code, created_at, started_at, finished_at,
-                                canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id FROM review_tasks WHERE 1=1".to_string();
+                                canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id, selected_skills_json FROM review_tasks WHERE 1=1".to_string();
         
         let mut query_params = Vec::new();
 
@@ -1035,6 +1077,7 @@ pub async fn handle_list_tasks(
                 action_items_json: row.get(25)?,
                 compare_metrics_snapshot_json: row.get(26)?,
                 template_id: row.get(27)?,
+                selected_skills_json: row.get(28)?,
             })
         }).map_err(|e| e.to_string())?;
 
@@ -1078,7 +1121,7 @@ pub async fn handle_get_active_task() -> impl IntoResponse {
                     prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
                     progress_stage, progress_percent, status_message, output_markdown,
                     error_message, exit_code, created_at, started_at, finished_at,
-                    canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id 
+                    canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id, selected_skills_json 
              FROM review_tasks 
              WHERE status IN ('pending', 'running') 
              ORDER BY created_at DESC LIMIT 1",
@@ -1113,6 +1156,7 @@ pub async fn handle_get_active_task() -> impl IntoResponse {
                     action_items_json: row.get(25)?,
                     compare_metrics_snapshot_json: row.get(26)?,
                     template_id: row.get(27)?,
+                    selected_skills_json: row.get(28)?,
                 })
             },
         ).ok();
@@ -2007,7 +2051,7 @@ fn query_task_by_id(conn: &rusqlite::Connection, id: &str) -> Result<ReviewTask,
                 prompt_text, prompt_hash, metrics_snapshot_json, metrics_hash, dedupe_key,
                 progress_stage, progress_percent, status_message, output_markdown,
                 error_message, exit_code, created_at, started_at, finished_at,
-                canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id FROM review_tasks WHERE id = ?",
+                canceled_at, last_heartbeat_at, error_type, quality_feedback, action_items_json, compare_metrics_snapshot_json, template_id, selected_skills_json FROM review_tasks WHERE id = ?",
         [id],
         |row| {
             Ok(ReviewTask {
@@ -2039,6 +2083,7 @@ fn query_task_by_id(conn: &rusqlite::Connection, id: &str) -> Result<ReviewTask,
                 action_items_json: row.get(25)?,
                 compare_metrics_snapshot_json: row.get(26)?,
                 template_id: row.get(27)?,
+                selected_skills_json: row.get(28)?,
             })
         },
     )
@@ -2894,6 +2939,397 @@ pub async fn handle_test_cli(
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(Body::from(body))
         .unwrap()
+}
+
+// ============================================================
+// AI 复盘技能 (Skills) 核心逻辑与 API 控制器
+// ============================================================
+
+fn get_user_skills_dir() -> std::path::PathBuf {
+    std::path::Path::new(&crate::db::get_user_profile_dir())
+        .join(".token-insight")
+        .join("skills")
+}
+
+fn parse_skill_md_frontmatter(content: &str) -> (String, String) {
+    let mut name = String::new();
+    let mut description = String::new();
+    let content_trimmed = content.trim_start();
+    if content_trimmed.starts_with("---") {
+        let parts: Vec<&str> = content_trimmed.split("---").collect();
+        if parts.len() >= 3 {
+            let yaml = parts[1];
+            for line in yaml.lines() {
+                let line_trimmed = line.trim();
+                if let Some(val) = line_trimmed.strip_prefix("name:") {
+                    name = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                } else if let Some(val) = line_trimmed.strip_prefix("description:") {
+                    description = val.trim().trim_matches('"').trim_matches('\'').to_string();
+                }
+            }
+        }
+    }
+    (name, description)
+}
+
+fn copy_dir_all(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let ty = entry.file_type()?;
+        if ty.is_dir() {
+            copy_dir_all(&entry.path(), &dst.join(entry.file_name()))?;
+        } else {
+            std::fs::copy(entry.path(), &dst.join(entry.file_name()))?;
+        }
+    }
+    Ok(())
+}
+
+fn find_skills_directories(dir: &std::path::Path, list: &mut Vec<std::path::PathBuf>) {
+    if dir.is_dir() {
+        if dir.join("SKILL.md").exists() {
+            list.push(dir.to_path_buf());
+        }
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    find_skills_directories(&path, list);
+                }
+            }
+        }
+    }
+}
+
+/// GET /api/review/skills
+/// 获取内置技能与自定义技能的合并列表
+pub async fn handle_list_skills() -> impl IntoResponse {
+    let mut list = Vec::new();
+
+    // 1. 扫描内置技能 (项目当前工作空间下的 .agents/skills)
+    if let Ok(curr_dir) = std::env::current_dir() {
+        let builtin_path = curr_dir.join(".agents").join("skills");
+        if builtin_path.exists() && builtin_path.is_dir() {
+            if let Ok(entries) = std::fs::read_dir(&builtin_path) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.is_dir() {
+                        let skill_md_path = path.join("SKILL.md");
+                        if skill_md_path.exists() && skill_md_path.is_file() {
+                            let folder_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            let mut display_name = folder_name.clone();
+                            let mut desc = String::new();
+                            if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
+                                let (name, description) = parse_skill_md_frontmatter(&content);
+                                if !name.is_empty() {
+                                    display_name = name;
+                                }
+                                desc = description;
+                            }
+                            list.push(SkillInfo {
+                                id: folder_name,
+                                name: display_name,
+                                description: desc,
+                                is_builtin: true,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. 扫描自定义技能 (用户配置目录下的 .token-insight/skills)
+    let user_skills_dir = get_user_skills_dir();
+    if user_skills_dir.exists() && user_skills_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&user_skills_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let skill_md_path = path.join("SKILL.md");
+                    if skill_md_path.exists() && skill_md_path.is_file() {
+                        let folder_name = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                        let mut display_name = folder_name.clone();
+                        let mut desc = String::new();
+                        if let Ok(content) = std::fs::read_to_string(&skill_md_path) {
+                            let (name, description) = parse_skill_md_frontmatter(&content);
+                            if !name.is_empty() {
+                                display_name = name;
+                            }
+                            desc = description;
+                        }
+                        if !list.iter().any(|item| item.id == folder_name) {
+                            list.push(SkillInfo {
+                                id: folder_name,
+                                name: display_name,
+                                description: desc,
+                                is_builtin: false,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let body = serde_json::to_vec(&list).unwrap_or_default();
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(Body::from(body))
+        .unwrap()
+}
+
+/// POST /api/review/skills/upload
+/// 上传并解压自定义技能压缩包 (.zip 或 .7z)
+pub async fn handle_upload_skills(
+    mut multipart: axum::extract::Multipart,
+) -> impl IntoResponse {
+    let mut file_data = Vec::new();
+    let mut file_name = String::new();
+
+    while let Ok(Some(field)) = multipart.next_field().await {
+        if let Some(name) = field.name() {
+            if name == "file" {
+                if let Some(f_name) = field.file_name() {
+                    file_name = f_name.to_string();
+                }
+                if let Ok(bytes) = field.bytes().await {
+                    file_data = bytes.to_vec();
+                }
+            }
+        }
+    }
+
+    if file_data.is_empty() {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from("未接收到有效的文件数据"))
+            .unwrap();
+    }
+
+    let temp_root = match get_user_skills_dir().parent() {
+        Some(p) => p.join("temp_upload"),
+        None => std::path::Path::new(&crate::db::get_user_profile_dir())
+            .join(".token-insight")
+            .join("temp_upload"),
+    };
+
+    let _ = std::fs::create_dir_all(&temp_root);
+    let uuid = format!("temp_{}", chrono::Utc::now().timestamp_millis());
+    let temp_dir = temp_root.join(&uuid);
+    let _ = std::fs::create_dir_all(&temp_dir);
+
+    let is_zip = file_name.ends_with(".zip");
+    let is_7z = file_name.ends_with(".7z");
+
+    if !is_zip && !is_7z {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from("仅支持上传 .zip 或 .7z 压缩包"))
+            .unwrap();
+    }
+
+    if is_zip {
+        let temp_zip_path = temp_dir.join("upload.zip");
+        if std::fs::write(&temp_zip_path, &file_data).is_err() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from("写入临时文件失败"))
+                .unwrap();
+        }
+
+        let file = match std::fs::File::open(&temp_zip_path) {
+            Ok(f) => f,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Response::builder()
+                    .status(StatusCode::INTERNAL_SERVER_ERROR)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Body::from(format!("打开临时文件失败: {}", e)))
+                    .unwrap();
+            }
+        };
+
+        let mut archive = match zip::ZipArchive::new(file) {
+            Ok(a) => a,
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                    .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .body(Body::from(format!("无效的 ZIP 压缩包: {}", e)))
+                    .unwrap();
+            }
+        };
+
+        for i in 0..archive.len() {
+            let mut file = match archive.by_index(i) {
+                Ok(f) => f,
+                Err(_) => continue,
+            };
+            let outpath = match file.enclosed_name() {
+                Some(path) => temp_dir.join(path),
+                None => continue,
+            };
+
+            if (*file.name()).ends_with('/') {
+                let _ = std::fs::create_dir_all(&outpath);
+            } else {
+                if let Some(p) = outpath.parent() {
+                    let _ = std::fs::create_dir_all(p);
+                }
+                let mut outfile = match std::fs::File::create(&outpath) {
+                    Ok(f) => f,
+                    Err(_) => continue,
+                };
+                let _ = std::io::copy(&mut file, &mut outfile);
+            }
+        }
+        let _ = std::fs::remove_file(&temp_zip_path);
+    } else if is_7z {
+        let temp_7z_path = temp_dir.join("upload.7z");
+        if std::fs::write(&temp_7z_path, &file_data).is_err() {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from("写入临时文件失败"))
+                .unwrap();
+        }
+
+        if let Err(e) = sevenz_rust::decompress_file(&temp_7z_path, &temp_dir) {
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(format!("7z 解压失败: {}", e)))
+                .unwrap();
+        }
+        let _ = std::fs::remove_file(&temp_7z_path);
+    }
+
+    // 递归寻找包含 SKILL.md 的目录
+    let mut found_dirs = Vec::new();
+    find_skills_directories(&temp_dir, &mut found_dirs);
+
+    if found_dirs.is_empty() {
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from("压缩包中未检测到 Claude 规范的 SKILL.md 文件"))
+            .unwrap();
+    }
+
+    let dest_skills_root = get_user_skills_dir();
+    let _ = std::fs::create_dir_all(&dest_skills_root);
+
+    for skill_dir in found_dirs {
+        let folder_name = skill_dir
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+
+        let folder_name = if folder_name == uuid || folder_name.is_empty() {
+            file_name
+                .strip_suffix(".zip")
+                .or_else(|| file_name.strip_suffix(".7z"))
+                .unwrap_or("custom_skill")
+                .to_string()
+        } else {
+            folder_name
+        };
+
+        if folder_name.contains('/') || folder_name.contains('\\') || folder_name.contains("..") {
+            continue;
+        }
+
+        let target_dir = dest_skills_root.join(&folder_name);
+        if target_dir.exists() {
+            let _ = std::fs::remove_dir_all(&target_dir);
+        }
+
+        let _ = copy_dir_all(&skill_dir, &target_dir);
+    }
+
+    let _ = std::fs::remove_dir_all(&temp_dir);
+
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+        .body(Body::from("技能安装成功"))
+        .unwrap()
+}
+
+/// DELETE /api/review/skills/:id
+/// 删除自定义技能目录 (防路径遍历)
+pub async fn handle_delete_skill(
+    axum::extract::Path(id): axum::extract::Path<String>,
+) -> impl IntoResponse {
+    if id.contains('/') || id.contains('\\') || id.contains("..") || id.trim().is_empty() {
+        return Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from("非法的技能ID"))
+            .unwrap();
+    }
+
+    // 限制内置技能只读
+    if let Ok(curr_dir) = std::env::current_dir() {
+        let builtin_path = curr_dir.join(".agents").join("skills").join(&id);
+        if builtin_path.exists() {
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from("内置只读技能无法被删除"))
+                .unwrap();
+        }
+    }
+
+    let target_dir = get_user_skills_dir().join(&id);
+    if target_dir.exists() && target_dir.is_dir() {
+        if let Err(e) = std::fs::remove_dir_all(&target_dir) {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+                .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                .body(Body::from(format!("物理删除失败: {}", e)))
+                .unwrap();
+        }
+        Response::builder()
+            .status(StatusCode::OK)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from("技能已被删除"))
+            .unwrap()
+    } else {
+        Response::builder()
+            .status(StatusCode::NOT_FOUND)
+            .header(header::CONTENT_TYPE, "text/plain; charset=utf-8")
+            .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+            .body(Body::from("未找到该自定义技能"))
+            .unwrap()
+    }
 }
 
 #[cfg(test)]

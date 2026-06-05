@@ -29,6 +29,7 @@ import { TurnDetailsDrawer } from './TurnDetailsDrawer';
 import { PromptTemplate, PromptTemplateManagerModal } from './PromptTemplateManagerModal';
 import { CliConfigModal } from './CliConfigModal';
 import type { AgentCliEnv } from './CliConfigModal';
+import { Skill, SkillManagerModal } from './SkillManagerModal';
 
 // ============================================================
 // 常量与辅助配置
@@ -430,6 +431,37 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
     }))
   );
   const [isManagerOpen, setIsManagerOpen] = useState(false);
+
+  const [skillsList, setSkillsList] = useState<Skill[]>([]);
+  const [selectedSkills, setSelectedSkills] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('review_selected_skills');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [isSkillModalOpen, setIsSkillModalOpen] = useState(false);
+
+  const fetchSkills = async () => {
+    try {
+      const res = await fetch(apiUrl('/review/skills'));
+      if (res.ok) {
+        const data = await res.json();
+        setSkillsList(data);
+      }
+    } catch (e) {
+      console.error('获取技能列表失败', e);
+    }
+  };
+
+  useEffect(() => {
+    fetchSkills();
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem('review_selected_skills', JSON.stringify(selectedSkills));
+  }, [selectedSkills]);
 
   const fetchTemplates = async () => {
     try {
@@ -1091,6 +1123,7 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
       template_id: selectedTemplateId,
       custom_prompt: customPrompt.trim() ? customPrompt.trim() : undefined,
       force: forceStart,
+      skills: selectedSkills,
       metrics_snapshot: {
         totalTokens: metricsToUse.totalTokens,
         totalCostUsd: metricsToUse.totalCostUsd,
@@ -1762,6 +1795,66 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
                         className="w-full p-3 rounded-xl border border-card-border bg-black/10 dark:bg-black/30 font-mono text-[11px] leading-relaxed text-text-primary outline-none focus:border-neon-cyan transition-all"
                       />
                     </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 启用诊断技能规范 */}
+              <div className="glass-card p-5 text-left space-y-4">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-bold text-text-secondary uppercase tracking-wider flex items-center gap-1.5">
+                    <Sparkles className="w-4 h-4 text-neon-cyan" />
+                    第四步：启用 AI 诊断技能规范 (可选)
+                  </h3>
+                  <button
+                    type="button"
+                    onClick={() => setIsSkillModalOpen(true)}
+                    className="px-2.5 py-1 text-[10px] font-medium border border-card-border rounded-lg text-text-secondary hover:text-cyan-400 hover:border-cyan-500/30 transition-all flex items-center gap-1 cursor-pointer bg-white/[0.01]"
+                  >
+                    ⚙️ 管理技能
+                  </button>
+                </div>
+
+                {skillsList.length === 0 ? (
+                  <p className="text-xs text-text-muted">
+                    暂无可用的诊断技能规范，您可以点击右上角上传自定义技能包
+                  </p>
+                ) : (
+                  <div className="grid grid-cols-2 gap-2">
+                    {skillsList.map((skill) => {
+                      const isSelected = selectedSkills.includes(skill.id);
+                      return (
+                        <div
+                          key={skill.id}
+                          onClick={() => {
+                            if (isSelected) {
+                              setSelectedSkills(selectedSkills.filter((id) => id !== skill.id));
+                            } else {
+                              setSelectedSkills([...selectedSkills, skill.id]);
+                            }
+                          }}
+                          className={`p-3 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between hover:scale-[1.01] duration-150 relative overflow-hidden ${
+                            isSelected
+                              ? 'bg-neon-cyan/10 border-neon-cyan/50 shadow-[0_0_10px_rgba(8,145,178,0.08)]'
+                              : 'bg-card-bg border-card-border'
+                          }`}
+                        >
+                          <span className="text-[11px] font-bold text-text-primary flex justify-between items-center w-full mb-0.5">
+                            {skill.name}
+                            <span className={`text-[8px] px-1 py-0.5 rounded font-mono ${
+                              skill.is_builtin 
+                                ? 'bg-teal-500/10 text-teal-400 border border-teal-500/20' 
+                                : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
+                            }`}>
+                              {skill.is_builtin ? '内置' : '自定义'}
+                            </span>
+                          </span>
+                          <span className="text-[9px] text-text-muted leading-relaxed block line-clamp-2" title={skill.description}>
+                            {skill.description || '暂无描述信息'}
+                          </span>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -2446,6 +2539,11 @@ export function ReviewPage({ metrics, onFullscreenView }: ReviewPageProps) {
         detectResult={detectResult}
         onRefreshDetect={() => detectCliTools(true)}
         detectLoading={detectLoading}
+      />
+      <SkillManagerModal
+        isOpen={isSkillModalOpen}
+        onClose={() => setIsSkillModalOpen(false)}
+        onRefreshSkills={fetchSkills}
       />
     </>
   );
