@@ -151,6 +151,49 @@ token-insight/
 3. **双击即用分发**：
    您只需将编译出的单个 `token-insight.exe`（在 `src-tauri/target/release/` 下）发送给其他 Windows 用户，对方直接双击运行即可，不需要附带任何外部 `.html`、`.css` 或 `.js` 静态资源文件。
 
+---
+
+## 🏷️ 版本发布指南 (Release Guide)
+
+若要为项目发布新的正式版本，请按照以下步骤打 Tag 并发布 GitHub Release：
+
+### 1. 更新版本号
+在准备发布新版前，需同步更新项目配置文件中的版本号：
+- **Rust 后端**：修改 [src-tauri/Cargo.toml](src-tauri/Cargo.toml) 中的 `version` 字段，例如 `version = "0.2.10"`。
+- **前端配置**：修改 [package.json](package.json) 中的 `version` 字段，例如 `"version": "1.0.0"`。
+
+### 2. 编译并打包产物
+在本地构建生产环境发布包，确保无编译错误：
+- **Tauri 安装包（含安装向导）**：
+  ```bash
+  pnpm tauri build
+  ```
+  打包产物位于 `src-tauri/target/release/bundle/msi/` 目录下（如 `.msi` 格式安装包）以及 `src-tauri/target/release/bundle/nsis/` 目录下（如 `.exe` 格式安装包）。
+  
+- **独立可执行程序（单文件，双击即用）**：
+  ```bash
+  pnpm build && cd src-tauri && cargo build --release
+  ```
+  打包产物为单可执行文件 `src-tauri/target/release/token-insight.exe`。
+
+### 3. 创建本地 Git Tag
+确认代码已全部提交并推送到远程仓库后，在本地为当前 commit 创建带注释的 Git 标签（Tag 格式推荐为 `v*.*.*`）：
+
+```bash
+# 创建本地标签 (以 v0.2.10 为例)
+git tag -a v0.2.10 -m "Release v0.2.10"
+
+# 将标签推送到 GitHub 远程仓库
+git push origin v0.2.10
+```
+
+### 4. 在 GitHub 发布 Release
+1. 访问项目的 GitHub 仓库页面，点击右侧的 **Releases**，然后点击 **Draft a new release**。
+2. 在 **Choose a tag** 下拉菜单中选择刚刚推送的标签（如 `v0.2.10`）。
+3. 填写 **Release title**（例如 `Release v0.2.10`）和 **Describe this release**（编写版本更新日志）。
+4. **上传构建产物**：
+   将第 2 步中生成的打包产物拖入附件上传区域（建议上传独立的 `token-insight.exe` 以及打包后的安装程序，以便用户按需下载）。
+5. 点击 **Publish release** 正式发布。
 
 ---
 
