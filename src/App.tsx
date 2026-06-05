@@ -492,12 +492,23 @@ export default function App() {
         throw new Error('未找到报表容器 #report-container');
       }
 
+      // 动态计算截图区域实际高度，将未显示但依然占位的 no-print 下方板块物理空白裁剪掉
+      let screenshotHeight = element.scrollHeight;
+      const projectSection = document.getElementById('project-trend-section');
+      if (projectSection) {
+        const elementRect = element.getBoundingClientRect();
+        const projectRect = projectSection.getBoundingClientRect();
+        screenshotHeight = projectRect.bottom - elementRect.top + 24; // 加上 24px 底部内边距使得排版更美观
+      }
+
       const canvas = await html2canvas(element, {
         useCORS: true,
         allowTaint: false, // 必须为 false！否则 Canvas 会被标记为受污染，导致 toDataURL() 抛出 SecurityError
         backgroundColor: theme === 'dark' ? '#030712' : '#f8fafc',
         scale: 1.5, // 采用 1.5 倍缩放，兼顾高清重绘的同时，降低大面积绘图的内存压力
         logging: false,
+        height: screenshotHeight,
+        windowHeight: screenshotHeight,
         ignoreElements: (el: Element) => {
           if (el.tagName.toLowerCase() === 'canvas') {
             const canvasEl = el as HTMLCanvasElement;
@@ -513,7 +524,7 @@ export default function App() {
       setIsReportModalOpen(true);
     } catch (error: any) {
       console.error('Failed to generate report image:', error);
-      alert('生成财务报表图片失败，原因: ' + (error instanceof Error ? error.message : String(error)));
+      alert('生成图片报表失败，原因: ' + (error instanceof Error ? error.message : String(error)));
     } finally {
       CanvasRenderingContext2D.prototype.createPattern = originalCreatePattern;
       window.getComputedStyle = originalGetComputedStyle;
@@ -1664,7 +1675,7 @@ export default function App() {
         </section>
 
         {/* 项目维度消耗分析 */}
-        <section className="animate-fade-in">
+        <section id="project-trend-section" className="animate-fade-in">
           {/* 项目消耗大盘 */}
           <div className="chart-section glass-card p-4 sm:p-5 flex flex-col gap-4">
             <div className="pb-3 border-b border-card-border">
@@ -1687,7 +1698,7 @@ export default function App() {
         </section>
 
         {/* 分布与汇总 */}
-        <section className="grid grid-cols-1 lg:grid-cols-[1fr_1.5fr] gap-6">
+        <section className="grid grid-cols-1 lg:grid-cols-[1fr_1.5fr] gap-6 no-print">
           {/* 底层模型排行 */}
           <div className="glass-card p-5 flex flex-col gap-4">
             <div className="pb-3 border-b border-card-border">
@@ -1769,7 +1780,7 @@ export default function App() {
 
         {/* 深度效能诊断面板 */}
         {data?.performance_trends && data.performance_trends.length > 0 && (
-          <section className="glass-card p-6 flex flex-col gap-6">
+          <section className="glass-card p-6 flex flex-col gap-6 no-print">
             <div className="section-header flex flex-col sm:flex-row justify-between items-start sm:items-center pb-2 border-b border-card-border gap-2">
               <div>
                 <h2 className="text-base font-semibold text-text-primary flex items-center gap-2">
@@ -1826,7 +1837,7 @@ export default function App() {
         )}
 
         {/* 会话明细 */}
-        <section className="glass-card p-6">
+        <section className="glass-card p-6 no-print">
           <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 pb-4 mb-5 border-b border-card-border">
             <h2 className="text-base font-semibold text-text-primary">会话用量明细</h2>
             <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-4 w-full md:w-auto">
@@ -1836,9 +1847,9 @@ export default function App() {
                 <button
                   onClick={generateReportImage}
                   className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-gradient-to-r from-neon-cyan to-neon-purple hover:from-neon-cyan/90 hover:to-neon-purple/90 text-white cursor-pointer transition-all duration-200 flex items-center gap-1 shadow-sm no-print"
-                  title="将当前大盘数据重绘为超清财务报表图片"
+                  title="将当前大盘数据重绘为超清图片报表"
                 >
-                  🧾 生成财务报表
+                  📸 生成图片报表
                 </button>
               </div>
 
@@ -3195,7 +3206,7 @@ export default function App() {
         </div>
       )}
 
-      {/* 财务报表生成中的 Loading 遮罩 */}
+      {/* 图片报表生成中的 Loading 遮罩 */}
       {isGeneratingReport && (
         <div className="fixed inset-0 bg-black/60 dark:bg-black/80 backdrop-blur-md z-[10001] flex flex-col items-center justify-center gap-6 animate-fade-in select-none">
           <div className="relative flex flex-col items-center bg-bg-secondary/90 dark:bg-[#0f192b]/95 border border-card-border p-8 rounded-3xl shadow-2xl max-w-sm w-full mx-4 shadow-neon-cyan/5">
@@ -3206,16 +3217,16 @@ export default function App() {
               <div className="absolute inset-0.5 rounded-full border border-dashed border-neon-cyan/20 animate-spin-reverse pointer-events-none"></div>
             </div>
             <h3 className="text-base font-bold text-text-primary mb-2 text-center tracking-wide">
-              正在生成财务报表...
+              正在生成图片报表...
             </h3>
             <p className="text-xs text-text-secondary text-center leading-relaxed">
-              系统正在使用 2x 超清高保真模式为您重绘大盘走势图并渲染财务账单，请稍候
+              系统正在使用 2x 超清高保真模式为您重绘大盘走势并渲染图片报表，请稍候
             </p>
           </div>
         </div>
       )}
 
-      {/* 财务报表超清图片预览 Modal */}
+      {/* 图片报表超清图片预览 Modal */}
       {isReportModalOpen && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/70 dark:bg-black/90 backdrop-blur-md p-4 sm:p-6 animate-fade-in">
           <div className="relative w-full max-w-5xl rounded-[32px] border border-card-border bg-bg-secondary/95 dark:bg-[#0f192b]/95 backdrop-blur-2xl p-6 sm:p-8 text-text-primary shadow-[0_24px_60px_rgba(0,0,0,0.55)] overflow-hidden flex flex-col max-h-[90vh]">
@@ -3227,10 +3238,10 @@ export default function App() {
             <div className="flex justify-between items-center pb-4 border-b border-card-border mb-5 relative z-10">
               <div>
                 <h2 className="text-lg font-bold flex items-center gap-2">
-                  <span className="bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent">🧾 财务报表生成成功</span>
+                  <span className="bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent">📸 图片报表生成成功</span>
                 </h2>
                 <p className="text-xs text-text-secondary mt-1">
-                  已自动为您生成高清财务报表图片（已忽略交互控件，保留核心账单细节）
+                  已自动为您生成高清图片报表（已忽略交互控件，保留核心账单与趋势大盘）
                 </p>
               </div>
               <button
@@ -3248,7 +3259,7 @@ export default function App() {
                 <div className="relative max-w-full">
                   <img
                     src={reportImgUrl}
-                    alt="Token Insight 财务报表"
+                    alt="Token Insight 图片报表"
                     className="rounded-xl shadow-[0_12px_40px_rgba(0,0,0,0.15)] dark:shadow-[0_12px_40px_rgba(0,0,0,0.5)] border border-card-border max-w-full h-auto transition-transform duration-300"
                   />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors duration-300 rounded-xl flex items-center justify-center pointer-events-none">
@@ -3288,7 +3299,7 @@ export default function App() {
                       const url = URL.createObjectURL(blob);
                       const a = document.createElement('a');
                       a.href = url;
-                      a.download = `Token_Insight_财务报表_${new Date().toISOString().split('T')[0]}.png`;
+                      a.download = `Token_Insight_图片报表_${new Date().toISOString().split('T')[0]}.png`;
                       document.body.appendChild(a);
                       a.click();
                       document.body.removeChild(a);
@@ -3300,7 +3311,7 @@ export default function App() {
                   }}
                   className="px-6 py-2.5 rounded-xl text-xs font-bold bg-gradient-to-r from-neon-cyan to-neon-purple text-white shadow-[0_4px_15px_rgba(6,182,212,0.25)] hover:scale-105 active:scale-100 transition-all duration-200 cursor-pointer min-w-[150px] text-center flex items-center justify-center gap-1.5"
                 >
-                  📥 保存财务报表图片
+                  📥 保存图片报表
                 </button>
               )}
             </div>
