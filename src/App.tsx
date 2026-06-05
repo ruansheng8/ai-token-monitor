@@ -486,20 +486,16 @@ export default function App() {
     };
 
     try {
+      // 增加 200ms 延迟确保离屏的 ECharts 实例有时间重绘
+      await new Promise((resolve) => setTimeout(resolve, 200));
+
       const html2canvas = (await import('html2canvas')).default;
-      const element = document.getElementById('report-container');
+      const element = document.getElementById('image-report-template');
       if (!element) {
-        throw new Error('未找到报表容器 #report-container');
+        throw new Error('未找到报表模板容器 #image-report-template');
       }
 
-      // 动态计算截图区域实际高度，将未显示但依然占位的 no-print 下方板块物理空白裁剪掉
-      let screenshotHeight = element.scrollHeight;
-      const projectSection = document.getElementById('project-trend-section');
-      if (projectSection) {
-        const elementRect = element.getBoundingClientRect();
-        const projectRect = projectSection.getBoundingClientRect();
-        screenshotHeight = projectRect.bottom - elementRect.top + 24; // 加上 24px 底部内边距使得排版更美观
-      }
+      const screenshotHeight = element.scrollHeight;
 
       const canvas = await html2canvas(element, {
         useCORS: true,
@@ -516,7 +512,7 @@ export default function App() {
               return true;
             }
           }
-          return el.classList.contains('no-print');
+          return false;
         }
       });
       const dataUrl = canvas.toDataURL('image/png');
@@ -3434,6 +3430,201 @@ export default function App() {
                 🚪 直接退出程序
               </button>
             </div>
+          </div>
+        </div>
+      )}
+      {/* 隐藏的图片报表离屏模版 */}
+      {!appInitializing && !initError && data && (
+        <div
+          id="image-report-template"
+          className={`absolute left-[-9999px] top-0 w-[1200px] p-8 flex flex-col gap-6 rounded-3xl ${
+            theme === 'dark'
+              ? 'dark bg-[#030712] text-slate-100 border border-slate-800/80 shadow-[0_20px_50px_rgba(0,0,0,0.8)]'
+              : 'bg-[#f8fafc] text-slate-900 border border-slate-200 shadow-[0_20px_50px_rgba(0,0,0,0.05)]'
+          }`}
+          style={{ pointerEvents: 'none' }}
+        >
+          {/* 报表头部 */}
+          <div className="flex justify-between items-center pb-4 border-b border-card-border">
+            <div className="flex flex-col gap-1.5">
+              <h1 className="text-2xl font-bold bg-gradient-to-r from-neon-cyan to-neon-purple bg-clip-text text-transparent tracking-tight">
+                📸 Token Insight 数据分析报表
+              </h1>
+              <p className="text-xs text-text-secondary font-medium">
+                统计时间范围：{timeRange === 'custom' ? `${startDate} 至 ${endDate}` : {
+                  all: '全部时间',
+                  today: '今日',
+                  week: '最近7天',
+                  '30days': '最近30天',
+                  month: '本月',
+                  quarter: '本季度'
+                }[timeRange] || ''}
+              </p>
+            </div>
+            <div className="flex flex-col items-end text-[11px] text-text-muted font-medium gap-0.5">
+              <div>生成时间：{formatDate(new Date().toISOString())}</div>
+              <div>分析设备：{deviceName || defaultDeviceName || '未指定设备'}</div>
+            </div>
+          </div>
+
+          {/* KPI 统计卡片网格 */}
+          {totals && (
+            <div className="grid grid-cols-5 gap-4">
+              {/* 总消耗 Token */}
+              <div className="kpi-card kpi-blue glass-card p-3.5 flex justify-between items-center">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-text-secondary font-semibold mb-0.5">总消耗 Token</span>
+                  <h2 className="text-lg font-bold font-mono tracking-tight text-text-primary mb-0.5">{formatNum(totals.total_tokens)}</h2>
+                  <span className="text-[8px] font-semibold text-text-muted tracking-wider uppercase">Total Tokens</span>
+                </div>
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/20">
+                  <Compass className="w-4 h-4" />
+                </div>
+              </div>
+
+              {/* 估算消费额 */}
+              <div className="kpi-card kpi-green glass-card p-3.5 flex justify-between items-center">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-text-secondary font-semibold mb-0.5">估算消费额 ({displayCurrency})</span>
+                  <h2 className="text-lg font-bold font-mono tracking-tight text-text-primary mb-0.5">
+                    {formatCurrency(totals.total_cost)}
+                  </h2>
+                  <span className="text-[8px] font-semibold text-text-muted tracking-wider uppercase">Estimated Cost</span>
+                </div>
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-neon-green/15 text-neon-green border border-neon-green/20">
+                  <Globe className="w-4 h-4" />
+                </div>
+              </div>
+
+              {/* 缓存命中率 */}
+              <div className="kpi-card kpi-cyan glass-card p-3.5 flex justify-between items-center">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-text-secondary font-semibold mb-0.5">缓存命中率</span>
+                  <h2 className="text-lg font-bold font-mono tracking-tight text-text-primary mb-0.5">{formatPercent(totals.cache_hit_rate)}</h2>
+                  <span className="text-[8px] font-semibold text-text-muted tracking-wider uppercase">Cache Hit Rate</span>
+                </div>
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-neon-blue/15 text-neon-blue border border-neon-blue/20">
+                  <Database className="w-4 h-4" />
+                </div>
+              </div>
+
+              {/* 推理 Token 占比 */}
+              <div className="kpi-card kpi-cyan glass-card p-3.5 flex justify-between items-center">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-text-secondary font-semibold mb-0.5">推理 Token 占比</span>
+                  <h2 className="text-lg font-bold font-mono tracking-tight text-text-primary mb-0.5">{formatPercent(totals.thinking_ratio)}</h2>
+                  <span className="text-[8px] font-semibold text-text-muted tracking-wider uppercase">Thinking Ratio</span>
+                </div>
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-neon-purple/15 text-neon-purple border border-neon-purple/20">
+                  <Brain className="w-4 h-4" />
+                </div>
+              </div>
+
+              {/* 总会话数 */}
+              <div className="kpi-card kpi-slate glass-card p-3.5 flex justify-between items-center">
+                <div className="flex flex-col">
+                  <span className="text-[10px] text-text-secondary font-semibold mb-0.5">总会话数</span>
+                  <h2 className="text-lg font-bold font-mono tracking-tight text-text-primary mb-0.5">{formatPreciseNum(totals.total_sessions)}</h2>
+                  <span className="text-[8px] font-semibold text-text-muted tracking-wider uppercase">Total Sessions</span>
+                </div>
+                <div className="w-8 h-8 rounded-lg flex items-center justify-center bg-neon-teal/15 text-neon-teal border border-neon-teal/20">
+                  <MessageSquare className="w-4 h-4" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 每日用量走势 (类型维度) */}
+          <div className="chart-section glass-card p-5 flex flex-col gap-4">
+            <div className="pb-3 border-b border-card-border">
+              <h2 className="text-sm font-semibold text-text-primary">每日用量走势 (Token 堆叠柱状图) - 类型维度</h2>
+            </div>
+            <div className="w-full h-[300px]">
+              <Suspense fallback={<ChartFallback />}>
+                {data.daily_trends && data.daily_trends.length > 0 ? (
+                  <DailyTrendChart data={data.daily_trends} dimension="type" theme={theme} />
+                ) : (
+                  <div className="h-full flex items-center justify-center text-text-muted italic text-xs">暂无趋势图表数据</div>
+                )}
+              </Suspense>
+            </div>
+          </div>
+
+          {/* 各引擎每日用量对比走势 (工具维度) */}
+          <div className="chart-section glass-card p-5 flex flex-col gap-4">
+            <div className="pb-3 border-b border-card-border">
+              <h2 className="text-sm font-semibold text-text-primary">各引擎每日用量对比走势 (Token 堆叠柱状图) - 工具维度</h2>
+            </div>
+            <div className="w-full h-[300px]">
+              <Suspense fallback={<ChartFallback />}>
+                {data.source_trends && data.source_trends.length > 0 ? (
+                  <SourceTrendChart data={data.source_trends} theme={theme} />
+                ) : (
+                  <div className="h-full flex items-center justify-center text-text-muted italic text-xs">暂无引擎对比图表数据</div>
+                )}
+              </Suspense>
+            </div>
+          </div>
+
+          {/* 项目消耗与模型占比双列布局 */}
+          <div className="grid grid-cols-[1.2fr_0.8fr] gap-6">
+            {/* 项目大盘 */}
+            <div className="chart-section glass-card p-5 flex flex-col gap-4">
+              <div className="pb-3 border-b border-card-border">
+                <h2 className="text-sm font-semibold text-text-primary">项目消耗大盘走势 (Token 折线图 - Top 10)</h2>
+              </div>
+              <div className="w-full h-[300px]">
+                <Suspense fallback={<ChartFallback />}>
+                  {data.project_trends && data.project_trends.length > 0 ? (
+                    <ProjectTrendChart
+                      data={data.project_trends}
+                      theme={theme}
+                      displayCurrency={displayCurrency}
+                      exchangeRate={usdExchangeRate}
+                    />
+                  ) : (
+                    <div className="h-full flex items-center justify-center text-text-muted italic text-xs">暂无项目维度大盘数据</div>
+                  )}
+                </Suspense>
+              </div>
+            </div>
+
+            {/* 底层模型消耗占比 */}
+            <div className="glass-card p-5 flex flex-col gap-4">
+              <div className="pb-3 border-b border-card-border">
+                <h2 className="text-sm font-semibold text-text-primary">底层模型消耗占比</h2>
+              </div>
+              <div className="flex flex-col gap-4 pr-1">
+                {data.model_distribution && data.model_distribution.length > 0 ? (
+                  data.model_distribution.map((m) => {
+                    const pct = maxModelTokens > 0 ? (m.total_tokens / maxModelTokens) * 100 : 0;
+                    return (
+                      <div key={m.model} className="flex flex-col gap-1.5">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-semibold text-text-primary text-[11px] truncate max-w-[150px]">{m.model}</span>
+                          <span className="font-mono text-text-secondary text-[10px]" title={`${formatPreciseNum(m.total_tokens)} Tokens`}>
+                            {formatNum(m.total_tokens)} Tokens
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full bg-slate-200/50 dark:bg-white/5 rounded-full overflow-hidden border border-card-border relative">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-neon-cyan to-neon-purple shadow-[0_0_8px_rgba(6,182,212,0.4)] transition-all duration-1000"
+                            style={{ width: `${pct}%` }}
+                          ></div>
+                        </div>
+                      </div>
+                    );
+                  })
+                ) : (
+                  <div className="text-center py-6 text-text-muted italic text-xs">暂无模型用量占比数据</div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 页脚签名 */}
+          <div className="text-center py-2 text-[10px] text-text-muted border-t border-card-border/40 font-medium">
+            由 Token Insight 智能体治理中心自动生成 • 零外部依赖本地分析
           </div>
         </div>
       )}
