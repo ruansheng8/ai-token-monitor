@@ -6,6 +6,7 @@ mod server;
 mod db_adapter;
 mod review;
 mod config;
+mod utils;
 
 use axum::{routing::{get, post, put}, Router};
 use server::{

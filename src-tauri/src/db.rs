@@ -126,19 +126,37 @@ pub fn extract_convo_info(uuid: &str, db_path: &Path) -> (String, String) {
 }
 
 fn detect_project_name(project_path: Option<&str>) -> String {
-    project_path
-        .and_then(|path_str| {
-            let path = std::path::Path::new(path_str);
-            if path.is_file() || path.extension().is_some() {
-                path.parent().and_then(|p| p.file_name())
-            } else {
-                path.file_name()
-            }
-        })
-        .and_then(|name| name.to_str())
-        .map(|name| name.trim().to_string())
-        .filter(|name| !name.is_empty() && name != "sessions" && name != "workspaceStorage" && name != "globalStorage")
-        .unwrap_or_else(|| "unknown-project".to_string())
+    let path_str = match project_path {
+        Some(p) => p,
+        None => return "unknown-project".to_string(),
+    };
+
+    let path = std::path::Path::new(path_str);
+
+    let raw_project_name = if path.is_file() || path.extension().is_some() {
+        path.parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_string())
+    } else {
+        path.file_name().map(|n| n.to_string_lossy().to_string())
+    };
+
+    let raw_name = match raw_project_name {
+        Some(name) => name,
+        None => return "unknown-project".to_string(),
+    };
+
+    if raw_name.is_empty() || raw_name == "sessions" || raw_name == "workspaceStorage" || raw_name == "globalStorage" {
+        return "unknown-project".to_string();
+    }
+
+    let parsed_name = crate::utils::extract_project_name(&raw_name);
+
+    if parsed_name.is_empty() {
+        "unknown-project".to_string()
+    } else {
+        parsed_name
+    }
 }
 
 fn seed_default_model_pricing(conn: &rusqlite::Connection) -> Result<(), rusqlite::Error> {
