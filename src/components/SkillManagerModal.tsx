@@ -138,19 +138,29 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-md transition-all duration-300">
-      <div className="relative w-full max-w-2xl overflow-hidden rounded-[24px] border border-white/10 bg-zinc-900/90 shadow-2xl p-6 text-zinc-100 flex flex-col max-h-[85vh]">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center transition-all duration-300"
+      style={{ backgroundColor: 'rgba(255, 255, 255, 0.45)', backdropFilter: 'blur(16px)' }}
+    >
+      <div
+        className="relative w-full max-w-2xl overflow-hidden rounded-[24px] p-6 text-slate-800 flex flex-col max-h-[85vh] transition-all"
+        style={{
+          background: '#ffffff',
+          boxShadow: '0 20px 50px rgba(0, 0, 0, 0.05), 0 4px 12px rgba(0, 0, 0, 0.02)',
+          border: '1px solid #e2e8f0',
+        }}
+      >
         
         {/* Header */}
-        <div className="flex items-center justify-between pb-4 border-b border-white/5">
-          <h2 className="text-xl font-bold bg-gradient-to-r from-teal-400 to-emerald-400 bg-clip-text text-transparent flex items-center gap-2">
+        <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+          <h2 className="text-lg font-bold bg-gradient-to-r from-teal-500 to-emerald-600 bg-clip-text text-transparent flex items-center gap-2">
             <span>⚙️ 诊断技能管理器</span>
           </h2>
           <button
             onClick={onClose}
-            className="rounded-full p-1.5 hover:bg-white/10 text-zinc-400 hover:text-zinc-100 transition-colors"
+            className="w-8 h-8 rounded-xl bg-slate-100 hover:bg-slate-200 flex items-center justify-center transition-colors cursor-pointer text-slate-500 hover:text-slate-700"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
             </svg>
           </button>
@@ -159,9 +169,9 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
         {/* Content Body */}
         <div className="flex-1 overflow-y-auto py-4 space-y-4 pr-1">
           {errorMsg && (
-            <div className="bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-xl p-3 text-sm flex items-center justify-between">
+            <div className="bg-rose-50 border border-rose-200 text-rose-600 rounded-xl p-3 text-sm flex items-center justify-between">
               <span>⚠️ {errorMsg}</span>
-              <button onClick={() => setErrorMsg(null)} className="text-rose-400 hover:text-rose-200">
+              <button onClick={() => setErrorMsg(null)} className="text-rose-500 hover:text-rose-700">
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
                 </svg>
@@ -178,8 +188,8 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
             onClick={() => fileInputRef.current?.click()}
             className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center gap-2 cursor-pointer transition-all duration-300 ${
               dragActive
-                ? 'border-teal-500 bg-teal-500/5'
-                : 'border-white/10 hover:border-white/20 bg-white/[0.02] hover:bg-white/[0.04]'
+                ? 'border-teal-500 bg-teal-50/50'
+                : 'border-slate-200 hover:border-slate-300 bg-slate-50/50 hover:bg-slate-50'
             }`}
           >
             <input
@@ -192,18 +202,18 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
             {uploading ? (
               <div className="flex flex-col items-center gap-2">
                 <div className="w-8 h-8 border-2 border-teal-500 border-t-transparent rounded-full animate-spin" />
-                <span className="text-sm text-teal-400 font-medium">正在解析解压技能包...</span>
+                <span className="text-sm text-teal-600 font-medium">正在解析解压技能包...</span>
               </div>
             ) : (
               <>
-                <svg className="w-10 h-10 text-zinc-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <svg className="w-10 h-10 text-slate-400 animate-pulse" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
                 <div className="text-center">
-                  <p className="text-sm font-medium text-zinc-200">
+                  <p className="text-sm font-medium text-slate-700">
                     点击选择 或 将 `.zip` / `.7z` 压缩包拖拽至此
                   </p>
-                  <p className="text-xs text-zinc-500 mt-1">
+                  <p className="text-xs text-slate-500 mt-1">
                     压缩包内需包含含有 `SKILL.md` 的文件夹，符合 Claude Skills 规范
                   </p>
                 </div>
@@ -213,16 +223,16 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
 
           {/* Skills List */}
           <div className="space-y-3">
-            <h3 className="text-sm font-semibold text-zinc-400 flex items-center gap-1.5">
+            <h3 className="text-sm font-semibold text-slate-500 flex items-center gap-1.5">
               <span>📋 当前已检测到的技能 ({skills.length})</span>
             </h3>
 
             {loading ? (
               <div className="flex items-center justify-center py-8">
-                <div className="w-6 h-6 border-2 border-zinc-400 border-t-transparent rounded-full animate-spin" />
+                <div className="w-6 h-6 border-2 border-slate-400 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : skills.length === 0 ? (
-              <div className="text-center py-8 text-sm text-zinc-500 border border-white/5 rounded-2xl bg-white/[0.01]">
+              <div className="text-center py-8 text-sm text-slate-500 border border-slate-100 rounded-2xl bg-slate-50/50">
                 暂无技能，请上传压缩包或在项目 `.agents/skills` 放置内置规范
               </div>
             ) : (
@@ -230,31 +240,31 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
                 {skills.map((skill) => (
                   <div
                     key={skill.id}
-                    className="flex items-start justify-between p-4 rounded-2xl border border-white/5 bg-white/[0.02] hover:bg-white/[0.04] transition-all duration-200"
+                    className="flex items-start justify-between p-4 rounded-2xl border border-slate-100 bg-slate-50/30 hover:bg-slate-50/80 transition-all duration-200"
                   >
                     <div className="space-y-1 pr-4">
                       <div className="flex items-center gap-2">
-                        <span className="font-semibold text-zinc-200">{skill.name}</span>
+                        <span className="font-semibold text-slate-800">{skill.name}</span>
                         {skill.is_builtin ? (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-500/10 text-teal-400 border border-teal-500/20 font-medium">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-teal-50 text-teal-600 border border-teal-200 font-medium">
                             内置
                           </span>
                         ) : (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/20 font-medium">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-600 border border-amber-200 font-medium">
                             自定义
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-zinc-400 leading-relaxed">
+                      <p className="text-xs text-slate-600 leading-relaxed">
                         {skill.description || '暂无描述信息'}
                       </p>
-                      <p className="text-[10px] text-zinc-600 font-mono">ID: {skill.id}</p>
+                      <p className="text-[10px] text-slate-400 font-mono">ID: {skill.id}</p>
                     </div>
 
                     {!skill.is_builtin && (
                       <button
                         onClick={() => handleDelete(skill.id, skill.name)}
-                        className="rounded-xl p-1.5 hover:bg-rose-500/10 text-zinc-500 hover:text-rose-400 transition-all cursor-pointer"
+                        className="rounded-xl p-1.5 hover:bg-rose-50 text-slate-400 hover:text-rose-600 border border-transparent hover:border-rose-200 transition-all cursor-pointer"
                         title="删除技能"
                       >
                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -270,10 +280,10 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
         </div>
 
         {/* Footer */}
-        <div className="pt-4 border-t border-white/5 flex justify-end">
+        <div className="pt-4 border-t border-slate-100 flex justify-end">
           <button
             onClick={onClose}
-            className="px-5 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-zinc-300 hover:text-zinc-100 text-sm font-medium transition-all cursor-pointer"
+            className="px-5 py-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-600 hover:text-slate-800 text-sm font-semibold transition-all cursor-pointer shadow-sm"
           >
             关闭
           </button>
