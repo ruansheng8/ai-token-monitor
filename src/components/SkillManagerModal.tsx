@@ -274,12 +274,15 @@ export function SkillManagerModal({ isOpen, onClose, onRefreshSkills }: SkillMan
             onDragOver={handleDrag}
             onDragLeave={handleDrag}
             onDrop={handleDrop}
-            className={`border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center gap-2 transition-all duration-300 ${
+            className={`relative border-2 border-dashed rounded-2xl p-6 flex flex-col items-center justify-center gap-2 transition-all duration-300 ${
               dragActive
-                ? 'border-teal-500 bg-teal-50/50'
+                ? 'border-teal-500 bg-teal-50/60 scale-[1.01] shadow-inner shadow-teal-500/5 ring-4 ring-teal-500/10'
                 : 'border-slate-200 hover:border-slate-300 bg-slate-50/50 hover:bg-slate-50'
             }`}
           >
+            {dragActive && (
+              <div className="absolute inset-0 bg-transparent z-10" />
+            )}
             <input
               type="file"
               ref={fileInputRef}
