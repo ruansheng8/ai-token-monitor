@@ -1,5 +1,5 @@
 {
-  "productName": "token-insight",
+  "productName": "Token Insight",
   "identifier": "com.tokeninsight.app",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -39,7 +39,11 @@
         "languages": [
           "SimpChinese"
         ],
-        "displayLanguageSelector": false
+        "displayLanguageSelector": false,
+        "compression": "zlib"
+      },
+      "webviewInstallMode": {
+        "type": "skip"
       }
     }
   }
