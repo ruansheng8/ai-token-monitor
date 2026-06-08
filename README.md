@@ -37,9 +37,7 @@
     <td align="center" width="50%">
       <strong>🎯 适配的 AI 助手</strong>
       <br/>
-      <sub>Antigravity / Gemini (完美支持)</sub>
-      <br/>
-      <sub>Claude Code / Codex 等 (后续计划)</sub>
+      <sub>Claude Code / Codex / Antigravity / Gemini </sub>
     </td>
     <td align="center" width="50%">
       <strong>💾 支持的数据库</strong>
